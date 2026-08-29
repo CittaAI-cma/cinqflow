@@ -43,6 +43,7 @@ from cinqflow.api.schemas import (
     DestinationOut,
     FeedIn,
     FeedOut,
+    GlossaryTermOut,
     GovernedOut,
     HomeSlotOut,
     ImpactPacketOut,
@@ -71,6 +72,7 @@ from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
 from cinqflow.core.persona import home_for
 from cinqflow.core.registry import feed as feed_registry
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
+from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.core.registry.wave0 import wave_0_register
 from cinqflow.core.security import Action, may
 from cinqflow.core.tools import CATALOGUE, ToolError
@@ -286,6 +288,70 @@ def create_app(
             actor=principal.as_actor(),
         )
         return _feed_out(saved)
+
+    # ── the business glossary · CF-V1-E14-01 ─────────────────────────────────
+
+    @app.get(f"{API_PREFIX}/glossary", response_model=list[GlossaryTermOut], tags=["glossary"])
+    def list_glossary(
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        search: str | None = None,
+        phi_only: bool = False,
+    ) -> list[GlossaryTermOut]:
+        """The 171 terms, searchable by business term OR column name — "date of
+        birth" finds `date_of_birth`, which is what makes the glossary usable
+        by the people who wrote it rather than only by engineers."""
+        found = _glossary_of(metadata)
+        terms = found.search(search) if search else found.terms
+        if phi_only:
+            terms = tuple(t for t in terms if t.is_phi)
+        states = _glossary_states(metadata)
+        return [_glossary_out(t, *states.get(t.glossary_id, ("draft", 1))) for t in terms]
+
+    @app.get(
+        f"{API_PREFIX}/glossary/{{glossary_id}}",
+        response_model=GlossaryTermOut,
+        tags=["glossary"],
+    )
+    def get_glossary_term(
+        glossary_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> GlossaryTermOut:
+        """What a `term:<slug>` citation opens, and what a BA sees on hover:
+        the approved definition, its PHI status, and every table that uses
+        it."""
+        try:
+            obj = metadata.get(ObjectType.GLOSSARY_TERM, glossary_id)
+        except ObjectNotFoundError:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, f"no glossary term {glossary_id!r}"
+            ) from None
+        return _glossary_out(
+            GlossaryTerm.from_governed(obj), obj.lifecycle_state.value, obj.version
+        )
+
+    @app.get(
+        f"{API_PREFIX}/glossary-for-column/{{column_name}}",
+        response_model=list[GlossaryTermOut],
+        tags=["glossary"],
+    )
+    def glossary_for_column(
+        column_name: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> list[GlossaryTermOut]:
+        """The mapping studio's first question, answered deterministically.
+
+        An exact synonym match costs no tokens and no model call — CF-V1-E6-02
+        proposes only where this returns nothing, which is what keeps the AI
+        working on the hard fields instead of the obvious ones.
+        """
+        states = _glossary_states(metadata)
+        return [
+            _glossary_out(t, *states.get(t.glossary_id, ("draft", 1)))
+            for t in _glossary_of(metadata).for_column(column_name)
+        ]
 
     # ── governance · CF-V1-E11-01 — the one lifecycle, exposed ───────────────
     #
@@ -865,6 +931,52 @@ def _feed_out(obj: GovernedObject) -> FeedOut:
         version=obj.version,
         lifecycle_state=obj.lifecycle_state.value,
         status=obj.lifecycle_state.status_word,
+        citation_id=str(citation),
+        route=citation.route,
+    )
+
+
+def _glossary_of(metadata: MetadataDbPort) -> Glossary:
+    """The glossary as the domain sees it, built from the registry.
+
+    Every term is a governed object; this is the projection that turns the
+    rows back into the value type the mapping and PHI agents reason with.
+    """
+    return Glossary(
+        terms=tuple(
+            GlossaryTerm.from_governed(obj) for obj in metadata.list(ObjectType.GLOSSARY_TERM)
+        )
+    )
+
+
+def _glossary_states(metadata: MetadataDbPort) -> dict[str, tuple[str, int]]:
+    return {
+        obj.object_id: (obj.lifecycle_state.value, obj.version)
+        for obj in metadata.list(ObjectType.GLOSSARY_TERM)
+    }
+
+
+def _glossary_out(term: GlossaryTerm, state: str, version: int) -> GlossaryTermOut:
+    from cinqflow.core.model.governed import LifecycleState
+
+    citation = CitationId(kind=CitationKind.TERM, subject=term.slug)
+    return GlossaryTermOut(
+        glossary_id=term.glossary_id,
+        term=term.term,
+        definition=term.definition,
+        domain_category=term.domain_category,
+        sub_category=term.sub_category,
+        classification=term.classification,
+        regulatory_reference=term.regulatory_reference,
+        mapped_domains=list(term.mapped_domains),
+        mapped_tables=list(term.mapped_tables),
+        synonyms=list(term.synonyms),
+        sensitivity=term.sensitivity,
+        is_phi=term.is_phi,
+        notes=term.notes,
+        lifecycle_state=state,
+        status=LifecycleState(state).status_word,
+        version=version,
         citation_id=str(citation),
         route=citation.route,
     )

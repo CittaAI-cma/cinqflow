@@ -158,6 +158,35 @@ class TransitionIn(BaseModel):
     comment: str = ""
 
 
+class GlossaryTermOut(BaseModel):
+    """One approved business definition, as every screen and agent sees it.
+
+    `synonyms` is the payload a mapping suggestion reasons from — the client's
+    own analysts recorded that `Member Date of Birth` arrives as `Patient_dob`
+    from one payer and `MemberDateOfBirth` from another, and that knowledge is
+    the difference between a semantic mapper and a string comparison.
+    """
+
+    glossary_id: str
+    term: str
+    definition: str
+    domain_category: str
+    sub_category: str
+    classification: str
+    regulatory_reference: str
+    mapped_domains: list[str]
+    mapped_tables: list[str]
+    synonyms: list[str]
+    sensitivity: str
+    is_phi: bool
+    notes: str
+    lifecycle_state: str
+    status: StatusWord
+    version: int
+    citation_id: str
+    route: str
+
+
 class TouchedOut(BaseModel):
     """One object a change would reach, and the reference path that found it —
     so an approver can check the reasoning rather than trust the count."""

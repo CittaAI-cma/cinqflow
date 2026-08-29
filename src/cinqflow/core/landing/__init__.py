@@ -38,10 +38,10 @@ class LandingOutcome(StrEnum):
     platform's failure mode was files that simply did not appear anywhere.
     """
 
-    ACCEPTED = "ACCEPTED"      # matched a feed, passed pre-flight   -> processed/
-    REJECTED = "REJECTED"      # matched a feed, failed a check      -> rejected/
+    ACCEPTED = "ACCEPTED"  # matched a feed, passed pre-flight   -> processed/
+    REJECTED = "REJECTED"  # matched a feed, failed a check      -> rejected/
     UNEXPECTED = "UNEXPECTED"  # matched no feed                     -> parked/
-    SKIPPED = "SKIPPED"        # this content has been seen before   -> archive/
+    SKIPPED = "SKIPPED"  # this content has been seen before   -> archive/
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ class LandingDecision:
     feed_version: int | None = None
     reason: str | None = None
     check_name: str | None = None
-    registered: bool = True       # ALWAYS. 100% of arriving files get a row.
+    registered: bool = True  # ALWAYS. 100% of arriving files get a row.
     audit_required: bool = False  # a skip must leave a trace, or it is silent
 
 
@@ -104,9 +104,7 @@ def classify(
         return LandingDecision(
             outcome=LandingOutcome.SKIPPED,
             move_to=LandingFolder.ARCHIVE,
-            reason=(
-                f"already processed: fingerprint {file.fingerprint} is in the input registry"
-            ),
+            reason=(f"already processed: fingerprint {file.fingerprint} is in the input registry"),
             check_name="fingerprint_replay",
             audit_required=True,
         )

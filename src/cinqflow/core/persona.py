@@ -98,8 +98,11 @@ SLOTS: dict[HomeSlot, Slot] = {
         Slot(HomeSlot.ARRIVED, "What arrived, most recent first."),
         Slot(HomeSlot.RUNS, "Every run in view, and its status."),
         Slot(HomeSlot.FEEDS, "What feeds exist and what state they are in."),
-        Slot(HomeSlot.ASK_SHORTCUT, "Ask in my own words, without an engineer.",
-             requires=Action.ASK_AGENT),
+        Slot(
+            HomeSlot.ASK_SHORTCUT,
+            "Ask in my own words, without an engineer.",
+            requires=Action.ASK_AGENT,
+        ),
         Slot(HomeSlot.REFUSALS_TODAY, "What the platform refused, and why."),
         Slot(HomeSlot.ACCESS_CHANGES, "Who changed what, and who was denied."),
         # Wave 1+ — declared, inert until their wave activates.
@@ -181,7 +184,5 @@ def home_for(roles: frozenset[Role], permitted: frozenset[Action]) -> tuple[Slot
         ordered = list(_FALLBACK)
 
     return tuple(
-        SLOTS[key]
-        for key in ordered
-        if SLOTS[key].active and SLOTS[key].requires in permitted
+        SLOTS[key] for key in ordered if SLOTS[key].active and SLOTS[key].requires in permitted
     )

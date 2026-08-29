@@ -195,6 +195,76 @@ def conformance(profile: ProfileOption | None = None) -> None:
 
 
 @app.command()
+def seed_glossary(
+    workbook: Annotated[
+        Path,
+        typer.Option("--workbook", help="The client's `Data lake data model.xlsx`."),
+    ] = Path("../thiers/Uploads/2-Design/Data lake data model.xlsx"),
+    profile: ProfileOption = Path("profiles/local.yaml"),
+    author: Annotated[
+        str, typer.Option("--as", help="Who is loading them. Seeded terms arrive as DRAFTS.")
+    ] = "dev-ba@cinqcare.test",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Report; write nothing.")] = False,
+) -> None:
+    """CF-V1-E14-01 — load the client's real 171-term glossary into the registry.
+
+    Terms arrive as DRAFTS, not Published: the steward who will own them
+    approves them, like every other governed object. Seeding straight to
+    Published would hand the platform 171 definitions nobody signed.
+
+    Idempotent — a term already present is left exactly as it is, because
+    re-running a seeder must never overwrite a steward's edit.
+    """
+    from cinqflow.adapters.local.pg_control import commit
+    from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+    from cinqflow.adapters.local.workbook_glossary import load_glossary
+    from cinqflow.core.model.governed import ObjectType
+    from cinqflow.core.model.identity import Principal, Role, Scopes
+    from cinqflow.ports.metadata_db import ObjectNotFoundError
+
+    loaded = profile_module.load(profile)
+    glossary = load_glossary(workbook)
+    console.print(
+        f"[bold]cinqflow seed-glossary[/bold]  {workbook.name}  "
+        f"{len(glossary.terms)} terms · [bold]{len(glossary.phi_terms)} PHI-flagged[/bold] · "
+        f"{len(glossary.phi_columns())} PHI column names"
+    )
+    if dry_run:
+        raise typer.Exit(0)
+
+    actor = Principal(
+        subject=author,
+        display_name=author.split("@")[0],
+        roles=frozenset({Role.BUSINESS_ANALYST}),
+        scopes=Scopes(domains=frozenset({"*"}), feeds=frozenset({"*"})),
+    ).as_actor()
+
+    written = skipped = 0
+    with commit(loaded) as connection:
+        store = PostgresMetadataDb(connection)
+        for term in glossary.terms:
+            try:
+                store.get(ObjectType.GLOSSARY_TERM, term.glossary_id)
+            except ObjectNotFoundError:
+                store.save(term.as_governed(author=actor))
+                written += 1
+            else:
+                # Never overwrite: a steward's amendment outranks a re-run.
+                skipped += 1
+
+    summary = RichTable(title="seeded", show_edge=False)
+    summary.add_column("outcome")
+    summary.add_column("terms", justify="right")
+    summary.add_row("written as Draft", str(written))
+    summary.add_row("already present", str(skipped))
+    console.print(summary)
+    console.print(
+        "[dim]Drafts. A steward approves them — the platform does not "
+        "publish 171 definitions nobody signed.[/dim]"
+    )
+
+
+@app.command()
 def ask(
     question: str,
     as_user: str = "dev-analyst@cinqcare.test",

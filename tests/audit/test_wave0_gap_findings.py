@@ -110,8 +110,7 @@ def test_every_shipped_profile_names_only_registered_adapters(filename: str) -> 
         pin: chosen
         for pins in PIN_GROUPS.values()
         for pin in pins
-        if (chosen := profile.adapter_for(pin)) not in {"none", None}
-        and chosen not in fitted(pin)
+        if (chosen := profile.adapter_for(pin)) not in {"none", None} and chosen not in fitted(pin)
     }
     assert not missing, (
         f"{filename} names adapters that are not registered: {missing} — "
@@ -193,9 +192,7 @@ def test_the_recon_panel_can_satisfy_a_drop_ledger_citation_fragment() -> None:
 # DQ rule and governance row lives only in process memory and evaporates on
 # exit, on every rung including 0.5.
 def _provisioned_tables() -> set[str]:
-    return {
-        f"{schema.name}.{table.name}" for schema in all_schemas() for table in schema.tables
-    }
+    return {f"{schema.name}.{table.name}" for schema in all_schemas() for table in schema.tables}
 
 
 # ── FIXED · the audit trail and the registry now have a persistent home ─────
@@ -218,8 +215,7 @@ def test_ddl_provisions_the_registry_and_governance_tables() -> None:
     tables = _provisioned_tables()
     for required in ("registry.governed_object", "governance.audit_ledger"):
         assert required in tables, (
-            f"{required} is not provisioned — governed metadata does not survive a "
-            "process restart"
+            f"{required} is not provisioned — governed metadata does not survive a process restart"
         )
 
 

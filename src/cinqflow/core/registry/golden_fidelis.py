@@ -100,6 +100,4 @@ def filename(business_date: str) -> str:
 
 
 def landing_key(business_date: str) -> str:
-    return (
-        f"{FEED.landing_path}/incoming/{business_date}/{filename(business_date)}"
-    )
+    return f"{FEED.landing_path}/incoming/{business_date}/{filename(business_date)}"

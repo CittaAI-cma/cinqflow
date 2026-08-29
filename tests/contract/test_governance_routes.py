@@ -381,3 +381,91 @@ def test_resolving_the_unknown_lets_the_approval_through(
     )
     assert approved.status_code == 200
     assert approved.json()["approved_by_subject"] == STEWARD
+
+
+# ── CF-V1-E14-01 · the glossary, over HTTP ───────────────────────────────────
+
+
+def _seed_glossary(store: MemMetadataDb) -> None:
+    from datetime import UTC, datetime
+
+    from cinqflow.core.model.governed import Actor
+    from cinqflow.core.model.vocabulary import ActorType
+    from cinqflow.core.registry.glossary import GlossaryTerm
+
+    author = Actor(subject=BA, actor_type=ActorType.HUMAN, display_name="Meera")
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    for term in (
+        GlossaryTerm(
+            glossary_id="BG-004",
+            term="Member Date of Birth",
+            definition="Date of birth of the member, used for age calculations.",
+            mapped_tables=("Members", "DailyCensus"),
+            mapped_columns_original=("Date_of_Birth", "Patient_dob", "MemberDateOfBirth"),
+            is_phi=True,
+        ),
+        GlossaryTerm(
+            glossary_id="BG-101",
+            term="Attribution Model",
+            definition="How a member is assigned to a primary care provider.",
+            mapped_columns_original=("attribution_model",),
+        ),
+    ):
+        store.save(term.as_governed(author=author, now=now))
+
+
+def test_the_glossary_lists_what_was_seeded(client: TestClient, store: MemMetadataDb) -> None:
+    _seed_glossary(store)
+    listed = client.get("/api/glossary", headers=_as(BA)).json()
+    assert {t["glossary_id"] for t in listed} == {"BG-004", "BG-101"}
+
+
+def test_a_term_shows_its_definition_phi_status_and_tables(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    """CF-V1-E14-01's happy path: hover a term, see the approved definition,
+    its PHI status, and every table that uses it."""
+    _seed_glossary(store)
+    term = client.get("/api/glossary/BG-004", headers=_as(BA)).json()
+    assert term["term"] == "Member Date of Birth"
+    assert term["is_phi"] is True
+    assert "DailyCensus" in term["mapped_tables"]
+    assert term["citation_id"] == "term:member-date-of-birth"
+    assert term["route"]
+
+
+def test_searching_by_business_language_finds_the_column(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    _seed_glossary(store)
+    found = client.get("/api/glossary?search=date of birth", headers=_as(BA)).json()
+    assert [t["glossary_id"] for t in found] == ["BG-004"]
+
+
+def test_the_phi_filter_answers_the_masking_policys_question(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    _seed_glossary(store)
+    flagged = client.get("/api/glossary?phi_only=true", headers=_as(BA)).json()
+    assert [t["glossary_id"] for t in flagged] == ["BG-004"]
+
+
+def test_a_column_resolves_to_its_term_without_a_model_call(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    """The mapping studio's first question, answered deterministically — an
+    exact synonym match costs no tokens."""
+    _seed_glossary(store)
+    found = client.get("/api/glossary-for-column/Patient_dob", headers=_as(BA)).json()
+    assert [t["glossary_id"] for t in found] == ["BG-004"]
+
+
+def test_an_unknown_term_is_a_clear_404(client: TestClient) -> None:
+    assert client.get("/api/glossary/BG-999", headers=_as(BA)).status_code == 404
+
+
+def test_a_read_only_user_may_read_the_glossary(client: TestClient, store: MemMetadataDb) -> None:
+    """Read-Only is full visibility without the buttons — a glossary they
+    cannot read is a platform that speaks a language they cannot look up."""
+    _seed_glossary(store)
+    assert client.get("/api/glossary", headers=_as(READ_ONLY)).status_code == 200

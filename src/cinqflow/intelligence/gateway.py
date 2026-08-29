@@ -329,8 +329,7 @@ class LlmGateway:
                 f"The previous response was rejected:\n- "
                 + "\n- ".join(problems)
                 + "\nReturn only JSON matching this exact schema — no other keys, no wrapper "
-                "object:\n"
-                + json.dumps(prompt.response_schema),
+                "object:\n" + json.dumps(prompt.response_schema),
                 task_class=prompt.task_class,
                 response_schema=prompt.response_schema,
                 max_tokens=prompt.max_tokens,
