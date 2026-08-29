@@ -113,6 +113,18 @@ STDLIB_IO: frozenset[str] = frozenset(
 
 IO_BUILTINS: frozenset[str] = frozenset({"open", "input", "eval", "exec", "compile", "__import__"})
 
+# Specific names that may be imported FROM an otherwise-denied stdlib module,
+# because they perform no I/O despite their module's name.
+#
+# `io.StringIO` and `io.BytesIO` are in-memory buffers. A parser receives bytes
+# from the storage adapter and wraps them to hand to a reader — no descriptor
+# is ever opened. `io.open` DOES open one, which is why the module itself stays
+# denied and only these two names are allowed through: the precise form keeps
+# the guarantee that `import io` would quietly surrender.
+NAME_ALLOWLIST: dict[str, frozenset[str]] = {
+    "io": frozenset({"StringIO", "BytesIO"}),
+}
+
 # ── the literal patterns ─────────────────────────────────────────────────────
 URL_SCHEME = re.compile(
     r"\b(?:https?|ftps?|sftp|s3|abfss?|gs|wasbs?|postgresql|postgres"
@@ -203,7 +215,9 @@ def lint_source(source: str, path: str) -> list[Violation]:
         elif isinstance(node, ast.ImportFrom):
             if node.level == 0 and node.module:
                 root = _root_module(node.module)
-                if not _is_allowed_import(root):
+                allowed_names = NAME_ALLOWLIST.get(node.module, frozenset())
+                imported = {alias.name for alias in node.names}
+                if not _is_allowed_import(root) and not imported <= allowed_names:
                     violations.append(
                         Violation(
                             path, node.lineno, "vendor-import", f"from {node.module} import …"

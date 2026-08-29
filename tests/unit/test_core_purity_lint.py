@@ -92,3 +92,21 @@ def test_a_mount_point_in_core_is_still_refused(mount: str) -> None:
     assert "hardcoded-path" in _kinds(lint_source(source, "core/example.py")), (
         "a mount point differs per environment; it belongs in the connection profile"
     )
+
+
+@pytest.mark.unit
+def test_in_memory_buffers_are_allowed_but_the_io_module_is_not() -> None:
+    """`io.StringIO` performs no I/O; `io.open` does.
+
+    So the module stays denied and exactly two names are allowed through. The
+    imprecise version — allowing `import io` — would quietly surrender the
+    guarantee that core/ cannot open a file descriptor.
+    """
+    buffers = "from io import BytesIO, StringIO\nbuf = StringIO('x')\n"
+    assert lint_source(buffers, "core/parsers.py") == []
+
+    whole_module = "import io\nbuf = io.StringIO('x')\n"
+    assert "vendor-import" in _kinds(lint_source(whole_module, "core/parsers.py"))
+
+    smuggled = "from io import open\n"
+    assert "vendor-import" in _kinds(lint_source(smuggled, "core/parsers.py"))
