@@ -235,7 +235,9 @@ CONTROL_SCHEMA = Schema(
                 _BATCH,
                 _FEED,
                 Column("classification", TypeName.STRING, nullable=False),
-                Column("field_details", TypeName.JSON, nullable=False),
+                Column("column_name", TypeName.STRING, nullable=False),
+                Column("detail", TypeName.STRING, nullable=False),
+                Column("blocked_batch", TypeName.BOOL, nullable=False),
                 Column("detected_ts", TypeName.TIMESTAMP_UTC, nullable=False),
             ),
             primary_key=("drift_id",),
@@ -324,6 +326,14 @@ CONTROL_SCHEMA = Schema(
                 Column("column_names", TypeName.JSON, nullable=False),
                 Column("record_key", TypeName.STRING),
                 Column("payload", TypeName.JSON, is_phi=True),
+                # The count the caller already knows at write time. Deriving it
+                # instead from a join to batch_reconciliation.drop_count made
+                # get_quarantine_summary return 0 whenever record_quarantine was
+                # called without a matching record_reconciliation call — a real
+                # pipeline run always does both, but the PORT's contract does
+                # not require that coupling, so the contract suite (which
+                # rightly calls them independently) caught the drift.
+                Column("record_count", TypeName.INT64, nullable=False),
                 Column("reprocessed_ts", TypeName.TIMESTAMP_UTC),
                 Column("quarantined_ts", TypeName.TIMESTAMP_UTC, nullable=False),
             ),
@@ -551,9 +561,281 @@ DATA_SCHEMAS: tuple[Schema, ...] = (
     RECON_SCHEMA,
 )
 
+# ── the three plane objects `registry/wave0.py` already declares by name ─────
+#
+# `registry.governed_object`, `governance.audit_ledger` and `audit.agent_action`
+# were execution-plane objects from the start (core/registry/wave0.py) — every
+# story contract reads or writes them. What was missing was the DDL and the
+# adapter; this is that DDL, matching the object IDs already in the register
+# exactly, so provisioning them is a certification of an existing contract,
+# not a new one.
+REGISTRY_SCHEMA = Schema(
+    name="registry",
+    description=(
+        "Every governed object — feed, contract, mapping, dq_rule, glossary_term, runbook, "
+        "release, prompt, execution_plane_contract, source — one lifecycle, one table. The "
+        "body is type-specific; everything the lifecycle needs is a first-class column, "
+        "because governance that depends on reading inside an opaque blob eventually gets "
+        "skipped (core/model/governed.py)."
+    ),
+    tables=(
+        Table(
+            name="governed_object",
+            comment="ADR-0006: one state machine, reused by every object type. Never edited "
+            "in place — a new version is a new row.",
+            columns=(
+                Column("object_type", TypeName.STRING, nullable=False),
+                Column("object_id", TypeName.STRING, nullable=False),
+                Column("version", TypeName.INT64, nullable=False),
+                Column("lifecycle_state", TypeName.STRING, nullable=False),
+                Column("body", TypeName.JSON, nullable=False),
+                Column("created_by_subject", TypeName.STRING, nullable=False),
+                Column("created_by_type", TypeName.STRING, nullable=False),
+                Column("created_by_name", TypeName.STRING),
+                Column("created_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("approved_by_subject", TypeName.STRING),
+                Column("approved_by_type", TypeName.STRING),
+                Column("approved_by_name", TypeName.STRING),
+                Column("approved_ts", TypeName.TIMESTAMP_UTC),
+            ),
+            primary_key=("object_type", "object_id", "version"),
+            indexes=(("object_type",), ("object_type", "object_id")),
+        ),
+    ),
+)
+
+GOVERNANCE_SCHEMA = Schema(
+    name="governance",
+    description="The lifecycle audit trail. Append-only; no deletion path exists for anyone.",
+    tables=(
+        Table(
+            name="audit_ledger",
+            comment="One row per lifecycle transition or governance event.",
+            columns=(
+                Column("entry_id", TypeName.UUID, nullable=False),
+                Column("object_type", TypeName.STRING, nullable=False),
+                Column("object_id", TypeName.STRING, nullable=False),
+                Column("version", TypeName.INT64, nullable=False),
+                Column("action", TypeName.STRING, nullable=False),
+                Column("actor_subject", TypeName.STRING, nullable=False),
+                Column("actor_type", TypeName.STRING, nullable=False),
+                Column("actor_name", TypeName.STRING),
+                Column("occurred_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("from_state", TypeName.STRING),
+                Column("to_state", TypeName.STRING),
+                Column("detail", TypeName.STRING),
+            ),
+            primary_key=("entry_id",),
+            indexes=(("object_id", "occurred_ts"),),
+        ),
+    ),
+)
+
+AUDIT_SCHEMA = Schema(
+    name="audit",
+    description="What an agent did, and every time it was refused. Append-only.",
+    tables=(
+        Table(
+            name="agent_action",
+            comment="100% of model calls carry prompt hash, model version, cost and caller "
+            "identity here — including the refusals.",
+            columns=(
+                Column("action_id", TypeName.UUID, nullable=False),
+                Column("run_id", TypeName.STRING, nullable=False),
+                Column("agent", TypeName.STRING, nullable=False),
+                Column("action", TypeName.STRING, nullable=False),
+                Column("outcome", TypeName.STRING, nullable=False),
+                Column("actor_subject", TypeName.STRING, nullable=False),
+                Column("actor_type", TypeName.STRING, nullable=False),
+                Column("actor_name", TypeName.STRING),
+                Column("occurred_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("risk_class", TypeName.STRING, nullable=False),
+                Column("prompt_ref", TypeName.STRING),
+                Column("prompt_hash", TypeName.STRING),
+                Column("model", TypeName.STRING),
+                Column("model_version", TypeName.STRING),
+                Column("prompt_tokens", TypeName.INT64),
+                Column("completion_tokens", TypeName.INT64),
+                Column("cost_usd", TypeName.DECIMAL, precision=18, scale=6),
+                Column("latency_ms", TypeName.INT64),
+                Column("detail", TypeName.STRING),
+            ),
+            primary_key=("action_id",),
+            indexes=(("run_id",), ("agent", "occurred_ts")),
+        ),
+    ),
+)
+
+
+# ── Wave 1 · work coordination, proposals and the knowledge plane ────────────
+#
+# Three additive schemas (ADR-0013 holds: beside the estate, never inside it).
+# `queue` is ADR-0014's Postgres queue plus the scheduler's runtime state;
+# `proposals` is the universal HITL object every R2 agent writes and only a
+# human moves; `knowledge` is the K2 store — the ENGINE-SPECIFIC halves
+# (pgvector column, tsvector column, their indexes) live in the Postgres
+# rendering only, never here (see installer/cli.py:_KNOWLEDGE_PLANE_PG).
+QUEUE_SCHEMA = Schema(
+    name="queue",
+    description=(
+        "SELECT ... FOR UPDATE SKIP LOCKED on the Postgres already running (ADR-0014). "
+        "Identical at rung 4 — no broker, no cache, no cloud weld. Also holds the "
+        "scheduler's runtime state: schedules are REGISTERED here from published feed "
+        "metadata; the governed truth stays in registry.*."
+    ),
+    tables=(
+        Table(
+            name="message",
+            comment=(
+                "One unit of work. A repeated dedupe_key returns the existing message — "
+                "replay safety starts at the producer, not the consumer."
+            ),
+            columns=(
+                Column("message_id", TypeName.UUID, nullable=False),
+                Column("topic", TypeName.STRING, nullable=False),
+                Column("payload", TypeName.JSON, nullable=False),
+                _STATE,
+                Column("dedupe_key", TypeName.STRING),
+                Column("attempts", TypeName.INT64, nullable=False),
+                Column("enqueued_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("claimed_ts", TypeName.TIMESTAMP_UTC),
+                Column("acked_ts", TypeName.TIMESTAMP_UTC),
+            ),
+            primary_key=("message_id",),
+            unique=(("dedupe_key",),),
+            indexes=(("topic", "state"),),
+            check_constraints=("state IN ('pending','in_flight','done','failed')",),
+        ),
+        Table(
+            name="schedule",
+            comment=(
+                "One row per feed the orchestrator runs — never a DAG per feed. A paused "
+                "feed carries its reason: a pause with no stated reason becomes a mystery "
+                "nobody dares unpause."
+            ),
+            columns=(
+                _FEED,
+                Column("cron", TypeName.STRING, nullable=False),
+                Column("timezone", TypeName.STRING, nullable=False),
+                Column("grace_period_minutes", TypeName.INT64, nullable=False),
+                Column("paused_reason", TypeName.STRING),
+                Column("registered_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("feed_id",),
+        ),
+        Table(
+            name="scheduled_run",
+            comment="Every trigger, so 'why did this run start' always has an answer.",
+            columns=(
+                Column("run_id", TypeName.UUID, nullable=False),
+                _FEED,
+                Column("scheduled_for", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("triggered_ts", TypeName.TIMESTAMP_UTC),
+                Column("batch_id", TypeName.STRING),
+            ),
+            primary_key=("run_id",),
+            unique=(("feed_id", "scheduled_for"),),
+            indexes=(("feed_id",),),
+        ),
+    ),
+)
+
+PROPOSALS_SCHEMA = Schema(
+    name="proposals",
+    description=(
+        "The universal HITL object. Agents write ONLY here (plus knowledge.*, ops.*, "
+        "forecasts.*, audit.agent_action) — never to control.* or any data layer. A "
+        "proposal becomes a governed object only through a human's act."
+    ),
+    tables=(
+        Table(
+            name="proposal",
+            comment=(
+                "DRAFT -> PENDING_REVIEW -> APPROVED|REJECTED -> APPLIED|FAILED. The AI "
+                "version and the human's correction both persist: corrections are fuel — "
+                "every one appends to the evaluation set."
+            ),
+            columns=(
+                Column("proposal_id", TypeName.UUID, nullable=False),
+                Column("agent", TypeName.STRING, nullable=False),
+                Column("capability", TypeName.STRING, nullable=False),
+                Column("risk_class", TypeName.STRING, nullable=False),
+                Column("feed_id", TypeName.STRING),
+                Column("run_id", TypeName.STRING, nullable=False),
+                _STATE,
+                Column("payload", TypeName.JSON, nullable=False),
+                Column("confidence", TypeName.DECIMAL, precision=5, scale=4),
+                Column("grounding_citations", TypeName.JSON),
+                Column("prompt_hash", TypeName.STRING),
+                Column("created_by_subject", TypeName.STRING, nullable=False),
+                Column("created_by_type", TypeName.STRING, nullable=False),
+                Column("created_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("decided_by_subject", TypeName.STRING),
+                Column("decision_comment", TypeName.STRING),
+                Column("decided_ts", TypeName.TIMESTAMP_UTC),
+                Column("applied_object_type", TypeName.STRING),
+                Column("applied_object_id", TypeName.STRING),
+                Column("applied_version", TypeName.INT64),
+            ),
+            primary_key=("proposal_id",),
+            indexes=(("state",), ("feed_id",), ("agent", "created_ts")),
+            check_constraints=(
+                "state IN ('draft','pending_review','approved','rejected','applied','failed')",
+                # R4 is human-always and never automatable; an R4 proposal row is
+                # a category error, refused at the schema so no code path can
+                # create one.
+                "risk_class IN ('R0','R1','R2','R3')",
+            ),
+        ),
+    ),
+)
+
+KNOWLEDGE_SCHEMA = Schema(
+    name="knowledge",
+    description=(
+        "K2 — semantic knowledge. Only Published governed objects embed; Retired deletes "
+        "its chunks; the store is a REBUILDABLE PROJECTION of approved knowledge. PHI, "
+        "member rows, raw feed contents, drafts and secrets never enter it."
+    ),
+    tables=(
+        Table(
+            name="chunk",
+            comment=(
+                "citation_id is the load-bearing column: it turns 'the model said so' "
+                "into 'the approved glossary term BG-004 says so, click to open'. The "
+                "embedding vector and tsvector columns are Postgres-rendering extras "
+                "added by the installer — engine-specific, so not declared here."
+            ),
+            columns=(
+                Column("chunk_id", TypeName.STRING, nullable=False),
+                Column("kind", TypeName.STRING, nullable=False),
+                Column("citation_id", TypeName.STRING, nullable=False),
+                Column("text", TypeName.STRING, nullable=False),
+                Column("domain", TypeName.STRING),
+                Column("source_org", TypeName.STRING),
+                Column("feed_id", TypeName.STRING),
+                Column("lifecycle_state", TypeName.STRING, nullable=False),
+                Column("object_version", TypeName.INT64),
+                Column("scope_tags", TypeName.JSON),
+                Column("metadata", TypeName.JSON),
+                Column("phi_verified_at", TypeName.TIMESTAMP_UTC),
+                Column("embedding_model_version", TypeName.STRING),
+                Column("embedded_at", TypeName.TIMESTAMP_UTC),
+            ),
+            primary_key=("chunk_id",),
+            indexes=(("kind",), ("domain",), ("feed_id",), ("citation_id",)),
+        ),
+    ),
+)
+
 
 def all_schemas() -> tuple[Schema, ...]:
-    """Every schema the installer provisions, in dependency order."""
+    """Every schema the installer provisions, in dependency order.
+
+    `cinqflow install` renders CREATE ... IF NOT EXISTS for everything here, so
+    re-running it against a live plane is the additive upgrade path: a new
+    schema or table appears; nothing existing is touched.
+    """
     return (
         LANDING_CTL_SCHEMA,
         CONTROL_SCHEMA,
@@ -562,4 +844,10 @@ def all_schemas() -> tuple[Schema, ...]:
         SILVER_ODS_SCHEMA,
         QUARANTINE_SCHEMA,
         RECON_SCHEMA,
+        REGISTRY_SCHEMA,
+        GOVERNANCE_SCHEMA,
+        AUDIT_SCHEMA,
+        QUEUE_SCHEMA,
+        PROPOSALS_SCHEMA,
+        KNOWLEDGE_SCHEMA,
     )

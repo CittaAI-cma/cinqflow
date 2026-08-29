@@ -112,6 +112,26 @@ class InputFile:
 
 
 @dataclass(frozen=True)
+class SchemaDrift:
+    """schema_drift_log — observed structure vs the contract, per batch.
+
+    Classified BY MEANING (`core.registry.contract.DriftKind`), not by
+    structure: a rename is one event, not a dropped column plus a new one.
+    Recorded for every non-NONE finding, whether or not it blocked the
+    batch — an ADDED or REORDERED column is drift a steward should be able to
+    see even when it never stopped anything.
+    """
+
+    batch_id: str
+    feed_id: str
+    classification: str
+    column_name: str
+    detail: str
+    blocked_batch: bool
+    detected_ts: datetime
+
+
+@dataclass(frozen=True)
 class ErrorRecord:
     """error_log — and the deterministic hash that is the quiet hero.
 
@@ -218,9 +238,19 @@ class ControlTablesPort(Protocol):
     def update_batch_state(self, batch_id: str, state: BatchState) -> None: ...
     def record_stage(self, status: StageStatus) -> None: ...
     def register_input_file(self, file: InputFile) -> None: ...
+    def link_input_to_batch(self, fingerprint: str, batch_id: str) -> None:
+        """Back-fill the batch a file fed, once its batch exists.
+
+        A file is registered on arrival, before a batch_id exists to record —
+        landing decides before a batch opens. Calling this once one does is
+        what makes "which file fed batch X?" answerable from the registry
+        without waiting for a schema that records both at once.
+        """
+        ...
     def record_error(self, error: ErrorRecord) -> None: ...
     def record_quarantine(self, summary: QuarantineSummary) -> None: ...
     def record_reconciliation(self, recon: Reconciliation) -> None: ...
+    def record_schema_drift(self, drift: SchemaDrift) -> None: ...
 
     # ── reads: what every screen and every certified query tool sees ─────────
     def get_batch(self, batch_id: str) -> BatchControl: ...
@@ -231,6 +261,12 @@ class ControlTablesPort(Protocol):
     def list_errors(
         self, batch_id: str, category: ErrorCategory | None = None
     ) -> Sequence[ErrorRecord]: ...
+    def find_error_by_hash(self, error_id_hash: str) -> ErrorRecord | None:
+        """The `error:<hash>` citation's own lookup — batch-independent, the
+        way `find_input_by_fingerprint` already is for `file:`. A citation
+        carries only the hash, never the batch_id that produced it."""
+        ...
+    def get_schema_drift(self, batch_id: str) -> Sequence[SchemaDrift]: ...
     def find_input_by_fingerprint(self, fingerprint: str) -> InputFile | None:
         """The exactly-once question, asked as one call.
 

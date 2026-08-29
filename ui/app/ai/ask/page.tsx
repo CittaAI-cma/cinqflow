@@ -129,7 +129,7 @@ export default async function AskPage({
 
       <h2>What this agent may call</h2>
       <p className="note">
-        Fourteen certified, read-only, RBAC-scoped tools. It never writes SQL, and no write
+        {isRefused(tools) ? "Certified, read-only, RBAC-scoped tools" : `${tools.length} certified, read-only, RBAC-scoped tools`}. It never writes SQL, and no write
         tool is on its whitelist at any confidence.
       </p>
       <div className="card scroll">

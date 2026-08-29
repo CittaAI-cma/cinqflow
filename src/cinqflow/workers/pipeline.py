@@ -37,6 +37,7 @@ from cinqflow.ports.control_tables import (
     InputFile,
     QuarantineSummary,
     Reconciliation,
+    SchemaDrift,
     StageStatus,
 )
 from cinqflow.ports.storage import FileRef, StoragePort
@@ -136,6 +137,10 @@ class PipelineRunner:
                     started_ts=started,
                 )
             )
+            # The file was registered before this batch existed — landing
+            # decides before a batch opens. Back-fill the link now, or
+            # "which file fed batch X?" is unanswerable from the registry.
+            self._control.link_input_to_batch(fingerprint, batch)
         self._control.update_batch_state(batch, BatchState.IN_PROGRESS)
         if restarting:
             # "the restart is recorded on the batch" — CF-V0-E8-01, exception
@@ -164,6 +169,44 @@ class PipelineRunner:
                 failure=failure.message,
                 drift_blocked=failure.drift_blocked,
             )
+        except Exception as crash:
+            # An UNEXPECTED crash (a bug in an adapter, a transient failure
+            # mid-transform) is not a _StageFailureError, but the batch must
+            # still reach a terminal state: an IN_PROGRESS batch that never
+            # resolves is invisible to reconciliation and to the agent, and no
+            # operator would think to look for a run that "is still going"
+            # three days later. Returned rather than re-raised, deliberately:
+            # a real run commits inside ONE transaction (adapters/local/
+            # pg_control.py:commit), so an exception escaping this method
+            # would roll back the very FAILED-state and error rows this
+            # records — "the control rows ARE the observable behaviour" only
+            # holds if recording a crash cannot itself be undone by the crash.
+            self._fail_unexpected(batch, crash)
+            return RunOutcome(
+                batch_id=batch,
+                decision=decision,
+                state=BatchState.FAILED,
+                failure=str(crash),
+            )
+
+    def _fail_unexpected(self, batch: str, crash: Exception) -> None:
+        self._control.record_error(
+            ErrorRecord(
+                error_id_hash=error_id_hash(
+                    batch_id=batch,
+                    stage=Layer.SILVER_RAW,
+                    record_key=None,
+                    error_type=ErrorCategory.SYSTEM,
+                    rule_id=None,
+                ),
+                batch_id=batch,
+                stage=Layer.SILVER_RAW,
+                category=ErrorCategory.SYSTEM,
+                message=f"the run crashed unexpectedly and did not complete: {crash}",
+                occurred_ts=datetime.now(UTC),
+            )
+        )
+        self._control.update_batch_state(batch, BatchState.FAILED)
 
     # ── the stages ───────────────────────────────────────────────────────────
     def _process(
@@ -187,6 +230,18 @@ class PipelineRunner:
 
         # G2's first half: drift, classified BY MEANING.
         findings = compare_to_contract(parsed.columns, contract)
+        for finding in findings:
+            self._control.record_schema_drift(
+                SchemaDrift(
+                    batch_id=batch,
+                    feed_id=feed.feed_id,
+                    classification=finding.kind.value,
+                    column_name=finding.column,
+                    detail=finding.detail,
+                    blocked_batch=finding.blocks_batch,
+                    detected_ts=datetime.now(UTC),
+                )
+            )
         blocking = tuple(f.detail for f in findings if f.blocks_batch)
         if blocking:
             raise _StageFailureError(
@@ -243,11 +298,16 @@ class PipelineRunner:
         self._compute.record_recon_history(result=result, feed_id=feed.feed_id)
         completed.append(Layer.SILVER_RAW)
 
+        # "Fail the batch loudly if the equation does not balance" — computed
+        # ONCE, before any control row is written, so the stage row and the
+        # batch row can never disagree about whether this run succeeded.
+        state = BatchState.COMPLETED if result.balances else BatchState.FAILED
+
         self._control.record_stage(
             StageStatus(
                 batch_id=batch,
                 stage=Layer.SILVER_RAW,
-                state=BatchState.COMPLETED,
+                state=state,
                 started_ts=started,
                 completed_ts=datetime.now(UTC),
                 records_in=result.reconciliation.records_in,
@@ -258,9 +318,6 @@ class PipelineRunner:
         )
         self._record_exclusions(batch, result)
         self._record_reconciliation(batch, result)
-
-        # "Fail the batch loudly if the equation does not balance."
-        state = BatchState.COMPLETED if result.balances else BatchState.FAILED
         self._control.update_batch_state(batch, state)
         self._storage.move(file.key, decision.move_to)
 

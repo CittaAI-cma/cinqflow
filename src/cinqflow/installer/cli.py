@@ -10,6 +10,7 @@ the demo cannot silently rot between showings.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Annotated
 
@@ -30,6 +31,18 @@ app = typer.Typer(
 console = Console()
 
 DEFAULT_MANIFEST = Path(".cinqflow/installation-manifest.json")
+
+#: Every identifier this installer ever writes to a manifest is a bare name or
+#: `schema.table` — nothing this codebase creates is ever quoted, dotted twice,
+#: or contains a space. The manifest is a plain user-writable JSON file, so a
+#: tampered identifier must be REFUSED here, before it reaches a DROP
+#: statement — never trusted because "we wrote it, once".
+_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
+
+
+class UnsafeManifestIdentifierError(ValueError):
+    """A manifest entry that does not look like anything this installer made."""
+
 
 ProfileOption = Annotated[
     Path,
@@ -75,6 +88,20 @@ def install(
             for index_columns in spec_table.indexes:
                 manifest.record("index", f"ix_{spec_table.name}_{'_'.join(index_columns)}")
 
+    # The knowledge plane's ENGINE-SPECIFIC halves. pgvector's vector column and
+    # the generated tsvector are dialect, so they live in this rendering — never
+    # in the portable spec, which the Databricks renderer also consumes
+    # (docs/architecture/plates/12-knowledge-plane-and-retrieval.md).
+    statements.extend(
+        [
+            "ALTER TABLE knowledge.chunk ADD COLUMN IF NOT EXISTS embedding_vec vector;",
+            "ALTER TABLE knowledge.chunk ADD COLUMN IF NOT EXISTS tsv tsvector "
+            "GENERATED ALWAYS AS (to_tsvector('english', text)) STORED;",
+            "CREATE INDEX IF NOT EXISTS ix_chunk_tsv ON knowledge.chunk USING GIN (tsv);",
+        ]
+    )
+    manifest.record("index", "ix_chunk_tsv")
+
     if dry_run:
         console.print("\n".join(statements))
         raise typer.Exit(0)
@@ -117,10 +144,17 @@ def uninstall(
     if not yes and not typer.confirm("remove them?"):
         raise typer.Exit(1)
 
+    droppable = [obj for obj in objects if obj.kind in {"schema", "table", "index"}]
+    unsafe = [obj for obj in droppable if not _SAFE_IDENTIFIER.match(obj.identifier)]
+    if unsafe:
+        names = ", ".join(obj.identifier for obj in unsafe)
+        raise UnsafeManifestIdentifierError(
+            f"{manifest_path} names an identifier this installer would never have written: "
+            f"{names!r} — refusing rather than interpolating it into a DROP statement"
+        )
+
     statements = [
-        f"DROP {obj.kind.upper()} IF EXISTS {obj.identifier} CASCADE;"
-        for obj in objects
-        if obj.kind in {"schema", "table", "index"}
+        f"DROP {obj.kind.upper()} IF EXISTS {obj.identifier} CASCADE;" for obj in droppable
     ]
     _execute(loaded, statements)
     manifest_path.unlink()
@@ -195,6 +229,113 @@ def ask(
         f"[dim]tools: {', '.join(answer.tools_called) or 'none'} · "
         f"confidence {answer.confidence} · ${answer.cost_usd}[/dim]"
     )
+
+
+@app.command()
+def ingest(
+    profile: ProfileOption = Path("profiles/local.yaml"),
+    business_date: Annotated[
+        str, typer.Option("--business-date", help="YYYY-MM-DD. Selects the roster's month.")
+    ] = "2026-08-01",
+    bad_dates: Annotated[
+        int, typer.Option("--bad-dates", help="Rows to seed with an out-of-range DOB.")
+    ] = 0,
+    resume_from: Annotated[
+        str | None,
+        typer.Option(
+            "--resume-from", help="'silver_raw' — resume a batch without re-landing Bronze."
+        ),
+    ] = None,
+    batch_id: Annotated[
+        str | None, typer.Option("--batch-id", help="Required with --resume-from.")
+    ] = None,
+) -> None:
+    """Land the Fidelis roster for real — committed to the real Postgres plane.
+
+    This is the Wave-0 exit criterion as a command, not only as a test: drop
+    the roster and watch it flow with 5 quarantined rows and a balanced
+    ledger; drop the SAME month again and watch it refused (the fingerprint is
+    already in `control.input_registry`, so this needs no flag to demonstrate
+    — running this command twice IS the negative test); kill it at Silver Raw
+    with `--resume-from silver_raw --batch-id <id>` and watch it restart
+    without reloading Bronze.
+
+    Unlike `ask`, this runs on the REAL rung-0.5 socket: PostgresControlTables
+    and PostgresCompute, inside `pg_control.commit` — one transaction, visible
+    downstream in full or not at all. What it commits STAYS — this is the
+    plane the pipeline test suite also runs against (inside a transaction it
+    always rolls back), so a batch left here with the same content as the
+    golden roster fixture (the default `--bad-dates 0` roster) will collide on
+    fingerprint with that suite's own runs. Use a scratch database for
+    exploration, or truncate `control.*`, `bronze.members_raw` and
+    `silver_raw.members` before running `pytest` again.
+    """
+    from datetime import date
+
+    from cinqflow.adapters.local.pg_compute import PostgresCompute
+    from cinqflow.adapters.local.pg_control import commit
+    from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
+    from cinqflow.adapters.mock.storage import MemFsStorage
+    from cinqflow.core.model.vocabulary import Layer
+    from cinqflow.core.registry.golden_fidelis import (
+        CONTRACT,
+        DQ_002,
+        FEED,
+        FEED_VERSION,
+        PLAN,
+        roster_csv,
+    )
+    from cinqflow.core.registry.golden_fidelis import landing_key as _key
+    from cinqflow.workers.pipeline import PipelineRunner
+
+    loaded = profile_module.load(profile)
+    stage = Layer(resume_from) if resume_from else None
+    if resume_from and not batch_id:
+        console.print("[red]--resume-from requires --batch-id[/red] — there is no batch to resume.")
+        raise typer.Exit(1)
+
+    date.fromisoformat(business_date)  # a clear error beats a confusing one downstream
+    key = _key(business_date)
+    content = roster_csv(bad_dates=bad_dates)
+
+    with commit(loaded) as connection:
+        storage = MemFsStorage()
+        storage.place(key, content)
+        file = next(f for f in storage.list_files("enrollments/") if f.key == key)
+        runner = PipelineRunner(
+            storage=storage,
+            control=PostgresControlTables(connection),
+            compute=PostgresCompute(connection),
+            source_system="fidelis",
+        )
+        outcome = runner.run(
+            file,
+            feed=FEED,
+            feed_version=FEED_VERSION,
+            contract=CONTRACT,
+            rules=(DQ_002,),
+            plan=PLAN,
+            business_date=business_date,
+            resume_from=stage,
+            batch_id=batch_id,
+        )
+
+    console.print(f"[bold]cinqflow ingest[/bold]  {key}")
+    console.print(f"landing: {outcome.decision.outcome.value}")
+    if outcome.batch_id is None:
+        console.print(f"[yellow]{outcome.decision.reason or 'not accepted'}[/yellow]")
+        raise typer.Exit(0)
+
+    state = outcome.state.value if outcome.state else "?"
+    console.print(f"batch: [bold]{outcome.batch_id}[/bold]  state: {state}")
+    if outcome.failure:
+        console.print(f"[red]{outcome.failure}[/red]")
+    if outcome.result is not None:
+        recon = outcome.result.reconciliation
+        console.print(recon.explain())
+        for drop in recon.drops:
+            console.print(f"  [dim]· {drop.rule_id}: {drop.record_count} — {drop.reason}[/dim]")
+    raise typer.Exit(0 if outcome.processed else 1)
 
 
 def _execute(loaded: profile_module.Profile, statements: list[str]) -> None:

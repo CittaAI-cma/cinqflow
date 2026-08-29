@@ -9,11 +9,11 @@ every row, an audit entry for every invocation including the refusals.
      tool name, arguments and row count."
     — CF-V0-E16-09
 
-The executor is ONE function with a dispatch table, not fourteen public
+The executor is ONE function with a dispatch table, not sixteen public
 methods, because every guarantee this story makes is a guarantee about the
 SURFACE: validate, scope, execute, cite, audit — in that order, for all
-fourteen, with no path that skips a step. Fourteen public methods would be
-fourteen places to forget the audit row.
+sixteen, with no path that skips a step. Sixteen public methods would be
+sixteen places to forget the audit row.
 
 A note on scoping a batch: a caller asks about `batch:8842` without naming a
 feed, so the executor resolves the batch to its feed and checks THAT. The
@@ -133,7 +133,7 @@ class ToolContext:
 
 
 def invoke(context: ToolContext, name: str, arguments: dict[str, Any] | None = None) -> ToolResult:
-    """Validate, scope, execute, cite, audit. In that order, for all fourteen.
+    """Validate, scope, execute, cite, audit. In that order, for all sixteen.
 
     Every exit from this function writes exactly one `audit.agent_action` row —
     including the refusals, which is the half people leave out. A ledger holding
@@ -189,6 +189,19 @@ def _feed_in_scope(context: ToolContext, spec: ToolSpec, args: dict[str, Any]) -
         except BatchNotFoundError:
             # Indistinguishable from out-of-scope, deliberately.
             return _DENIED
+    if feed_id is None and "error_id_hash" in args:
+        # error: and file: citations carry no batch_id — the row itself is
+        # the only thing that names a feed, so it has to be fetched once to
+        # find out, exactly like the batch_id path above.
+        found = context.control.find_error_by_hash(str(args["error_id_hash"]))
+        if found is None:
+            return _DENIED
+        feed_id = context.control.get_batch(found.batch_id).feed_id
+    if feed_id is None and "fingerprint" in args:
+        input_file = context.control.find_input_by_fingerprint(str(args["fingerprint"]))
+        if input_file is None:
+            return _DENIED
+        feed_id = input_file.feed_id
     if feed_id is None:
         return None
     return feed_id if context.principal.scopes.covers_feed(str(feed_id)) else _DENIED
@@ -222,7 +235,7 @@ def _since(context: ToolContext, args: dict[str, Any]) -> datetime:
     return context.now - timedelta(days=int(args.get("window_days", 30)))
 
 
-# ── the fourteen ─────────────────────────────────────────────────────────────
+# ── the sixteen ──────────────────────────────────────────────────────────────
 
 
 def _list_feeds(context: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -433,26 +446,58 @@ def _get_stage_status(context: ToolContext, args: dict[str, Any]) -> ToolResult:
 
 
 def _get_reconciliation(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """The recon panel's tool: one stage-balance row PLUS one row per named
+    drop, so `recon:<batch>#<rule>` (emitted by `get_drop_ledger`, and by the
+    per-row citation here) can highlight a row that actually carries that
+    rule_id. Homogeneous columns across both row kinds — `rule_id` blank on a
+    balance row, `records_in` etc. blank on a drop row — because the UI drawer
+    derives its table header from the FIRST row's keys alone; a row with keys
+    the header doesn't have renders as a misaligned column, not a defect the
+    UI can see.
+    """
     batch_id = str(args["batch_id"])
     recons = context.control.get_reconciliation(batch_id)
-    citation = CitationId(CitationKind.RECON, batch_id)
-    rows = tuple(
-        {
-            "stage": recon.stage.value,
-            "records_in": recon.records_in,
-            "records_out": recon.records_out,
-            "quarantined": recon.quarantined,
-            "attributed_drops": recon.attributed_drops,
-            "balances": recon.balances,
-            "unexplained": recon.unexplained,
-            "citation_id": str(citation),
-        }
-        for recon in recons
-    )
+    stage_citation = CitationId(CitationKind.RECON, batch_id)
+    rows: list[dict[str, Any]] = []
+    citations: list[CitationId] = [stage_citation] if recons else []
+    for recon in recons:
+        rows.append(
+            {
+                "stage": recon.stage.value,
+                "records_in": recon.records_in,
+                "records_out": recon.records_out,
+                "quarantined": recon.quarantined,
+                "attributed_drops": recon.attributed_drops,
+                "balances": recon.balances,
+                "unexplained": recon.unexplained,
+                "rule_id": None,
+                "reason": None,
+                "record_count": None,
+                "citation_id": str(stage_citation),
+            }
+        )
+        for entry in recon.drop_ledger:
+            drop_citation = CitationId(CitationKind.RECON, batch_id, fragment=entry.rule_id)
+            citations.append(drop_citation)
+            rows.append(
+                {
+                    "stage": recon.stage.value,
+                    "records_in": None,
+                    "records_out": None,
+                    "quarantined": None,
+                    "attributed_drops": None,
+                    "balances": None,
+                    "unexplained": None,
+                    "rule_id": entry.rule_id,
+                    "reason": entry.reason,
+                    "record_count": entry.record_count,
+                    "citation_id": str(drop_citation),
+                }
+            )
     return ToolResult(
         tool="get_reconciliation",
-        rows=rows,
-        citations=(citation,) if rows else (),
+        rows=tuple(rows),
+        citations=tuple(citations),
         note="rows_in == rows_out + quarantined + attributed_drops, every stage, every batch",
     )
 
@@ -532,6 +577,55 @@ def _get_quarantine_summary(context: ToolContext, args: dict[str, Any]) -> ToolR
     )
 
 
+def _get_error_by_hash(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    error = context.control.find_error_by_hash(str(args["error_id_hash"]))
+    if error is None:
+        return _absent("get_error_by_hash")
+    citation = CitationId(CitationKind.ERROR, error.error_id_hash)
+    return ToolResult(
+        tool="get_error_by_hash",
+        rows=(
+            {
+                "error_id_hash": error.error_id_hash,
+                "batch_id": error.batch_id,
+                "stage": error.stage.value,
+                "category": error.category.value,
+                "message": error.message,
+                "rule_id": error.rule_id,
+                "occurred_ts": error.occurred_ts.isoformat(),
+                "citation_id": str(citation),
+            },
+        ),
+        citations=(citation,),
+    )
+
+
+def _get_file_by_fingerprint(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    found = context.control.find_input_by_fingerprint(str(args["fingerprint"]))
+    if found is None:
+        return _absent("get_file_by_fingerprint")
+    citation = CitationId(CitationKind.FILE, found.fingerprint)
+    return ToolResult(
+        tool="get_file_by_fingerprint",
+        rows=(
+            {
+                "filename": found.filename,
+                "fingerprint": found.fingerprint,
+                "feed_id": found.feed_id,
+                "batch_id": found.batch_id,
+                "size_bytes": found.size_bytes,
+                "state": found.state.value,
+                "arrived_ts": found.arrived_ts.isoformat(),
+                "rejection_reason": found.rejection_reason,
+                "record_count": found.record_count,
+                "unexpected": found.is_unexpected,
+                "citation_id": str(citation),
+            },
+        ),
+        citations=(citation,),
+    )
+
+
 def _get_input_registry(context: ToolContext, args: dict[str, Any]) -> ToolResult:
     since = _since(context, args)
     files = [
@@ -580,8 +674,10 @@ _RUNNERS = {
     "get_reconciliation": _get_reconciliation,
     "get_drop_ledger": _get_drop_ledger,
     "list_errors": _list_errors,
+    "get_error_by_hash": _get_error_by_hash,
     "get_quarantine_summary": _get_quarantine_summary,
     "get_input_registry": _get_input_registry,
+    "get_file_by_fingerprint": _get_file_by_fingerprint,
     "lookup_reference": _lookup_reference,
 }
 
@@ -612,20 +708,45 @@ def _load(
     return obj
 
 
-def dq_rule_entries(rules: Sequence[Any]) -> tuple[ReferenceEntry, ...]:
-    """Turn approved DQ rules into reference entries.
+def dq_rule_entries(rules: Sequence[dict[str, Any]]) -> tuple[ReferenceEntry, ...]:
+    """Turn a feed's stored DQ rules into reference entries.
 
-    The 110 legacy rules already pair a natural-language description with
+    `rules` is `GovernedObject(ObjectType.DQ_RULE, feed_id).body["rules"]` —
+    the plain-dict shape `_get_dq_rules` already reads, not `DqRule`
+    instances; there is no governed row anywhere holding the dataclass. The
+    110 legacy rules already pair a natural-language description with
     executable SQL and a glossary link — which is exactly this shape.
     """
     return tuple(
         ReferenceEntry(
-            slug=rule.rule_id,
-            term=rule.rule_id,
-            definition=f"{rule.name}: {rule.description} (severity {rule.severity.value})",
+            slug=rule["rule_id"],
+            term=rule["rule_id"],
+            definition=(
+                f"{rule.get('name', '')}: {rule.get('description', '')} "
+                f"(severity {rule.get('severity', 'low')})"
+            ),
             kind=CitationKind.RULE,
             source="dq-rule-registry",
-            aliases=("dq rule", "rule", *rule.columns),
+            aliases=("dq rule", "rule", *rule.get("columns", [])),
         )
         for rule in rules
     )
+
+
+def all_dq_rule_entries(metadata: MetadataDbPort) -> tuple[ReferenceEntry, ...]:
+    """Every feed's DQ rules, for seeding a `ReferenceIndex` at request time.
+
+    `lookup_reference` (CF-V0-E16-09) takes no `feed_id` — a rule_id like
+    "DQ-002" is meant to resolve on its own — so the index has to hold every
+    feed's rules, not just one caller's. Wave 0 runs at a scale (a handful of
+    feeds) where re-reading them per request is the honest cost of that,
+    rather than a cache invalidation problem to solve early.
+    """
+    entries: list[ReferenceEntry] = []
+    for feed in metadata.list(ObjectType.FEED):
+        try:
+            rules_obj = metadata.get(ObjectType.DQ_RULE, feed.object_id)
+        except ObjectNotFoundError:
+            continue
+        entries.extend(dq_rule_entries(rules_obj.body.get("rules", [])))
+    return tuple(entries)

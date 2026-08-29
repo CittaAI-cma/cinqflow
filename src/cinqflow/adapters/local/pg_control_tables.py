@@ -29,6 +29,7 @@ from cinqflow.ports.control_tables import (
     InputFile,
     QuarantineSummary,
     Reconciliation,
+    SchemaDrift,
     StageStatus,
 )
 
@@ -116,6 +117,12 @@ class PostgresControlTables:
             ),
         )
 
+    def link_input_to_batch(self, fingerprint: str, batch_id: str) -> None:
+        self._db.execute(
+            "UPDATE control.input_registry SET batch_id = %s WHERE fingerprint = %s",
+            (batch_id, fingerprint),
+        )
+
     def record_error(self, error: ErrorRecord) -> None:
         # Idempotent by hash: replay cannot manufacture a duplicate incident.
         self._db.execute(
@@ -137,7 +144,8 @@ class PostgresControlTables:
     def record_quarantine(self, summary: QuarantineSummary) -> None:
         self._db.execute(
             "INSERT INTO control.quarantine_records (quarantine_id, batch_id, stage_name, "
-            "rule_id, reason, column_names, quarantined_ts) VALUES (%s,%s,%s,%s,%s,%s, now())",
+            "rule_id, reason, column_names, record_count, quarantined_ts) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s, now())",
             (
                 str(uuid.uuid4()),
                 summary.batch_id,
@@ -145,11 +153,9 @@ class PostgresControlTables:
                 summary.rule_id,
                 summary.reason,
                 json.dumps(list(summary.column_names)),
+                summary.record_count,
             ),
         )
-        # The summary carries a count; the control table stores one row per
-        # (rule, batch). The count lives in the recon ledger, which is the one
-        # place totals are reconciled.
 
     def record_reconciliation(self, recon: Reconciliation) -> None:
         rows = recon.drop_ledger or (None,)
@@ -174,6 +180,23 @@ class PostgresControlTables:
                     recon.balances,
                 ),
             )
+
+    def record_schema_drift(self, drift: SchemaDrift) -> None:
+        self._db.execute(
+            "INSERT INTO control.schema_drift_log (drift_id, batch_id, feed_id, "
+            "classification, column_name, detail, blocked_batch, detected_ts) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                str(uuid.uuid4()),
+                drift.batch_id,
+                drift.feed_id,
+                drift.classification,
+                drift.column_name,
+                drift.detail,
+                drift.blocked_batch,
+                drift.detected_ts,
+            ),
+        )
 
     # ── reads ────────────────────────────────────────────────────────────────
     def get_batch(self, batch_id: str) -> BatchControl:
@@ -247,13 +270,30 @@ class PostgresControlTables:
             for stage, group in sorted(by_stage.items())
         )
 
+    def get_schema_drift(self, batch_id: str) -> Sequence[SchemaDrift]:
+        rows = self._db.fetch_all(
+            "SELECT batch_id, feed_id, classification, column_name, detail, "
+            "blocked_batch, detected_ts FROM control.schema_drift_log "
+            "WHERE batch_id = %s ORDER BY detected_ts",
+            (batch_id,),
+        )
+        return tuple(
+            SchemaDrift(
+                batch_id=row[0],
+                feed_id=row[1],
+                classification=row[2],
+                column_name=row[3],
+                detail=row[4],
+                blocked_batch=row[5],
+                detected_ts=row[6],
+            )
+            for row in rows
+        )
+
     def get_quarantine_summary(self, batch_id: str) -> Sequence[QuarantineSummary]:
         rows = self._db.fetch_all(
-            "SELECT q.stage_name, q.rule_id, q.reason, q.column_names, "
-            "COALESCE(r.drop_count, 0) FROM control.quarantine_records q "
-            "LEFT JOIN control.batch_reconciliation r "
-            "  ON r.batch_id = q.batch_id AND r.drop_rule_id = q.rule_id "
-            "WHERE q.batch_id = %s ORDER BY q.rule_id",
+            "SELECT stage_name, rule_id, reason, column_names, record_count "
+            "FROM control.quarantine_records WHERE batch_id = %s ORDER BY rule_id",
             (batch_id,),
         )
         return tuple(
@@ -280,19 +320,15 @@ class PostgresControlTables:
             statement += " AND error_category = %s"
             parameters += (category.value,)
         rows = self._db.fetch_all(statement + " ORDER BY occurred_ts", parameters)
-        return tuple(
-            ErrorRecord(
-                error_id_hash=row[0],
-                batch_id=row[1],
-                stage=Layer(row[2]),
-                category=ErrorCategory(row[3]),
-                message=row[4],
-                record_key=row[5],
-                rule_id=row[6],
-                occurred_ts=row[7],
-            )
-            for row in rows
+        return tuple(_error(row) for row in rows)
+
+    def find_error_by_hash(self, error_id_hash: str) -> ErrorRecord | None:
+        row = self._db.fetch_one(
+            "SELECT error_id_hash, batch_id, stage_name, error_category, message, "
+            "record_key, rule_id, occurred_ts FROM control.error_log WHERE error_id_hash = %s",
+            (error_id_hash,),
         )
+        return _error(row) if row else None
 
     def find_input_by_fingerprint(self, fingerprint: str) -> InputFile | None:
         row = self._db.fetch_one(
@@ -339,4 +375,17 @@ def _input(row: tuple[Any, ...]) -> InputFile:
         arrived_ts=row[7],
         rejection_reason=row[8],
         record_count=row[9],
+    )
+
+
+def _error(row: tuple[Any, ...]) -> ErrorRecord:
+    return ErrorRecord(
+        error_id_hash=row[0],
+        batch_id=row[1],
+        stage=Layer(row[2]),
+        category=ErrorCategory(row[3]),
+        message=row[4],
+        record_key=row[5],
+        rule_id=row[6],
+        occurred_ts=row[7],
     )

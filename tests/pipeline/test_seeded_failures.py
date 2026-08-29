@@ -197,7 +197,7 @@ def test_a_truncated_delivery_is_rejected_before_it_can_halve_a_roster(rig) -> N
 def test_a_contracted_column_that_stops_arriving_blocks_the_batch(rig) -> None:
     """Structurally the file is perfect. Only a comparison against the approved
     contract catches it — which is why G2 exists as a separate gate."""
-    play, _, _ = rig
+    play, control, _ = rig
     outcome = play(
         PayerSimulator().deliver(business_date=AUGUST, injection=Injection.DRIFTED_SCHEMA)
     )
@@ -209,6 +209,11 @@ def test_a_contracted_column_that_stops_arriving_blocks_the_batch(rig) -> None:
     ledger = {d.rule_id: d.record_count for d in outcome.result.reconciliation.drops}
     assert ledger == {"DQ-002": 200}
     assert outcome.result.balances is True
+
+    (drift,) = control.get_schema_drift(outcome.batch_id)
+    assert drift.classification == "removed"
+    assert drift.column_name == "First_Name"
+    assert drift.blocked_batch is False
 
 
 # ── bad encoding ─────────────────────────────────────────────────────────────

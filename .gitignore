@@ -23,7 +23,7 @@ ui/next-env.d.ts
 *.key
 
 # Runtime artifacts
-landing/
+/landing/
 .cinqflow/
 installation-manifest*.json
 
@@ -38,3 +38,4 @@ ui/next-env.d.ts
 # Files, never inline values. See compose/secrets/README.md.
 compose/secrets/*
 !compose/secrets/README.md
+test-results/

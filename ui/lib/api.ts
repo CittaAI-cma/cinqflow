@@ -24,19 +24,53 @@ export async function token(): Promise<string | null> {
   return jar.get(SESSION_COOKIE)?.value ?? null;
 }
 
+/**
+ * The platform is not running, or not where we looked.
+ *
+ * Distinct from `Refused`, and the distinction is the whole point: a refusal
+ * is a DECISION the server made and recorded, while this is a transport
+ * failure that reached nobody. Rendering them the same way sends someone
+ * hunting for a permission bug when the API simply is not up.
+ *
+ * Node's fetch throws a bare `TypeError: fetch failed` with the URL only in a
+ * nested `cause`, so the message a person actually reads says nothing about
+ * where we looked or how to fix it. This says both.
+ */
+export class Unreachable extends Error {
+  constructor(
+    readonly url: string,
+    options?: { cause?: unknown },
+  ) {
+    super(
+      `Could not reach the CINQFLOW API at ${url}. ` +
+        `Start it with:  cd cinqflow && PYTHONPATH=src .venv/bin/python -m cinqflow.api.dev --port 8000  ` +
+        `— or point CINQFLOW_API at wherever it is running.`,
+      options,
+    );
+    this.name = "Unreachable";
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const bearer = await token();
-  const response = await fetch(`${API}${path}`, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
-      ...(init?.headers ?? {}),
-    },
-    // The control plane changes while you are looking at it. A cached batch
-    // state is a screen that lies quietly.
-    cache: "no-store",
-  });
+  const url = `${API}${path}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+        ...(init?.headers ?? {}),
+      },
+      // The control plane changes while you are looking at it. A cached batch
+      // state is a screen that lies quietly.
+      cache: "no-store",
+    });
+  } catch (cause) {
+    throw new Unreachable(url, { cause });
+  }
 
   if (!response.ok) {
     let detail = response.statusText;

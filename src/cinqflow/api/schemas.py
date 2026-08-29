@@ -37,11 +37,26 @@ class Cited(BaseModel):
         return cls(value=value, citation_id=str(citation), route=citation.route)
 
 
+class HomeSlotOut(BaseModel):
+    """One card on the persona-shaped home, and the question it answers.
+
+    The RANK is the order of the list — which is the ranking half of ADR-0020's
+    merge rule, decided in core/persona.py and never in the browser.
+    """
+
+    key: str
+    answers: str
+
+
 class PrincipalOut(BaseModel):
     """Who the caller is, and what the UI may therefore offer.
 
     `permitted_actions` is sent so the UI can hide what the server would refuse.
     Hiding is a courtesy; the refusal is the control, and it lives on the route.
+
+    `home_slots` is the ordered persona home. It is sent rather than derived in
+    the UI so that "what an Engineer sees first" is a server fact with a test,
+    not a ternary in a page component.
     """
 
     subject: str
@@ -49,6 +64,7 @@ class PrincipalOut(BaseModel):
     roles: list[str]
     has_access: bool
     permitted_actions: list[str]
+    home_slots: list[HomeSlotOut] = []
 
 
 class FeedOut(BaseModel):

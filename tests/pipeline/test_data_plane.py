@@ -24,9 +24,10 @@ from cinqflow.ports.control_tables import CONTROL_TABLES
 pytestmark = [pytest.mark.pipeline, pytest.mark.postgres]
 
 
-def test_the_seven_schemas_exist(plane: Connection) -> None:
+def test_every_provisioned_schema_exists(plane: Connection) -> None:
     """postgres_schemas: [landing_ctl, control, bronze, silver_raw,
-    silver_ods, quarantine, recon] — FIG 08"""
+    silver_ods, quarantine, recon] — FIG 08 — plus registry, governance and
+    audit, the three plane objects core/registry/wave0.py already declares."""
     rows = plane.fetch_all(
         "SELECT nspname FROM pg_namespace WHERE nspname = ANY(%s) ORDER BY nspname",
         ([s.name for s in all_schemas()],),

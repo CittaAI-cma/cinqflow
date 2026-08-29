@@ -135,7 +135,15 @@ _NUMBER = re.compile(r"\b\d[\d,]*(?:\.\d+)?\b")
 
 def numeric_fidelity(answer: str, grounding: str) -> NumericFidelity:
     def canonical(text: str) -> str:
-        return text.replace(",", "").rstrip(".0") or "0"
+        # Strip a trailing ".0"/".00" the way "21820.0" and "21820" are the
+        # same fact — but ONLY after a decimal point. `rstrip(".0")` (the bug
+        # this replaced) strips every trailing '.' and '0' CHARACTER, so a
+        # bare integer like "21820" becomes "2182" and a wrong-magnitude
+        # fabrication passes the gate it exists to catch.
+        text = text.replace(",", "")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text or "0"
 
     supported = {canonical(m) for m in _NUMBER.findall(grounding)}
     quoted = tuple(_NUMBER.findall(answer))

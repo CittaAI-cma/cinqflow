@@ -8,7 +8,14 @@ from cinqflow.ports import port
 from cinqflow.ports.authn import AuthenticationError, Principal, Role, Scopes
 
 
+# Registered under BOTH names: "mock" so rung 0's completeness check ("every
+# pin has a zero-dependency stand-in") stays true, and "static" because that
+# is what `profiles/local.yaml` names and what this class actually IS — not a
+# unit-test double standing in for something else, but the real rung-0.5
+# identity provider the CF-V0-E2-01 story describes. One class, two honest
+# names for the two roles it plays.
 @port("authn", "mock")
+@port("authn", "static")
 class StaticAuthn:
     """A stand-in for an OIDC provider, not a credential store.
 

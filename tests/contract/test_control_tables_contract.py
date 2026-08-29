@@ -30,6 +30,7 @@ from cinqflow.ports.control_tables import (
     InputFile,
     QuarantineSummary,
     Reconciliation,
+    SchemaDrift,
     StageStatus,
 )
 
@@ -268,6 +269,41 @@ def test_an_unbalanced_reconciliation_reports_the_gap_rather_than_hiding_it() ->
     )
     assert recon.balances is False
     assert recon.unexplained == 180
+
+
+def test_schema_drift_is_recorded_whether_or_not_it_blocked_the_batch(
+    control: ControlTablesPort,
+) -> None:
+    """schema_drift_log is a governance record, not only an incident log: an
+    ADDED column that never blocked anything is still drift a steward should
+    be able to see."""
+    control.record_schema_drift(
+        SchemaDrift(
+            batch_id=BATCH,
+            feed_id=FEED,
+            classification="added",
+            column_name="middle_name",
+            detail="'middle_name' is in the file but not under contract — ignored, not dropped",
+            blocked_batch=False,
+            detected_ts=NOW,
+        )
+    )
+    control.record_schema_drift(
+        SchemaDrift(
+            batch_id=BATCH,
+            feed_id=FEED,
+            classification="removed",
+            column_name="MemberID",
+            detail="'MemberID' is under contract but absent from the file",
+            blocked_batch=True,
+            detected_ts=NOW,
+        )
+    )
+    drift = control.get_schema_drift(BATCH)
+    assert {d.column_name: d.blocked_batch for d in drift} == {
+        "middle_name": False,
+        "MemberID": True,
+    }
 
 
 def test_batches_list_newest_first_for_a_feed(opened: ControlTablesPort) -> None:

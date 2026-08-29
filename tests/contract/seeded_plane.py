@@ -35,6 +35,8 @@ CANARY = "CANARY-MEMBER-JOSE-MARIA-8675309"
 
 FEED_ID = "fidelis-downstate-roster"
 BATCH_ID = "8842"
+ERROR_ID_HASH = "a1b2c3d4"
+FINGERPRINT = "f00d"
 NOW = datetime(2026, 8, 29, 3, 14, tzinfo=UTC)
 AUTHOR = Actor(subject="arun@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Arun")
 REVIEWER = Actor(subject="priya@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Priya")
@@ -157,7 +159,7 @@ def build_plane() -> tuple[MemMetadataDb, MemStoreControlTables]:
     # reaches a result, a member reached a model.
     control.record_error(
         ErrorRecord(
-            error_id_hash="a1b2c3d4",
+            error_id_hash=ERROR_ID_HASH,
             batch_id=BATCH_ID,
             stage=Layer.SILVER_RAW,
             category=ErrorCategory.VALIDATION,
@@ -174,7 +176,7 @@ def build_plane() -> tuple[MemMetadataDb, MemStoreControlTables]:
             key=f"landing/fidelis/roster/incoming/{CANARY}.xlsx",
             filename="_CINQDOWNSTATE_Member_Roster_20260801.xlsx",
             size_bytes=4_100_000,
-            fingerprint="f00d",
+            fingerprint=FINGERPRINT,
             state=FileState.PROCESSED,
             arrived_ts=NOW,
             record_count=22_000,

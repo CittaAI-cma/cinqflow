@@ -269,6 +269,25 @@ def test_editing_creates_a_new_version_and_leaves_the_previous_one_intact(
     )
 
 
+def test_a_pinned_version_in_the_query_returns_that_version_not_the_latest(
+    client: TestClient,
+) -> None:
+    """A `feed:<id>@v1` citation must open v1 — not silently show v2 under a
+    v1 label, which is what a route that ignores `?version=` does."""
+    client.post("/api/feeds", json=FEED_BODY, headers=_as(ENGINEER))
+    amended = dict(FEED_BODY, schedule_cron="0 7 * * 1")
+    client.put(f"/api/feeds/{FEED_ID}", json=amended, headers=_as(ENGINEER))
+
+    pinned = client.get(f"/api/feeds/{FEED_ID}?version=1", headers=_as(ENGINEER))
+    assert pinned.status_code == 200
+    assert pinned.json()["version"] == 1
+    assert pinned.json()["schedule_cron"] == "0 6 * * 1"
+    assert pinned.json()["citation_id"] == f"feed:{FEED_ID}@v1"
+
+    latest = client.get(f"/api/feeds/{FEED_ID}", headers=_as(ENGINEER))
+    assert latest.json()["version"] == 2
+
+
 def test_an_edit_may_not_rename_the_thing_it_edits(client: TestClient) -> None:
     client.post("/api/feeds", json=FEED_BODY, headers=_as(ENGINEER))
     renamed = dict(FEED_BODY, feed_id="something-else")

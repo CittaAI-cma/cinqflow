@@ -1,9 +1,13 @@
 """The wave-activation manifest — the navigation, as data.
 
-    "Eight destinations in Wave 0. W1+ destinations are HIDDEN until their wave
+    "Nine destinations in Wave 0. W1+ destinations are HIDDEN until their wave
      activates — never stubbed, never an empty screen. Nav is generated from a
      wave-activation manifest so this cannot drift."
-    — the Wave-0 plan, §2
+    — the Wave-0 plan, §2 (corrected 2026-08-30: the plan and this docstring
+      both said "eight"; DESTINATIONS has always held nine active, which is
+      also the count ADR-0020 records. The manifest was right and its two
+      prose descriptions were wrong — precisely the drift generating the nav
+      from data was meant to prevent, one level up.)
 
     "Persona shapes the home and the ranking. It never shapes the vocabulary or
      the depth."

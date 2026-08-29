@@ -45,7 +45,7 @@ from cinqflow.core.agents.pipeline_insight.graph import (
 )
 from cinqflow.core.citations import CitationId, UnresolvableCitationError, parse
 from cinqflow.core.model.agent_action import ActionOutcome, AgentAction
-from cinqflow.core.tools import spec_for
+from cinqflow.core.tools import ToolError, spec_for
 from cinqflow.intelligence.action_gateway import ActionGateway
 from cinqflow.intelligence.gateway import LlmGateway, ManualPathRequiredError
 from cinqflow.intelligence.tools import ToolContext, ToolResult, invoke
@@ -178,6 +178,7 @@ class PipelineInsightAgent:
                     tools_called=(),
                     refused=True,
                     refusal=reason,
+                    cost_usd=str(self.llm.spent_this_run(state["run_id"])),
                 ),
             }
         return {"intent": intent, "declined": False, "routed": routed}
@@ -241,7 +242,17 @@ class PipelineInsightAgent:
             if not permission:
                 self._record(state, f"tool:{call['tool']}", permission.outcome, permission.reason)
                 continue
-            results.append(invoke(self.tools, call["tool"], call["arguments"]))
+            try:
+                results.append(invoke(self.tools, call["tool"], call["arguments"]))
+            except ToolError:
+                # The PLANNING model supplied arguments the tool refused — a
+                # missing required id, an argument of the wrong shape. `invoke`
+                # already wrote this call's audit row (FAILED_SCHEMA or
+                # REFUSED_NOT_WHITELISTED, whichever it was) before raising, so
+                # this degrades the call to "no result" without re-auditing
+                # it — it must never crash the run, which is a route (or a
+                # CLI process) upstream.
+                continue
         return {"results": tuple(results)}
 
     # ── node 4 · answer (large) ──────────────────────────────────────────────
@@ -264,6 +275,7 @@ class PipelineInsightAgent:
                     unanswered=missing,
                     intent=state["intent"],
                     tools_called=called,
+                    cost_usd=str(self.llm.spent_this_run(state["run_id"])),
                 )
             }
 
@@ -287,7 +299,7 @@ class PipelineInsightAgent:
                 unanswered=unanswered,
                 intent=state["intent"],
                 tools_called=called,
-                cost_usd=str(result.cost_usd),
+                cost_usd=str(self.llm.spent_this_run(state["run_id"])),
             )
         }
 

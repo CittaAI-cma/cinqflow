@@ -11,11 +11,13 @@ That is the whole ceremony: importing a different adapter package is what
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from typing import Any
 
 import pytest
 
+import cinqflow.adapters.local
 import cinqflow.adapters.mock  # noqa: F401  — fits every pin at rung 0
 from cinqflow.ports import fitted
 
@@ -33,15 +35,27 @@ def adapters_for(pin: str) -> list[pytest.ParameterSet]:
 
 
 @pytest.fixture
-def make() -> Callable[[Callable[..., Any]], Any]:
-    """Build an adapter from its factory, with no arguments.
+def make(request: pytest.FixtureRequest) -> Callable[[Callable[..., Any]], Any]:
+    """Build an adapter from its factory.
 
-    Every adapter must be constructible with defaults. An adapter that needs
-    arguments to exist is an adapter the installer cannot stand up from a
-    profile alone.
+    Most adapters are constructible with no arguments — an in-memory stand-in
+    needs nothing else. A Postgres-backed adapter (pg-control, postgres for
+    metadata_db) is constructed with a real `Connection` instead: that
+    connection comes from the shared `plane` fixture, whose own rules apply
+    unchanged — it SKIPS the test rather than erroring when rung 0.5 is not
+    reachable, and every write inside it rolls back. Requesting `plane` lazily,
+    only for the adapters that declare a `connection` parameter, is what lets
+    "one contract suite, every adapter" include the real socket without every
+    in-memory-only suite paying for a Postgres connection it never uses.
     """
 
     def build(factory: Callable[..., Any]) -> Any:
+        try:
+            parameters = inspect.signature(factory).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        if "connection" in parameters:
+            return factory(request.getfixturevalue("plane"))
         return factory()
 
     return build

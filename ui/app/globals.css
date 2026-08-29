@@ -1,109 +1,350 @@
-/* The design system is the seven status words and the citation chip.
-   Everything else is restraint. */
-:root {
-  --bg: #0b0e14;
-  --panel: #121723;
-  --panel-2: #171d2b;
-  --line: #232c3d;
-  --ink: #e8edf7;
-  --muted: #93a0b8;
-  --accent: #5b9cff;
-  --cite: #7ee0c0;
+/* CINQFLOW design system — the foundation layer.
+ *
+ * The lexicon is the seven status words; this file is the machinery that makes
+ * the lexicon and the citation chip impossible to render inconsistently.
+ *
+ * ONE RULE FOR EVERY FILE THAT IS NOT THIS ONE:
+ *   no colour literal, no raw spacing px. Both come from a token, or they are
+ *   a review comment. `npm run lint:tokens` fails the build on either.
+ *
+ * Contrast ratios in comments are COMPUTED, not estimated. AA body text needs
+ * 4.5:1; non-text UI boundaries need 3:1.
+ */
 
-  --expected: #8ea2c2;
-  --received: #5b9cff;
-  --processing: #d9a441;
-  --completed: #4fbf8b;
-  --needs-review: #b98bff;
-  --needs-attention: #e2604f;
-  --missing: #e2604f;
+@layer tokens, reset, base, components, utilities;
+
+/* ══════════════════════════════════════════════════════════════════ tokens */
+@layer tokens {
+  :root {
+    /* ---- Neutrals: white ground, near-black ink ---- */
+    --bg:          #FFFFFF;
+    --surface:     #FFFFFF;   /* cards sit on white with a hairline, not a fill */
+    --surface-2:   #F7F8FA;   /* table header, row hover, code fill      1.06:1 */
+    --surface-3:   #EFF1F5;   /* pressed, selected */
+    --line:        #E3E6EB;   /* hairline separators                     1.25:1 */
+    --line-strong: #8A9099;   /* input + control borders    3.22:1 ✓ non-text AA */
+    --ink:         #14171A;   /* primary text                          17.99:1 */
+    --ink-2:       #43494F;   /* secondary text                          9.11:1 */
+    --ink-3:       #5C636B;   /* labels, muted, captions                 6.08:1 */
+    --ink-inverse: #FFFFFF;
+
+    /* ---- The seven status words, re-derived for white ----
+     * The dark theme gave Needs Attention and Missing the SAME hex, so two of
+     * the seven were indistinguishable. They are different facts. Colour
+     * separates them here; §status marks separate them in greyscale too. */
+    --st-expected:        #475569;  /* 7.58:1  slate   — nothing has happened yet */
+    --st-received:        #1D4ED8;  /* 6.70:1  blue    — it exists */
+    --st-processing:      #A45200;  /* 5.55:1  amber   — mid-transition */
+    --st-completed:       #15803D;  /* 5.02:1  green   — done */
+    --st-needs-review:    #6D28D9;  /* 7.10:1  violet  — a person is required */
+    --st-needs-attention: #B91C1C;  /* 6.47:1  red     — an issue needs action */
+    --st-missing:         #9A1F5A;  /* 7.73:1  crimson — ABSENCE, not the same red */
+
+    /* ---- Semantics ---- */
+    --accent:        #1D4ED8;  /* 6.70:1 on white, and white is 6.70:1 on it */
+    --accent-hover:  #1E40AF;
+    --accent-wash:   #EFF4FE;
+    --cite:          #0F766E;  /* 5.47:1  teal — the citation layer has its own hue */
+    --cite-wash:     #EFF9F7;
+    --focus:         #2563EB;  /* 5.17:1 */
+    --danger:        #B91C1C;
+    --danger-wash:   #FEF2F2;
+    --warn-wash:     #FFF8EB;
+
+    /* ---- Spacing: a 4px scale. No other value is permitted. ---- */
+    --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
+    --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
+
+    /* ---- Type scale ---- */
+    --t-xs:   11px;  --t-sm:   12px;  --t-base: 14px;
+    --t-md:   16px;  --t-lg:   20px;  --t-xl:   26px;
+    --lh-tight: 1.25; --lh-snug: 1.4; --lh-base: 1.6;
+
+    /* Prose must not run the full 1180px panel — that is a ~150 character
+       line, roughly twice the comfortable measure. */
+    --measure: 72ch;
+
+    --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px; --radius-pill: 999px;
+
+    /* On white, a border does more work than a shadow. Shadows are reserved
+       for things that genuinely float above the page. */
+    --shadow-drawer: -16px 0 40px rgb(20 23 26 / 10%);
+    --shadow-pop:      0 6px 20px rgb(20 23 26 / 12%);
+
+    --z-drawer: 50; --z-scrim: 40; --z-sticky: 10;
+
+    --dur-fast: 120ms; --dur-base: 180ms;
+    --ease: cubic-bezier(.2, .0, .2, 1);
+
+    --font-sans-stack: var(--font-sans), ui-sans-serif, system-ui, -apple-system,
+                       "Segoe UI", sans-serif;
+    --font-mono-stack: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
 }
 
-* { box-sizing: border-box; }
+/* ═══════════════════════════════════════════════════════════════════ reset */
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; }
+  * { margin: 0; }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--ink);
-  font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans-stack);
+    font-size: var(--t-base);
+    line-height: var(--lh-base);
+    /* cv05/cv08 disambiguate l · 1 · I — which matters when a screen is mostly
+       identifiers. ss01 gives the single-storey g. */
+    font-feature-settings: "cv05" 1, "cv08" 1, "ss01" 1;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  a { color: inherit; text-decoration: none; }
+  img, svg { display: block; max-width: 100%; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+
+  /* Every interactive thing shows focus. There was no focus style at all
+     before this line, which made the app keyboard-unusable in practice. */
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
-a { color: inherit; text-decoration: none; }
+/* ════════════════════════════════════════════════════════════════════ base */
+@layer base {
+  h1 { font-size: var(--t-xl); line-height: var(--lh-tight); letter-spacing: -.015em;
+       margin-bottom: var(--s-1); font-weight: 650; }
+  h2 { font-size: var(--t-md); line-height: var(--lh-snug); letter-spacing: -.005em;
+       margin: var(--s-5) 0 var(--s-3); font-weight: 620; }
+  h3 { font-size: var(--t-base); line-height: var(--lh-snug);
+       margin: var(--s-4) 0 var(--s-2); font-weight: 620; }
 
-.shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+  p { max-width: var(--measure); }
 
-nav.sidebar {
-  border-right: 1px solid var(--line);
-  background: var(--panel);
-  padding: 18px 14px;
+  .lede { color: var(--ink-3); margin-bottom: var(--s-5); max-width: var(--measure); }
+
+  .shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
+  main { padding: var(--s-6) var(--s-6) var(--s-8); max-width: 1180px; min-width: 0; }
+
+  /* Keyboard users get past 15 nav links in one keystroke. */
+  .skip-link {
+    position: absolute; left: var(--s-2); top: calc(var(--s-2) * -8);
+    background: var(--ink); color: var(--ink-inverse);
+    padding: var(--s-2) var(--s-3); border-radius: var(--radius-sm);
+    z-index: calc(var(--z-drawer) + 1); transition: top var(--dur-fast) var(--ease);
+  }
+  .skip-link:focus { top: var(--s-2); }
 }
-nav.sidebar .brand { font-weight: 700; letter-spacing: .5px; margin-bottom: 4px; }
-nav.sidebar .wave { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
-nav.sidebar .group { color: var(--muted); font-size: 11px; text-transform: uppercase;
-  letter-spacing: .8px; margin: 16px 0 6px; }
-nav.sidebar a.dest { display: block; padding: 7px 9px; border-radius: 7px; }
-nav.sidebar a.dest:hover { background: var(--panel-2); }
-nav.sidebar a.dest.prominent { box-shadow: inset 2px 0 0 var(--accent); }
-nav.sidebar a.dest small { display: block; color: var(--muted); font-size: 11px; }
 
-main { padding: 26px 30px 60px; max-width: 1180px; }
-h1 { font-size: 21px; margin: 0 0 4px; }
-h2 { font-size: 15px; margin: 26px 0 10px; }
-.lede { color: var(--muted); margin: 0 0 22px; }
+/* ══════════════════════════════════════════════════════════════ components */
+@layer components {
+  /* ---- sidebar ---- */
+  nav.sidebar {
+    border-right: 1px solid var(--line);
+    background: var(--surface-2);
+    padding: var(--s-5) var(--s-3);
+    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+  }
+  nav.sidebar .brand { font-weight: 700; letter-spacing: .04em; font-size: var(--t-md);
+                       margin-bottom: var(--s-1); }
+  nav.sidebar .wave { color: var(--ink-3); font-size: var(--t-sm); line-height: var(--lh-snug);
+                      margin-bottom: var(--s-5); }
+  nav.sidebar .group { color: var(--ink-3); font-size: var(--t-xs); text-transform: uppercase;
+                       letter-spacing: .07em; font-weight: 620;
+                       margin: var(--s-4) 0 var(--s-1); padding: 0 var(--s-2); }
+  nav.sidebar a.dest {
+    display: block; padding: var(--s-2) var(--s-2); border-radius: var(--radius-sm);
+    border-left: 2px solid transparent; transition: background var(--dur-fast) var(--ease);
+  }
+  nav.sidebar a.dest:hover { background: var(--surface-3); }
+  nav.sidebar a.dest[aria-current="page"] { background: var(--accent-wash); color: var(--accent);
+                                            font-weight: 600; }
+  /* Prominence lifts a destination for this persona. It is a rank cue, never a
+     gate — ADR-0020's merge rule: persona shapes ranking, not vocabulary. */
+  nav.sidebar a.dest.prominent { border-left-color: var(--accent); }
+  nav.sidebar a.dest small { display: block; color: var(--ink-3); font-size: var(--t-xs);
+                             line-height: var(--lh-snug); margin-top: 1px; }
+  nav.sidebar a.dest[aria-current="page"] small { color: var(--accent); opacity: .8; }
 
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  padding: 16px 18px; margin-bottom: 14px; }
-.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  /* ---- surfaces ---- */
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius-md); padding: var(--s-4) var(--s-4);
+    margin-bottom: var(--s-3);
+  }
+  .card.flush { padding: 0; overflow: hidden; }
+  .grid { display: grid; gap: var(--s-3);
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 
-table { width: 100%; border-collapse: collapse; }
-th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
-  padding: 8px 10px; border-bottom: 1px solid var(--line); }
-td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-tr.row:hover { background: var(--panel-2); }
-.scroll { overflow-x: auto; }
+  /* ---- tables ---- */
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  caption { text-align: left; color: var(--ink-3); font-size: var(--t-sm);
+            padding: var(--s-2) var(--s-3); }
+  th {
+    text-align: left; color: var(--ink-3); font-weight: 620; font-size: var(--t-xs);
+    text-transform: uppercase; letter-spacing: .05em; white-space: nowrap;
+    padding: var(--s-2) var(--s-3); background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: var(--z-sticky);
+  }
+  td { padding: var(--s-3); border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tr.row:hover { background: var(--surface-2); }
+  /* Columns of figures must align on the decimal, or they cannot be scanned. */
+  td.num, .mono, .kv dd.num { font-variant-numeric: tabular-nums; }
 
-.status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600;
-  font-size: 12px; }
-.status .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.status[data-word="Expected"] { color: var(--expected); }
-.status[data-word="Received"] { color: var(--received); }
-.status[data-word="Processing"] { color: var(--processing); }
-.status[data-word="Completed"] { color: var(--completed); }
-.status[data-word="Needs Review"] { color: var(--needs-review); }
-.status[data-word="Needs Attention"] { color: var(--needs-attention); }
-.status[data-word="Missing"] { color: var(--missing); }
+  /* ---- the seven status words ---- */
+  .status {
+    display: inline-flex; align-items: center; gap: var(--s-2);
+    font-weight: 620; font-size: var(--t-sm); white-space: nowrap;
+  }
+  .status .mark { flex: none; width: 12px; height: 12px; }
+  .status[data-word="Expected"]        { color: var(--st-expected); }
+  .status[data-word="Received"]        { color: var(--st-received); }
+  .status[data-word="Processing"]      { color: var(--st-processing); }
+  .status[data-word="Completed"]       { color: var(--st-completed); }
+  .status[data-word="Needs Review"]    { color: var(--st-needs-review); }
+  .status[data-word="Needs Attention"] { color: var(--st-needs-attention); }
+  .status[data-word="Missing"]         { color: var(--st-missing); }
 
-.cited { color: inherit; border-bottom: 1px dotted var(--cite); }
-.cited:hover { color: var(--cite); }
-.chip { display: inline-block; font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px; color: var(--cite); border: 1px solid var(--line);
-  border-radius: 999px; padding: 1px 8px; margin-right: 5px; }
-.uncited { color: var(--needs-attention); }
+  /* ---- the citation layer ---- */
+  .cited {
+    color: inherit; border-bottom: 1px dashed var(--cite);
+    text-underline-offset: 2px; transition: color var(--dur-fast) var(--ease);
+  }
+  .cited:hover { color: var(--cite); background: var(--cite-wash); }
+  .chip {
+    display: inline-flex; align-items: center; font-family: var(--font-mono-stack);
+    font-size: var(--t-xs); color: var(--cite); background: var(--cite-wash);
+    border: 1px solid var(--line); border-radius: var(--radius-pill);
+    padding: 1px var(--s-2); margin-right: var(--s-1); white-space: nowrap;
+  }
+  .chip:hover { border-color: var(--cite); }
+  /* An uncited number is a defect class. It is marked with a GLYPH as well as
+     colour — colour alone is WCAG 1.4.1, and this is exactly the signal a
+     reviewer must not miss. */
+  .uncited { color: var(--danger); text-decoration: underline wavy var(--danger);
+             text-underline-offset: 3px; }
+  .uncited::before { content: "⚠ "; }
 
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(620px, 92vw);
-  background: var(--panel); border-left: 1px solid var(--line);
-  padding: 20px 22px; overflow-y: auto; box-shadow: -22px 0 46px rgba(0,0,0,.42); }
-.drawer .close { float: right; color: var(--muted); }
-.tabs { display: flex; gap: 6px; margin: 12px 0 16px; flex-wrap: wrap; }
-.tabs a { padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px;
-  font-size: 12px; color: var(--muted); }
-.tabs a[aria-current="page"] { color: var(--ink); border-color: var(--accent); }
+  /* ---- refusal ---- */
+  .refusal {
+    border: 1px solid var(--line); border-left: 3px solid var(--danger);
+    background: var(--danger-wash); padding: var(--s-3) var(--s-4);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0; max-width: var(--measure);
+  }
+  .refusal strong { display: block; margin-bottom: var(--s-1); color: var(--danger); }
 
-.refusal { border-left: 3px solid var(--needs-attention); background: var(--panel-2);
-  padding: 12px 14px; border-radius: 0 8px 8px 0; }
-.note { color: var(--muted); font-size: 12px; }
-.mono { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
-.kv { display: grid; grid-template-columns: 190px 1fr; gap: 5px 14px; }
-.kv dt { color: var(--muted); }
-.kv dd { margin: 0; }
-.big { font-size: 26px; font-weight: 700; }
+  /* ---- panel tabs (the one drawer's five panels) ---- */
+  .tabs { display: flex; gap: var(--s-1); margin: var(--s-3) 0 var(--s-4); flex-wrap: wrap; }
+  .tabs a, .tabs button {
+    padding: var(--s-1) var(--s-3); border: 1px solid var(--line);
+    border-radius: var(--radius-pill); font-size: var(--t-sm); color: var(--ink-3);
+    background: var(--surface); cursor: pointer; text-transform: capitalize;
+    transition: all var(--dur-fast) var(--ease);
+  }
+  .tabs a:hover, .tabs button:hover { background: var(--surface-2); color: var(--ink); }
+  .tabs a[aria-current="page"], .tabs [aria-selected="true"] {
+    color: var(--ink-inverse); background: var(--ink); border-color: var(--ink);
+  }
 
-input, textarea, button, select {
-  font: inherit; color: var(--ink); background: var(--panel-2);
-  border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
+  /* ---- drawer ---- */
+  .scrim {
+    position: fixed; inset: 0; background: rgb(20 23 26 / 28%);
+    z-index: var(--z-scrim); animation: fade var(--dur-base) var(--ease);
+  }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 94vw);
+    background: var(--surface); border-left: 1px solid var(--line);
+    padding: var(--s-5) var(--s-5) var(--s-7); overflow-y: auto;
+    box-shadow: var(--shadow-drawer); z-index: var(--z-drawer);
+    animation: slide-in var(--dur-base) var(--ease);
+  }
+  .drawer .close {
+    float: right; color: var(--ink-3); background: none; border: 0;
+    padding: var(--s-1) var(--s-2); border-radius: var(--radius-sm); cursor: pointer;
+  }
+  .drawer .close:hover { background: var(--surface-2); color: var(--ink); }
+  @keyframes slide-in { from { transform: translateX(16px); opacity: 0 } }
+  @keyframes fade     { from { opacity: 0 } }
+
+  /* ---- forms ---- */
+  input, textarea, select {
+    background: var(--surface); border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm); padding: var(--s-2) var(--s-3);
+  }
+  input::placeholder, textarea::placeholder { color: var(--ink-3); }
+  button {
+    background: var(--surface); border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm); padding: var(--s-2) var(--s-4);
+    cursor: pointer; font-weight: 600;
+    transition: background var(--dur-fast) var(--ease);
+  }
+  button:hover { background: var(--surface-2); }
+  button.primary {
+    background: var(--accent); border-color: var(--accent); color: var(--ink-inverse);
+  }
+  button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  form.ask { display: flex; gap: var(--s-2); max-width: var(--measure); }
+  form.ask input { flex: 1; }
+
+  /* ---- metric tile ---- */
+  .tile .label { color: var(--ink-3); font-size: var(--t-sm); }
+  .tile .big { font-size: var(--t-xl); font-weight: 680; line-height: var(--lh-tight);
+               font-variant-numeric: tabular-nums; display: block; margin-top: var(--s-1); }
+
+  /* ---- empty state ---- */
+  .empty { color: var(--ink-3); text-align: left; padding: var(--s-5) var(--s-4);
+           max-width: var(--measure); }
+  .empty .empty-title { color: var(--ink-2); font-weight: 620; display: block;
+                        margin-bottom: var(--s-1); }
+
+  /* The root layout itself failed — app/global-error.tsx renders its own
+     <html>, so it gets a class here rather than inline geometry. */
+  .crash { max-width: 640px; margin: var(--s-8) auto; padding: 0 var(--s-5); }
+
+  /* A diagnostic message is not decoration: it must wrap, not overflow, and it
+     must keep the line breaks it was written with. */
+  .wrap { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+
+  /* ---- skeleton ---- */
+  .skeleton {
+    background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%,
+                                var(--surface-2) 63%);
+    background-size: 400% 100%; border-radius: var(--radius-sm);
+    animation: shimmer 1.4s ease-in-out infinite; height: 1em;
+  }
+  @keyframes shimmer { from { background-position: 100% 50% } to { background-position: 0 50% } }
 }
-button { cursor: pointer; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #08101f;
-  font-weight: 600; }
-form.ask { display: flex; gap: 8px; }
-form.ask input { flex: 1; }
+
+/* ═══════════════════════════════════════════════════════════════ utilities */
+@layer utilities {
+  .note { color: var(--ink-3); font-size: var(--t-sm); max-width: var(--measure); }
+  .mono { font-family: var(--font-mono-stack); font-size: var(--t-sm); }
+  .big  { font-size: var(--t-xl); font-weight: 680; font-variant-numeric: tabular-nums; }
+  .kv   { display: grid; grid-template-columns: minmax(140px, 190px) 1fr; gap: var(--s-1) var(--s-4); }
+  .kv dt { color: var(--ink-3); }
+  .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .stack   { display: flex; flex-direction: column; gap: var(--s-3); }
+  .inline  { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+}

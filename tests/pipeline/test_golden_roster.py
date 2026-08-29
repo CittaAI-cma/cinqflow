@@ -22,73 +22,15 @@ from cinqflow.adapters.local.pg_compute import PostgresCompute
 from cinqflow.adapters.local.pg_control import Connection
 from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
 from cinqflow.adapters.mock.storage import MemFsStorage
-from cinqflow.core.compiler import compile_feed
 from cinqflow.core.landing import LandingOutcome
 from cinqflow.core.model.vocabulary import BatchState, ErrorCategory, LandingFolder, Layer
-from cinqflow.core.registry.contract import (
-    ContractColumn,
-    SchemaContract,
-    Severity,
-    not_null,
-)
-from cinqflow.core.registry.feed import FeedRecord
-from cinqflow.core.schema_spec import TypeName
+from cinqflow.core.registry.golden_fidelis import CONTRACT, DQ_002, FEED, PLAN, landing_key
+from cinqflow.core.registry.golden_fidelis import roster_csv as _roster
 from cinqflow.workers.pipeline import PipelineRunner
 
 pytestmark = [pytest.mark.pipeline, pytest.mark.postgres]
 
-FEED = FeedRecord(
-    feed_id="fidelis-downstate-roster",
-    domain="enrollments",
-    source_system="fidelis",
-    file_format="csv",
-    landing_path="enrollments/fidelis_downstate/roster",
-    file_pattern=r"_CINQDOWNSTATE_Member_Roster_\d{6}\.csv",
-    schedule_cron="0 3 1 * *",
-    sample_filename="_CINQDOWNSTATE_Member_Roster_202608.csv",
-    min_size_bytes=100,
-    max_size_bytes=30_000_000,
-)
-
-CONTRACT = SchemaContract(
-    feed_id="fidelis-downstate-roster",
-    version=3,
-    columns=(
-        ContractColumn(
-            "source_member_id", TypeName.STRING, nullable=False, source_name="MemberID", is_phi=True
-        ),
-        ContractColumn("first_name", TypeName.STRING, source_name="First_Name", is_phi=True),
-        ContractColumn("last_name", TypeName.STRING, source_name="Last_Name", is_phi=True),
-        ContractColumn("date_of_birth", TypeName.DATE, source_name="DOB", is_phi=True),
-        ContractColumn("line_of_business", TypeName.STRING, source_name="LOB"),
-    ),
-    key_columns=("source_member_id",),
-)
-
-DQ_002 = not_null(
-    "DQ-002",
-    "first_name",
-    name="Member First Name Not Null",
-    severity=Severity.HIGH,
-    description="Required for member outreach, care coordination and CMS submissions",
-    glossary_id="BG-002",
-)
-
-PLAN = compile_feed(feed=FEED, feed_version=1, contract=CONTRACT, rules=(DQ_002,))
-KEY = (
-    "enrollments/fidelis_downstate/roster/incoming/2026-08-01/"
-    "_CINQDOWNSTATE_Member_Roster_202608.csv"
-)
-
-
-def _roster(rows: int = 200, null_names: int = 5, bad_dates: int = 0) -> bytes:
-    """A synthetic roster from the REAL layout. Zero member-derived values."""
-    lines = ["MemberID,First_Name,Last_Name,DOB,LOB"]
-    for index in range(1, rows + 1):
-        first = "" if index <= null_names else f"FIRST{index:05d}"
-        dob = "17530101" if null_names < index <= null_names + bad_dates else "19900101"
-        lines.append(f"MBR{index:06d},{first},LAST{index:05d},{dob},MEDICAID")
-    return ("\n".join(lines) + "\n").encode()
+KEY = landing_key("2026-08-01")
 
 
 @pytest.fixture
@@ -314,6 +256,12 @@ def test_a_missing_required_column_blocks_the_batch_at_g2(runner) -> None:
     assert outcome.state is BatchState.FAILED
     assert outcome.drift_blocked
     assert "MemberID" in outcome.drift_blocked[0]
+
+    _, _, control = runner
+    (drift,) = control.get_schema_drift(outcome.batch_id)
+    assert drift.classification == "removed"
+    assert drift.column_name == "MemberID"
+    assert drift.blocked_batch is True
 
 
 def test_a_failed_batch_records_why_it_failed(runner) -> None:

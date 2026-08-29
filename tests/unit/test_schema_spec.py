@@ -115,9 +115,13 @@ def test_bronze_is_append_only_in_the_spec_not_only_in_a_grant() -> None:
 
 
 @pytest.mark.unit
-def test_the_wave_0_data_schemas_are_the_plate_s_seven() -> None:
+def test_the_provisioned_schemas_are_the_plate_s_seven_plus_the_platform_s() -> None:
     """postgres_schemas: [landing_ctl, control, bronze, silver_raw, silver_ods,
-    quarantine, recon] — FIG 08"""
+    quarantine, recon] — FIG 08. Plus the three plane objects
+    `core/registry/wave0.py` already declared by name — registry.governed_object,
+    governance.audit_ledger, audit.agent_action — and Wave 1's three additive
+    schemas: `queue` (ADR-0014's Postgres queue + scheduler state), `proposals`
+    (the universal HITL object), `knowledge` (the K2 store, FIG 12)."""
     assert [s.name for s in all_schemas()] == [
         "landing_ctl",
         "control",
@@ -126,6 +130,12 @@ def test_the_wave_0_data_schemas_are_the_plate_s_seven() -> None:
         "silver_ods",
         "quarantine",
         "recon",
+        "registry",
+        "governance",
+        "audit",
+        "queue",
+        "proposals",
+        "knowledge",
     ]
 
 

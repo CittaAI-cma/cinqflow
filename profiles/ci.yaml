@@ -12,27 +12,30 @@ socket: postgres_plane
 mode: full
 
 pins:
-  compute_job:    { adapter: pg-compute }
-  orchestration:  { adapter: pg-scheduler }
-  storage:        { adapter: fsspec, root: "file://./landing" }
+  # Same honesty rule as local.yaml: a name with nothing registered behind it
+  # now fails `conformance --profile profiles/ci.yaml` instead of certifying
+  # GREEN against an unrelated mock.
+  compute_job:    { adapter: none }
+  orchestration:  { adapter: none }
+  storage:        { adapter: none }
   control_tables: { adapter: pg-control, schema: control }
-  catalog:        { adapter: information-schema }
-  sql_query:      { adapter: pg-readonly }
+  catalog:        { adapter: none }
+  sql_query:      { adapter: none }
   identity:       { adapter: mock, scenarios: goldensets/reference/verato-scenarios.yaml }
   legacy_readonly: { adapter: none }
   # A reference, not a value — even in CI, and even for a throwaway container.
   # The one profile that embeds a DSN is the one that teaches everyone else to.
   metadata_db:    { dsn: "secret://pg-dsn" }
-  queue:          { adapter: pg-skip-locked }
+  queue:          { adapter: none }
   cache:          { adapter: none }
   authn:          { adapter: static, users: profiles/dev-users.yaml }
-  secrets:        { adapter: env }
-  llm:            { adapter: scripted }       # overridden ONLY by the agent-evals job
-  vector:         { adapter: pgvector, dimensions: 3072 }
-  phi_scrub:      { adapter: presidio, model: en_core_web_lg }
-  notification:   { adapter: console }
-  observability:  { adapter: noop }
-  http_edge:      { adapter: testclient }
+  secrets:        { adapter: dotenv, path: ".env" }
+  llm:            { adapter: mock }           # scripted — overridden ONLY by the agent-evals job
+  vector:         { adapter: none }
+  phi_scrub:      { adapter: none }
+  notification:   { adapter: none }
+  observability:  { adapter: none }
+  http_edge:      { adapter: none }
   agent_runtime:  { adapter: inproc }
 
 landing:

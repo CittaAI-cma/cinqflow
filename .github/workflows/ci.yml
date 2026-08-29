@@ -115,6 +115,13 @@ jobs:
       - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
       - run: npm ci
         working-directory: ui
+      - name: the design system is tokens, not literals
+        # A colour literal or a raw spacing value outside globals.css is a
+        # value nobody can restyle. The rule existed as a comment before this
+        # step existed; the previous stylesheet had twelve distinct spacing
+        # values in 130 lines and nobody had done anything wrong.
+        run: npm run lint:tokens
+        working-directory: ui
       - name: the OpenAPI document is the UI's contract
         run: npx tsc --noEmit
         working-directory: ui
@@ -122,7 +129,7 @@ jobs:
         working-directory: ui
       - run: npx playwright install --with-deps chromium
         working-directory: ui
-      - name: sign-in · denial · citations · the lexicon gate
+      - name: sign-in · denial · citations · lexicon · a11y · the design system
         run: npx playwright test
         working-directory: ui
         env:

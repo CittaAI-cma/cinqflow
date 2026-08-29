@@ -36,7 +36,7 @@ python conformance/kit.py          # 20 pins + 3 platform laws
 cinqflow ask "why did batch 8842 lose rows?"
 
 cd ui && npm install && npm run dev # http://localhost:3000/signin
-cd ui && npm test                   # 14 Playwright assertions
+cd ui && npm test                   # 24 Playwright assertions
 ```
 
 Nothing above needs a database, a container or a credential — that is rung 0.
@@ -60,7 +60,7 @@ src/cinqflow/
     landing/ recon/ parsers/ security/ navigation.py
     prompts/       the fixed assembly order, owned by one function
     intelligence/  the six call stages, budgets, routing, schema subset
-    tools/         14 certified tools, declared as data
+    tools/         16 certified tools, declared as data
     retrieval/     lexical index + a glossary generated from the vocabulary
     agents/        graphs as data — no runtime imported, ever
   ports/         20 pins: a Protocol each, and ONE contract suite each

@@ -15,12 +15,21 @@ export const STATUS_WORDS = [
 
 export type StatusWord = (typeof STATUS_WORDS)[number];
 
+/** One card on the persona home. The RANK is the array order — decided in
+ *  core/persona.py, never in the browser. */
+export interface HomeSlot {
+  key: string;
+  answers: string;
+}
+
 export interface Principal {
   subject: string;
   display_name: string;
   roles: string[];
   has_access: boolean;
   permitted_actions: string[];
+  /** The ordered persona home. Empty for a principal with no access. */
+  home_slots: HomeSlot[];
 }
 
 export interface Destination {

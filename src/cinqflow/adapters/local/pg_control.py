@@ -96,3 +96,24 @@ def transaction(profile: Profile) -> Iterator[Connection]:
             yield Connection(raw)
         finally:
             raw.rollback()
+
+
+@contextmanager
+def commit(profile: Profile) -> Iterator[Connection]:
+    """A connection whose work COMMITS on success — the real counterpart to
+    `transaction()`, which exists only so tests can run with no cleanup code.
+
+    This is what a real pipeline run uses: everything inside the block is one
+    transaction, committed together on a clean exit or rolled back on any
+    exception — never left half-written for a crash to strand. `transaction()`
+    stays untouched; it is the test fixture, and confusing the two is exactly
+    how a suite ends up "passing" against a database nothing ever committed to.
+    """
+    with psycopg.connect(resolve_dsn(profile), autocommit=False) as raw:
+        try:
+            yield Connection(raw)
+        except BaseException:
+            raw.rollback()
+            raise
+        else:
+            raw.commit()

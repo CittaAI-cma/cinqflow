@@ -43,6 +43,7 @@ from cinqflow.api.schemas import (
     DestinationOut,
     FeedIn,
     FeedOut,
+    HomeSlotOut,
     NavigationOut,
     PrincipalOut,
     RowsOut,
@@ -55,13 +56,14 @@ from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.intelligence import Budget
 from cinqflow.core.model.governed import GovernedObject, ObjectType
 from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
+from cinqflow.core.persona import home_for
 from cinqflow.core.registry import feed as feed_registry
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.wave0 import wave_0_register
 from cinqflow.core.security import Action, may
-from cinqflow.core.tools import CATALOGUE
+from cinqflow.core.tools import CATALOGUE, ToolError
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
-from cinqflow.intelligence.tools import ToolContext, ToolResult, invoke
+from cinqflow.intelligence.tools import ToolContext, ToolResult, all_dq_rule_entries, invoke
 from cinqflow.ports.authn import AuthnPort, Principal
 from cinqflow.ports.control_tables import BatchControl, ControlTablesPort
 from cinqflow.ports.metadata_db import MetadataDbPort, ObjectNotFoundError
@@ -201,8 +203,12 @@ def create_app(
         feed_id: str,
         metadata: Store,
         _: Annotated[Principal, Depends(require(Action.VIEW))],
+        version: int | None = None,
     ) -> FeedOut:
-        return _feed_out(_load(metadata, feed_id))
+        """A `feed:<id>@v<n>` citation pins a version — the page it opens must
+        show THAT version, or the citation is a quiet lie about what a run
+        actually used."""
+        return _feed_out(_load(metadata, feed_id, version))
 
     @app.post(
         f"{API_PREFIX}/feeds",
@@ -392,6 +398,41 @@ def create_app(
         )
         return _rows_out(invoke(context, _PANEL_TOOLS[panel], {"batch_id": batch_id}))
 
+    @app.get(f"{API_PREFIX}/tools/{{tool_name}}", response_model=RowsOut, tags=["ai"])
+    def tool_rows(
+        tool_name: str,
+        request: Request,
+        control: Control,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> RowsOut:
+        """Any certified tool, called with its query params as arguments.
+
+        The same mechanism `batch_panel` uses for the drawer, generalised: a
+        citation whose destination is not a batch (a contract, a plan, a
+        rule, a term) still opens on rows a certified tool produced, never a
+        private query. Every Wave-0 tool is R0/read-only, so there is no
+        write surface here to guard beyond `require(Action.VIEW)` itself.
+        """
+        if tool_name not in CATALOGUE:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no such tool: {tool_name!r}")
+        context = ToolContext(
+            principal=principal,
+            control=control,
+            metadata=metadata,
+            run_id=f"ui-{tool_name}",
+            agent="ui",
+        )
+        if tool_name == "lookup_reference":
+            # A rule_id or term is meant to resolve with no feed_id in hand
+            # (CF-V0-E16-09) — the base index holds only the generic
+            # glossary, so a specific feed's DQ rules are seeded in per call.
+            context.reference.seed(all_dq_rule_entries(metadata))
+        try:
+            return _rows_out(invoke(context, tool_name, dict(request.query_params)))
+        except ToolError as bad:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(bad)) from None
+
     # ── the intelligence plane ───────────────────────────────────────────────
 
     @app.get(f"{API_PREFIX}/tools", response_model=list[ToolOut], tags=["ai"])
@@ -527,9 +568,9 @@ def create_app(
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-def _load(metadata: MetadataDbPort, feed_id: str) -> GovernedObject:
+def _load(metadata: MetadataDbPort, feed_id: str, version: int | None = None) -> GovernedObject:
     try:
-        return metadata.get(ObjectType.FEED, feed_id)
+        return metadata.get(ObjectType.FEED, feed_id, version)
     except ObjectNotFoundError:
         # The same sentence a scope miss produces. Two sentences would be an
         # oracle for which feed ids are real.
@@ -568,12 +609,19 @@ def _feed_out(obj: GovernedObject) -> FeedOut:
 
 
 def _principal_out(principal: Principal) -> PrincipalOut:
+    permitted = frozenset(a for a in Action if may(principal, a))
     return PrincipalOut(
         subject=principal.subject,
         display_name=principal.display_name,
         roles=sorted(role.value for role in principal.roles),
         has_access=principal.has_access,
-        permitted_actions=sorted(a.value for a in Action if may(principal, a)),
+        permitted_actions=sorted(a.value for a in permitted),
+        # The persona home, ranked in core. ADR-0020's merge rule is a server
+        # fact here rather than a branch in a page component.
+        home_slots=[
+            HomeSlotOut(key=slot.key.value, answers=slot.answers)
+            for slot in home_for(frozenset(principal.roles), permitted)
+        ],
     )
 
 

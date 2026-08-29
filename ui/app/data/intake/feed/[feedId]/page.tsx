@@ -12,9 +12,17 @@ import type { Feed } from "@/lib/types";
  * the agent's citation, the breadcrumb and this deep link are the same string,
  * and nobody wrote plumbing to connect them.
  */
-export default async function FeedPage({ params }: { params: Promise<{ feedId: string }> }) {
+export default async function FeedPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ feedId: string }>;
+  searchParams: Promise<{ version?: string }>;
+}) {
   const { feedId } = await params;
-  const feed = await attempt<Feed>(`/api/feeds/${encodeURIComponent(feedId)}`);
+  const { version } = await searchParams;
+  const query = version ? `?version=${encodeURIComponent(version)}` : "";
+  const feed = await attempt<Feed>(`/api/feeds/${encodeURIComponent(feedId)}${query}`);
   if (isRefused(feed)) return <RefusalNotice refusal={feed} />;
 
   return (

@@ -29,10 +29,42 @@ not exist is also refused at the server.
 
 ## Running it
 
+**The API has to be up first.** Every screen is a server component that fetches
+from the BFF, so with no API there is nothing to render and the root layout
+crashes — you get "CINQFLOW could not load", which now names the URL it tried
+and the command below.
+
 ```bash
+# 1 · the API — rung 0, nothing running but Python
+cd ..                       # cinqflow/
+PYTHONPATH=src .venv/bin/python -m cinqflow.api.dev --port 8000
+
+# 2 · the workspace, in another shell
+cd ui
 npm install
-CINQFLOW_API=http://127.0.0.1:8000 npm run dev
+npm run dev                 # http://127.0.0.1:3000/signin
 ```
 
+`CINQFLOW_API` defaults to `http://127.0.0.1:8000`; set it if the API is
+somewhere else. `npm test` needs neither shell — Playwright starts both itself.
+
 The API's OpenAPI document is the contract. `lib/api.ts` is the only module
-that talks to it.
+that talks to it, and the only place that distinguishes a **refusal** (a
+decision the server made and recorded) from **unreachable** (a transport
+failure that reached nobody).
+
+## The design system
+
+Tokens, primitives and the rules that keep them enforced live in
+[CONTRIBUTING.md](CONTRIBUTING.md); the analysis and phased plan they came from
+is in [`implementation_docs/DESIGN_SYSTEM.md`](../../implementation_docs/DESIGN_SYSTEM.md).
+
+Three things worth knowing before editing anything here:
+
+- **`app/design` is the living reference** — every component in every state,
+  reading no platform data. Check new states there before shipping them.
+- **`npm run lint:tokens` fails on a colour literal or a raw spacing value**
+  outside `app/globals.css`.
+- **The persona home is ranked in `core/persona.py`, not in the UI**
+  ([ADR-0021](../docs/adr/ADR-0021-persona-home-slots.md)). The UI knows how to
+  draw a slot; it does not know which role it is drawing for.

@@ -1,27 +1,25 @@
 import { Cited } from "@/components/Cited";
 import { RefusalNotice } from "@/components/Refusal";
 import { Status } from "@/components/Status";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { attempt, isRefused } from "@/lib/api";
-import type { Batch, Feed } from "@/lib/types";
+import { batchesForFeeds, byHarm } from "@/lib/queries";
+import type { Feed } from "@/lib/types";
 
 /**
  * Control Operations — every run, and the one drawer.
  *
  * Depth is a drawer, never an IA branch: a row opens
  * /operations/control/batch/<id>?panel=<tab>, which IS the row's citation_id.
- * There is exactly one depth level in Wave 0.
+ * Clicking it overlays the drawer (app/@drawer intercepts) and keeps this list
+ * behind it; pasting the same URL cold renders the full page. One depth level,
+ * one address.
  */
 export default async function ControlOperations() {
   const feeds = await attempt<Feed[]>("/api/feeds");
   if (isRefused(feeds)) return <RefusalNotice refusal={feeds} />;
 
-  const batches: Batch[] = [];
-  for (const feed of feeds) {
-    const found = await attempt<Batch[]>(
-      `/api/batches?feed_id=${encodeURIComponent(feed.feed_id)}&limit=50`,
-    );
-    if (!isRefused(found)) batches.push(...found);
-  }
+  const batches = (await batchesForFeeds(feeds, 50)).sort(byHarm);
 
   return (
     <>
@@ -31,17 +29,18 @@ export default async function ControlOperations() {
       </p>
 
       {batches.length === 0 ? (
-        <div className="card note">No runs recorded yet.</div>
+        <EmptyState kind="recorded" what="runs" />
       ) : (
-        <div className="card scroll">
+        <div className="card flush scroll">
           <table>
+            <caption className="sr-only">Every run, ranked by downstream harm</caption>
             <thead>
               <tr>
-                <th>Batch</th>
-                <th>Feed</th>
-                <th>Business date</th>
-                <th>Started</th>
-                <th>Status</th>
+                <th scope="col">Batch</th>
+                <th scope="col">Feed</th>
+                <th scope="col">Business date</th>
+                <th scope="col">Started</th>
+                <th scope="col">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -51,8 +50,10 @@ export default async function ControlOperations() {
                     <Cited value={batch.batch_id} citationId={batch.citation_id} />
                   </td>
                   <td>{batch.feed_id}</td>
-                  <td>{batch.business_date}</td>
-                  <td className="mono">{batch.started_ts?.slice(0, 19).replace("T", " ")}</td>
+                  <td className="num mono">{batch.business_date}</td>
+                  <td className="num mono">
+                    {batch.started_ts?.slice(0, 19).replace("T", " ") ?? "—"}
+                  </td>
                   <td>
                     <Status word={batch.status} />
                   </td>

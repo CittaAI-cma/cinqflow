@@ -46,6 +46,6 @@ $PY -m cinqflow.installer.cli ask "what is a member's date of birth?"
 
 say "9 · The workspace, in a browser"
 echo "   cd ui && npm run dev     # then sign in at http://localhost:3000/signin"
-echo "   cd ui && npm test        # 14 Playwright assertions of the same script"
+echo "   cd ui && npm test        # 24 Playwright assertions of the same script"
 
 printf '\n\033[1;32mWave 0 · green\033[0m\n'

@@ -8,6 +8,7 @@ the code that change what the product is, not merely how it is built.
 | ADR | Decision |
 |---|---|
 | [ADR-0020](ADR-0020-merged-persona-ui-and-the-citation-address-space.md) | One merged persona-shaped UI; `citation_id` is the platform's address space |
+| [ADR-0021](ADR-0021-persona-home-slots.md) | The persona home is a **slot manifest in `core/persona.py`**, ranked per role and served on `/api/me` — not a branch in a component. Wave 0 has **three** roles. |
 
 An ADR here is not a lesser ADR. It follows RB-07 the same way: if it changes
 the architecture, `atlas.html` is edited and `tools/build_knowledge.py` is

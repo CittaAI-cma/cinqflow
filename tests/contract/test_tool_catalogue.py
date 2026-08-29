@@ -6,9 +6,9 @@
     — CF-V0-E16-09, guardrail and measurable
 
 The canary test below is the one that matters. It seeds a plane whose member
-data contains a marker string, invokes ALL FOURTEEN tools with every plausible
+data contains a marker string, invokes ALL SIXTEEN tools with every plausible
 argument, and asserts the marker never appears anywhere in any result. That is
-a test that makes the attempt; a review of fourteen implementations is not.
+a test that makes the attempt; a review of sixteen implementations is not.
 """
 
 from __future__ import annotations
@@ -43,7 +43,15 @@ from cinqflow.intelligence.tools import (
     invoke,
 )
 from cinqflow.ports.authn import Principal, Role, Scopes
-from tests.contract.seeded_plane import BATCH_ID, CANARY, FEED_ID, NOW, build_plane
+from tests.contract.seeded_plane import (
+    BATCH_ID,
+    CANARY,
+    ERROR_ID_HASH,
+    FEED_ID,
+    FINGERPRINT,
+    NOW,
+    build_plane,
+)
 
 pytestmark = [pytest.mark.contract, pytest.mark.lane1]
 
@@ -90,6 +98,10 @@ def _every_call() -> list[tuple[str, dict[str, Any]]]:
                     arguments["window_days"] = 400
                 case "limit":
                     arguments["limit"] = 20
+                case "error_id_hash":
+                    arguments["error_id_hash"] = ERROR_ID_HASH
+                case "fingerprint":
+                    arguments["fingerprint"] = FINGERPRINT
         calls.append((name, arguments))
         # Also the unfiltered variant, where a filter is optional.
         if spec.name in {"list_feeds", "list_errors"}:
@@ -124,6 +136,40 @@ def test_the_error_log_tool_returns_the_rule_not_the_record_key(
     assert "record_key" not in row
 
 
+def test_an_error_resolves_by_hash_alone_no_batch_id_required(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    """The `error:<hash>` citation's own lookup — GAP of the Wave-0 audit:
+    `list_errors` is batch-scoped, but a citation carries only the hash."""
+    result = invoke(_context(seeded), "get_error_by_hash", {"error_id_hash": ERROR_ID_HASH})
+    (row,) = result.rows
+    assert row["error_id_hash"] == ERROR_ID_HASH
+    assert row["batch_id"] == BATCH_ID
+    assert "record_key" not in row
+
+
+def test_a_hash_with_no_matching_error_is_absent_not_an_error(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    result = invoke(_context(seeded), "get_error_by_hash", {"error_id_hash": "no-such-hash"})
+    assert result.out_of_scope is True
+
+
+def test_a_file_resolves_by_fingerprint_alone_no_feed_id_required(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    """The `file:<hash>` citation's own lookup — the mirror of the error fix,
+    for the port verb (`find_input_by_fingerprint`) that already existed."""
+    result = invoke(_context(seeded), "get_file_by_fingerprint", {"fingerprint": FINGERPRINT})
+    (row,) = result.rows
+    assert row["fingerprint"] == FINGERPRINT
+    assert row["feed_id"] == FEED_ID
+    # `key` — the storage path, which carries the canary in this fixture — is
+    # deliberately not projected; only `filename` is.
+    assert "key" not in row
+    assert CANARY not in json.dumps(row, default=str)
+
+
 def test_no_spec_declares_a_data_layer_read() -> None:
     for spec in CATALOGUE.values():
         assert not spec.reads & FORBIDDEN_READS, spec.name
@@ -144,8 +190,8 @@ def test_a_tool_declaring_a_data_layer_read_cannot_be_constructed() -> None:
 # ── the catalogue, as a surface ──────────────────────────────────────────────
 
 
-def test_there_are_exactly_fourteen_certified_tools() -> None:
-    assert len(CATALOGUE) == 14
+def test_there_are_exactly_sixteen_certified_tools() -> None:
+    assert len(CATALOGUE) == 16
     assert set(CATALOGUE) == set(READ_ONLY_WHITELIST)
 
 
@@ -248,7 +294,9 @@ def test_every_invocation_writes_an_audit_row_with_caller_tool_args_and_row_coun
     assert row.action == "tool:get_reconciliation"
     assert row.actor.subject == "priya@cinqcare.test"
     assert row.actor.actor_type is ActorType.HUMAN
-    assert "batch_id" in row.detail and "rows=1" in row.detail
+    # One stage-balance row plus one row per named drop (the seeded plane's
+    # one stage carries two) — see _get_reconciliation.
+    assert "batch_id" in row.detail and "rows=3" in row.detail
 
 
 def test_a_tool_outside_the_whitelist_is_refused_and_recorded(
@@ -319,10 +367,21 @@ def test_the_drop_ledger_names_dq_002_and_the_structure_check(
 def test_reconciliation_reports_the_balance_equation(
     seeded: tuple[MemMetadataDb, MemStoreControlTables],
 ) -> None:
-    (row,) = invoke(_context(seeded), "get_reconciliation", {"batch_id": BATCH_ID}).rows
-    assert row["records_in"] == row["records_out"] + row["quarantined"] + row["attributed_drops"]
-    assert row["balances"] is True
-    assert row["unexplained"] == 0
+    """The stage-balance row — `rule_id is None` — carries the equation. The
+    rows after it are one per named drop, so `recon:<batch>#<rule>` can
+    highlight the row it actually names (see GAP 5 of the Wave-0 audit)."""
+    rows = invoke(_context(seeded), "get_reconciliation", {"batch_id": BATCH_ID}).rows
+    (stage_row,) = [row for row in rows if row["rule_id"] is None]
+    assert (
+        stage_row["records_in"]
+        == stage_row["records_out"] + stage_row["quarantined"] + stage_row["attributed_drops"]
+    )
+    assert stage_row["balances"] is True
+    assert stage_row["unexplained"] == 0
+
+    drop_rows = [row for row in rows if row["rule_id"] is not None]
+    assert {row["rule_id"] for row in drop_rows} == {"DQ-002", "STRUCTURE-001"}
+    assert all(row["citation_id"] == f"recon:{BATCH_ID}#{row['rule_id']}" for row in drop_rows)
 
 
 def test_quarantine_summary_returns_counts_reasons_rules_and_columns_only(

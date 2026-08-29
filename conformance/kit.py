@@ -85,6 +85,20 @@ def check_pin(pin: str, profile: Profile | None) -> Check:
     if chosen in {"none", None} and profile is not None:
         return Check(pin, Verdict.UNFITTED, f"profile says `none` — {PORTS[pin].verb}")
 
+    if chosen is not None and chosen not in adapters:
+        # "climbing a rung changes only the profile" is only true if the
+        # profile's CHOICE is checked, not merely whatever adapter happens to
+        # be registered. Without this, a profile naming a fictional adapter
+        # (`pg-compute`, `presidio`, ...) certifies GREEN against whichever
+        # real adapter is fitted for someone ELSE's reason — the platform
+        # cannot know which environment it is actually in.
+        return Check(
+            pin,
+            Verdict.FAIL,
+            f"profile names `{chosen}`, which is not registered — fitted: "
+            f"{', '.join(sorted(adapters)) or 'none'}",
+        )
+
     verbs = _protocol_verbs(pin)
     if not verbs:
         return Check(pin, Verdict.FAIL, "the port declares no verb")

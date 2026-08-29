@@ -14,7 +14,7 @@ READ THIS BEFORE GIVING AN AGENT THIS PIN.
 
 This pin serves the PLATFORM — screens, reports, the compute adapter's own
 reads. Agents reach operational truth through the certified query catalogue
-instead: fourteen typed, named operations whose scope filter runs inside the
+instead: sixteen typed, named operations whose scope filter runs inside the
 query and whose results carry resolvable citations. NL->SQL over data layers
 arrives in Wave 4, with full RBAC and masking underneath it.
 """

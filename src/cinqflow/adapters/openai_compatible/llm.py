@@ -44,6 +44,16 @@ from cinqflow.ports import port
 #: Per 1M tokens, from the connection profile. There is no default: see above.
 Prices = dict[str, tuple[Decimal, Decimal]]
 
+#: Model families that serve exactly one temperature (their own default) and
+#: 400 on any explicit value. Prefix match on the RESOLVED model name, same
+#: way prices are keyed — no profile field for this because it is a request-
+#: shape fact about the vendor API, not an environment difference.
+_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _is_reasoning_model(model: str) -> bool:
+    return model.startswith(_REASONING_MODEL_PREFIXES)
+
 
 @port("llm", "openai-compatible")
 class OpenAiCompatibleLlm:
@@ -104,8 +114,25 @@ class OpenAiCompatibleLlm:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             max_completion_tokens=max_tokens,
-            temperature=temperature,
             timeout=self._timeout,
+            # The reasoning family (gpt-5·o1·o3·o4) serves ONE temperature — its
+            # own default — and 400s on any explicit value, including the 0.0
+            # every schema-bound prompt asks for (core/prompts: temperature != 0
+            # with a response_schema is refused before this adapter is even
+            # reached). Omitting the parameter here, rather than sending it and
+            # catching the 400, keeps the refusal in core doing the only
+            # thing it can verify statically — that determinism was ASKED
+            # for — while the adapter absorbs the one vendor fact that
+            # request shape differs by model family.
+            **({} if _is_reasoning_model(model) else {"temperature": temperature}),
+            # Same family: reasoning tokens are billed and counted against
+            # `max_completion_tokens` but never appear in `.content` — a prompt
+            # budgeted for a short cited answer can be entirely consumed by
+            # invisible reasoning, returning empty text with
+            # finish_reason="length". "minimal" is the smallest reasoning
+            # budget the API offers, which is what a temperature=0,
+            # schema-bound, cited-facts-only prompt is already asking for.
+            **({"reasoning_effort": "minimal"} if _is_reasoning_model(model) else {}),
             **({"response_format": {"type": "json_object"}} if response_schema else {}),
         )
         latency_ms = int((time.monotonic() - started) * 1000)

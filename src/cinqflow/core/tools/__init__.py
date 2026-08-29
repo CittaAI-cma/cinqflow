@@ -10,9 +10,9 @@ Two decisions here pay for themselves for the rest of the programme.
 
 FIRST: the catalogue is DATA, so the guarantees are asserted over the
 catalogue rather than repeated per tool. "No tool returns member rows" as
-fourteen careful implementations is fourteen chances to be careless; as one
-test over `CATALOGUE` it is a property of the surface, and the fifteenth tool
-inherits it before it is written.
+sixteen careful implementations is sixteen chances to be careless; as one
+test over `CATALOGUE` it is a property of the surface, and the seventeenth
+tool inherits it before it is written.
 
 SECOND: every tool declares what it READS using the same plane-object
 identifiers as CF-V0-E1-01's execution-plane register. So "which tools touch
@@ -242,11 +242,15 @@ FEED_ID = _p("feed_id", ArgType.STRING, "The feed's identifier.", required=True)
 BATCH_ID = _p("batch_id", ArgType.STRING, "The run's identifier.", required=True)
 VERSION = _p("version", ArgType.INTEGER, "A specific version; omit for the live one.")
 WINDOW = _p("window_days", ArgType.WINDOW_DAYS, "How many days back to look.", default=30)
+ERROR_ID_HASH = _p(
+    "error_id_hash", ArgType.STRING, "The error's deterministic hash.", required=True
+)
+FINGERPRINT = _p("fingerprint", ArgType.STRING, "The file's content fingerprint.", required=True)
 
 
-#: The fourteen. Adding a fifteenth means adding a row here and nothing else —
-#: the schema, the audit row, the citation wrapping and the catalogue-wide
-#: guarantees all come from this declaration.
+#: The sixteen. Adding a seventeenth means adding a row here and nothing
+#: else — the schema, the audit row, the citation wrapping and the
+#: catalogue-wide guarantees all come from this declaration.
 CATALOGUE: dict[str, ToolSpec] = {
     spec.name: spec
     for spec in (
@@ -355,6 +359,14 @@ CATALOGUE: dict[str, ToolSpec] = {
             cites=(CitationKind.ERROR,),
         ),
         ToolSpec(
+            name="get_error_by_hash",
+            answers="One error, by its deterministic hash — the `error:<hash>` citation's own "
+            "lookup, with no batch_id required to find it.",
+            parameters=(ERROR_ID_HASH,),
+            reads=frozenset({"control.error_log"}),
+            cites=(CitationKind.ERROR,),
+        ),
+        ToolSpec(
             name="get_quarantine_summary",
             answers=(
                 "Counts, reasons, rule identifiers and column names for rows held back. "
@@ -373,6 +385,14 @@ CATALOGUE: dict[str, ToolSpec] = {
             name="get_input_registry",
             answers="Files seen for a feed: accepted, rejected, parked, skipped as duplicates.",
             parameters=(FEED_ID, WINDOW),
+            reads=frozenset({"control.input_registry"}),
+            cites=(CitationKind.FILE,),
+        ),
+        ToolSpec(
+            name="get_file_by_fingerprint",
+            answers="One file's registry entry, by its content fingerprint — the `file:<hash>` "
+            "citation's own lookup, with no feed_id required to find it.",
+            parameters=(FINGERPRINT,),
             reads=frozenset({"control.input_registry"}),
             cites=(CitationKind.FILE,),
         ),

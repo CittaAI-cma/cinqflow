@@ -9,25 +9,30 @@ socket: mock
 mode: full
 
 pins:
+  # Every name here is the adapter's ACTUAL registration ("mock" for every
+  # pin whose only Wave-0 implementation is the in-memory stand-in) — not the
+  # descriptive nickname the module docstring uses (memfs, canned, patterns,
+  # ...). conformance/kit.py:check_pin fails a name that isn't registered, so
+  # this profile is now checkable, not merely aspirational.
   compute_job:    { adapter: mock }
   orchestration:  { adapter: mock }
-  storage:        { adapter: memfs }
-  control_tables: { adapter: memstore }
-  catalog:        { adapter: dict }
-  sql_query:      { adapter: canned }
+  storage:        { adapter: mock }
+  control_tables: { adapter: mock }
+  catalog:        { adapter: mock }
+  sql_query:      { adapter: mock }
   identity:       { adapter: mock }
   legacy_readonly: { adapter: none }
-  metadata_db:    { adapter: sqlite, dsn: ":memory:" }
-  queue:          { adapter: memq }
+  metadata_db:    { adapter: mock }
+  queue:          { adapter: mock }
   cache:          { adapter: none }
   authn:          { adapter: static, users: profiles/dev-users.yaml }
-  secrets:        { adapter: mem }
-  llm:            { adapter: scripted }       # NO endpoint, NO key — by construction
-  vector:         { adapter: list }
-  phi_scrub:      { adapter: patterns }
-  notification:   { adapter: console }
-  observability:  { adapter: noop }
-  http_edge:      { adapter: testclient }
+  secrets:        { adapter: mock }
+  llm:            { adapter: mock }           # NO endpoint, NO key — by construction
+  vector:         { adapter: mock }
+  phi_scrub:      { adapter: mock }
+  notification:   { adapter: mock }
+  observability:  { adapter: mock }
+  http_edge:      { adapter: mock }
   agent_runtime:  { adapter: inproc }
 
 landing:

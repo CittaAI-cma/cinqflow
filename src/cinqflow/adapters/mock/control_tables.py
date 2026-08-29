@@ -14,6 +14,7 @@ from cinqflow.ports.control_tables import (
     InputFile,
     QuarantineSummary,
     Reconciliation,
+    SchemaDrift,
     StageStatus,
 )
 
@@ -38,6 +39,7 @@ class MemStoreControlTables:
         self._errors: dict[str, ErrorRecord] = {}  # keyed by error_id_hash
         self._quarantine: dict[str, list[QuarantineSummary]] = {}
         self._recon: dict[str, list[Reconciliation]] = {}
+        self._drift: dict[str, list[SchemaDrift]] = {}
 
     # ── writes ───────────────────────────────────────────────────────────────
     def open_batch(self, batch: BatchControl) -> None:
@@ -60,6 +62,11 @@ class MemStoreControlTables:
         # Registered even when unexpected. Parked and surfaced, never ignored.
         self._inputs.setdefault(file.fingerprint, file)
 
+    def link_input_to_batch(self, fingerprint: str, batch_id: str) -> None:
+        existing = self._inputs.get(fingerprint)
+        if existing is not None:
+            self._inputs[fingerprint] = replace(existing, batch_id=batch_id)
+
     def record_error(self, error: ErrorRecord) -> None:
         # Idempotent by hash: replay cannot duplicate an incident.
         self._errors.setdefault(error.error_id_hash, error)
@@ -69,6 +76,9 @@ class MemStoreControlTables:
 
     def record_reconciliation(self, recon: Reconciliation) -> None:
         self._recon.setdefault(recon.batch_id, []).append(recon)
+
+    def record_schema_drift(self, drift: SchemaDrift) -> None:
+        self._drift.setdefault(drift.batch_id, []).append(drift)
 
     # ── reads ────────────────────────────────────────────────────────────────
     def get_batch(self, batch_id: str) -> BatchControl:
@@ -90,6 +100,9 @@ class MemStoreControlTables:
     def get_quarantine_summary(self, batch_id: str) -> Sequence[QuarantineSummary]:
         return tuple(self._quarantine.get(batch_id, ()))
 
+    def get_schema_drift(self, batch_id: str) -> Sequence[SchemaDrift]:
+        return tuple(self._drift.get(batch_id, ()))
+
     def list_errors(
         self, batch_id: str, category: ErrorCategory | None = None
     ) -> Sequence[ErrorRecord]:
@@ -97,6 +110,9 @@ class MemStoreControlTables:
         if category is not None:
             found = [e for e in found if e.category is category]
         return tuple(sorted(found, key=lambda e: e.occurred_ts))
+
+    def find_error_by_hash(self, error_id_hash: str) -> ErrorRecord | None:
+        return self._errors.get(error_id_hash)
 
     def find_input_by_fingerprint(self, fingerprint: str) -> InputFile | None:
         return self._inputs.get(fingerprint)

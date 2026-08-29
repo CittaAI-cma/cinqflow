@@ -314,13 +314,23 @@ class LlmGateway:
             if attempt == MAX_REPAIRS:
                 break
 
-            # The repair names the PATHS. A retry told only "invalid" is a
-            # second sample from the same distribution.
+            # The repair names the PATHS AND re-states the schema. Naming the
+            # paths alone (CF-V0-E16-02's original design) is enough to tell a
+            # model its output was wrong, but not what shape is right — a real
+            # model observed inventing a plausible wrapper key (nesting
+            # feed_id/batch_id under "identifiers") on every attempt because it
+            # was never shown the flat contract, only an English paraphrase of
+            # it in `prompt.text`. The schema is repeated here, in the
+            # UNGOVERNED repair string, rather than added to the versioned
+            # PromptTemplate — that would change every prompt's hash and
+            # Lane-2 cassette key for a fix that only the repair path needs.
             completion = self._llm.complete(
                 prompt=f"{prompt.text}\n\n# repair\n"
                 f"The previous response was rejected:\n- "
                 + "\n- ".join(problems)
-                + "\nReturn only the corrected JSON.",
+                + "\nReturn only JSON matching this exact schema — no other keys, no wrapper "
+                "object:\n"
+                + json.dumps(prompt.response_schema),
                 task_class=prompt.task_class,
                 response_schema=prompt.response_schema,
                 max_tokens=prompt.max_tokens,
@@ -380,6 +390,15 @@ class LlmGateway:
 
     def spent_today(self, agent: str, *, day: str | None = None) -> Decimal:
         return self._spend.today(agent, day or self._clock().date().isoformat())
+
+    def spent_this_run(self, run_id: str) -> Decimal:
+        """The sum of every model call charged to this run so far.
+
+        A run's cost is not one call's cost — route, plan_tools and answer
+        each spend. The `RunBudget` gate must see all three, or a $0.09 run
+        across three calls reports as the last call's $0.04.
+        """
+        return self._spend.run(run_id)
 
 
 def _problems(schema: dict[str, Any], text: str) -> tuple[str, ...]:

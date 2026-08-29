@@ -35,9 +35,10 @@ def test_every_profile_addresses_all_twenty_pins() -> None:
 
 def test_the_mock_profile_declares_no_reachable_endpoint() -> None:
     """Lanes 1 and 2 hold no live credentials, so rung 0 must not be able to
-    reach anything at all."""
+    reach anything at all — the LLM pin names the registered "mock" adapter
+    (ScriptedLlm), never "openai-compatible" or "cassette"."""
     profile = load(PROFILES / "mock.yaml")
-    assert profile.adapter_for("llm") == "scripted"
+    assert profile.adapter_for("llm") == "mock"
     assert profile.rung == 0
 
 

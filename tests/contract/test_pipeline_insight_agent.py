@@ -320,6 +320,35 @@ def test_thin_grounding_degrades_and_names_what_is_missing(seeded: Any) -> None:
     assert "probably" not in answer.as_text().lower(), "it offers no hypothesis"
 
 
+def test_a_tool_call_missing_a_required_argument_degrades_rather_than_crashes(
+    seeded: Any,
+) -> None:
+    """The planning model can name a tool with no id to back it — routing
+    supplied none, and the model invented nothing to fill the gap. That must
+    degrade the same way a refused-scope call does, never propagate an
+    ArgumentError out of `ask()` and crash the API route (or the CLI) above it.
+    """
+    # Script.__init__ falls back to a default routed dict on a FALSY routed=
+    # (`routed or {...}`), so an empty dict would not exercise this path — a
+    # routed dict naming a feed but no batch does (ROUTE_SCHEMA rejects any
+    # key it does not declare, so this has to be one of its real properties).
+    agent = _agent(
+        seeded,
+        Script(routed={"feed_id": "fidelis-downstate-roster"}, calls=[{"tool": "get_batch"}]),
+    )
+    answer = agent.ask("what happened to that batch?", run_id="run-1")
+
+    assert answer.claims == ()
+    assert "needs your input" in answer.as_text()
+
+    store, _ = seeded
+    (action,) = [
+        a for a in store.read_agent_actions(run_id="run-1") if a.action == "tool:get_batch"
+    ]
+    assert action.outcome is ActionOutcome.FAILED_SCHEMA
+    assert "batch_id" in action.detail
+
+
 def test_a_claim_citing_something_no_tool_returned_is_dropped_and_reported(
     seeded: Any,
 ) -> None:

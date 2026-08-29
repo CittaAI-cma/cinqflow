@@ -1,19 +1,71 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Cited } from "@/components/Cited";
+import {
+  AccessChanges,
+  Arrived,
+  AskShortcut,
+  Feeds,
+  loadHomeData,
+  NeedsYou,
+  RefusalsToday,
+  Runs,
+} from "@/components/home/slots";
 import { RefusalNotice } from "@/components/Refusal";
-import { Status } from "@/components/Status";
+import { MetricTile } from "@/components/ui/MetricTile";
 import { attempt, isRefused, token } from "@/lib/api";
-import type { Batch, Feed, Principal } from "@/lib/types";
+import type { Batch, Feed, HomeSlot, Principal } from "@/lib/types";
 
 /**
- * Home, shaped by persona.
+ * Home, shaped by persona — composed from SLOTS, not from a ternary.
  *
  * The merge rule: persona shapes the home and the RANKING; it never shapes the
- * vocabulary or the depth. An Engineer sees what needs them, ranked by
- * downstream harm. A Read-Only analyst sees what arrived and what completed.
- * Both see the same seven words and open the same drawer.
+ * vocabulary or the depth. This file used to hold `roles.includes("engineer")
+ * ? … : …`, which covered two of the three Wave-0 roles and made the third an
+ * accident of the else-branch. The order now arrives from core/persona.py on
+ * /api/me, so "what an Engineer sees first" is a server fact with a test
+ * rather than a branch in a component.
+ *
+ * A slot whose wave has not activated is absent from that list — never a stub,
+ * never a placeholder card. Same rule the navigation applies to Wave-1
+ * destinations.
  */
+
+/** The title for each slot. UI copy lives here; the RANK lives on the server,
+ *  and the one-line subtitle is the slot's own `answers` string, so a screen
+ *  and the manifest that justifies it cannot drift apart. */
+const TITLES: Record<string, string> = {
+  "needs-you": "What needs you",
+  arrived: "What arrived",
+  runs: "Runs",
+  feeds: "Feeds",
+  "ask-shortcut": "Ask in your own words",
+  "refusals-today": "What the platform refused",
+  "access-changes": "Who changed what",
+};
+
+function SlotBody({ slot, feeds, batches }: { slot: string; feeds: Feed[]; batches: Batch[] }) {
+  switch (slot) {
+    case "needs-you":
+      return <NeedsYou batches={batches} />;
+    case "arrived":
+      return <Arrived batches={batches} />;
+    case "runs":
+      return <Runs batches={batches} />;
+    case "feeds":
+      return <Feeds feeds={feeds} />;
+    case "ask-shortcut":
+      return <AskShortcut />;
+    case "refusals-today":
+      return <RefusalsToday />;
+    case "access-changes":
+      return <AccessChanges />;
+    default:
+      // A slot the server ranked and this build cannot draw renders NOTHING.
+      // A placeholder here would be exactly the stub the wave manifest exists
+      // to prevent, one layer further down.
+      return null;
+  }
+}
+
 export default async function Home() {
   if (!(await token())) redirect("/signin");
 
@@ -21,128 +73,44 @@ export default async function Home() {
   if (isRefused(me)) return <RefusalNotice refusal={me} />;
   if (!me.has_access) redirect("/no-access");
 
-  const feeds = await attempt<Feed[]>("/api/feeds");
-  if (isRefused(feeds)) return <RefusalNotice refusal={feeds} />;
+  const { feeds, batches, refusal } = await loadHomeData();
+  if (refusal) return <RefusalNotice refusal={refusal} />;
 
-  const engineer = me.roles.includes("engineer");
-  const batches: Batch[] = [];
-  for (const feed of feeds) {
-    const found = await attempt<Batch[]>(
-      `/api/batches?feed_id=${encodeURIComponent(feed.feed_id)}&limit=10`,
-    );
-    if (!isRefused(found)) batches.push(...found);
-  }
-
-  // Ranked by downstream harm, not by time. A completed batch at the top of an
-  // engineer's screen is a screen that wastes the first ten seconds of a
-  // morning.
-  const harm: Record<string, number> = {
-    "Needs Attention": 0,
-    Missing: 1,
-    "Needs Review": 2,
-    Processing: 3,
-    Received: 4,
-    Expected: 5,
-    Completed: 6,
-  };
-  const ranked = [...batches].sort((a, b) =>
-    engineer
-      ? (harm[a.status] ?? 9) - (harm[b.status] ?? 9)
-      : (b.started_ts ?? "").localeCompare(a.started_ts ?? ""),
-  );
+  const slots = (me.home_slots ?? []).filter((slot) => slot.key in TITLES);
+  // The page title IS the first slot's title, and the lede is that slot's own
+  // one-line reason for existing. A persona-ranked home whose headline does
+  // not match its first card is a home that reads as generic.
+  const [lead, ...rest]: HomeSlot[] = slots;
 
   return (
     <>
-      <h1>{engineer ? "What needs you" : "What arrived"}</h1>
-      <p className="lede">
-        {engineer
-          ? "Ranked by downstream harm. The most expensive thing to ignore is first."
-          : "Most recent first. Every figure opens the row it came from."}
-      </p>
+      <h1>{lead ? TITLES[lead.key] : "CINQFLOW"}</h1>
+      <p className="lede">{lead?.answers ?? "What is happening on the platform."}</p>
 
       <div className="grid">
-        <div className="card">
-          <div className="note">Feeds published</div>
-          <div className="big">{feeds.filter((f) => f.lifecycle_state === "published").length}</div>
-        </div>
-        <div className="card">
-          <div className="note">Runs in view</div>
-          <div className="big">{batches.length}</div>
-        </div>
-        <div className="card">
-          <div className="note">Needing attention</div>
-          <div className="big">
-            {batches.filter((b) => b.status === "Needs Attention" || b.status === "Missing").length}
-          </div>
-        </div>
+        <MetricTile
+          label="Feeds published"
+          value={feeds.filter((f) => f.lifecycle_state === "published").length}
+        />
+        <MetricTile label="Runs in view" value={batches.length} />
+        <MetricTile
+          label="Needing attention"
+          value={
+            batches.filter((b) => b.status === "Needs Attention" || b.status === "Missing").length
+          }
+          tone="attention"
+        />
       </div>
 
-      <h2>Runs</h2>
-      {ranked.length === 0 ? (
-        <div className="card note">
-          No runs recorded yet. Run <span className="mono">cinqflow simulate</span> to place a
-          file — the demo places no files by hand.
-        </div>
-      ) : (
-        <div className="card scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Batch</th>
-                <th>Feed</th>
-                <th>Business date</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ranked.map((batch) => (
-                <tr className="row" key={batch.batch_id}>
-                  <td>
-                    <Cited value={batch.batch_id} citationId={batch.citation_id} />
-                  </td>
-                  <td>{batch.feed_id}</td>
-                  <td>{batch.business_date}</td>
-                  <td>
-                    <Status word={batch.status} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {lead && <SlotBody slot={lead.key} feeds={feeds} batches={batches} />}
 
-      <h2>Feeds</h2>
-      <div className="card scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Feed</th>
-              <th>Domain</th>
-              <th>Version</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {feeds.map((feed) => (
-              <tr className="row" key={feed.feed_id}>
-                <td>
-                  <Link className="cited" href={feed.route}>
-                    {feed.feed_id}
-                  </Link>
-                </td>
-                <td>{feed.domain}</td>
-                <td>
-                  <Cited value={`v${feed.version}`} citationId={feed.citation_id} />
-                </td>
-                <td>
-                  <Status word={feed.status} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {rest.map((slot) => (
+        <section key={slot.key} aria-labelledby={`slot-${slot.key}`}>
+          <h2 id={`slot-${slot.key}`}>{TITLES[slot.key]}</h2>
+          <p className="note">{slot.answers}</p>
+          <SlotBody slot={slot.key} feeds={feeds} batches={batches} />
+        </section>
+      ))}
     </>
   );
 }

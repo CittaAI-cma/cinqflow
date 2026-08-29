@@ -84,7 +84,12 @@ def require(
     """
 
     async def dependency(request: Request, principal: CurrentPrincipal) -> Principal:
-        feed_id = request.path_params.get("feed_id")
+        # A feed_id scoping this request may arrive as a path param
+        # (`/feeds/{feed_id}`) or a query param (`/batches?feed_id=...`) — the
+        # scope check must see it either way, or a route that takes it as a
+        # query param answers with no scope check at all (feed_id=None skips
+        # the covers_feed test in `may`).
+        feed_id = request.path_params.get("feed_id") or request.query_params.get("feed_id")
         decision = may(principal, action, feed_id=feed_id)
         if decision:
             return principal

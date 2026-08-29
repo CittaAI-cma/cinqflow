@@ -25,7 +25,7 @@ export function Sidebar({
   }
 
   return (
-    <nav className="sidebar">
+    <nav className="sidebar" aria-label="Primary">
       <div className="brand">CINQFLOW</div>
       <div className="wave">
         Wave {navigation?.active_wave ?? 0} · {principal.display_name}

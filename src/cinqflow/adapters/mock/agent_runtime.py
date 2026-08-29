@@ -27,7 +27,11 @@ from cinqflow.ports import port
 from cinqflow.ports.agent_runtime import AgentRuntimeError, GraphRun, GraphSpec, NodeTrace
 
 
+# Registered under both names for the reason the module docstring states:
+# this genuinely is both the rung-0 stand-in AND the rung-0.5 real runtime,
+# and "inproc" is what `profiles/local.yaml` names it.
 @port("agent_runtime", "mock")
+@port("agent_runtime", "inproc")
 class InProcAgentRuntime:
     """Linear and conditional execution. No persistence. Fully deterministic."""
 

@@ -285,6 +285,35 @@ def test_spend_accumulates_across_runs_for_the_day() -> None:
     assert gateway.spent_today("pipeline-insight") == Decimal("0.20")
 
 
+def test_spent_this_run_sums_every_call_charged_to_one_run() -> None:
+    """A run's cost is route + plan_tools + answer, not the last call alone.
+
+    The eval gate's $0.05/run cap must see the whole run: reporting only the
+    final call's cost lets a three-call run cost 3x the cap and still read
+    as compliant.
+    """
+    store = MemMetadataDb()
+    _publish(store, _template())
+    llm = ScriptedLlm(responder=lambda p, t: "ok")
+
+    def costed(**kw: Any) -> Any:
+        completion = ScriptedLlm.complete(llm, **kw)
+        return type(completion)(**{**completion.__dict__, "cost_usd": Decimal("0.02")})
+
+    llm.complete = costed  # type: ignore[method-assign]
+    gateway = _gateway(store=store, llm=llm)
+    for _ in range(3):
+        gateway.complete(
+            agent="pipeline-insight", run_id="run-multi", prompt_id="insight.answer", caller=CALLER
+        )
+    assert gateway.spent_this_run("run-multi") == Decimal("0.06")
+    # A DIFFERENT run's spend must not bleed into this one.
+    gateway.complete(
+        agent="pipeline-insight", run_id="run-other", prompt_id="insight.answer", caller=CALLER
+    )
+    assert gateway.spent_this_run("run-multi") == Decimal("0.06")
+
+
 # ── parse or reject ──────────────────────────────────────────────────────────
 
 

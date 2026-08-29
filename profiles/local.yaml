@@ -9,19 +9,29 @@ socket: postgres_plane
 mode: full                      # full | propose_only | observe_only
 
 pins:
+  # Every adapter named below is checked against the actual registry
+  # (conformance/kit.py:check_pin) — a name with nothing registered behind it
+  # now FAILS conformance instead of certifying GREEN against whichever mock
+  # happened to be fitted. Pins genuinely unfitted at rung 0.5 say `none`
+  # here, same as `cache` always has (ADR-0014) — reported, not hidden.
+
   # ── group A · data plane ──────────────────────────────────────────────────
-  compute_job:    { adapter: pg-compute }
-  orchestration:  { adapter: pg-scheduler }
-  storage:        { adapter: fsspec, root: "file://./landing" }
+  # PostgresCompute (adapters/local/pg_compute.py) IS real and IS what
+  # cinqflow ingest runs on — but it is not registered behind the compute_job
+  # PORT (its verbs are the pipeline stages, not the port's run/poll/metrics),
+  # so honestly this pin has no *fitted* adapter yet. See the Wave-0 audit.
+  compute_job:    { adapter: none }
+  orchestration:  { adapter: pg-scheduler }   # queue.schedule / queue.scheduled_run — W1 (CF-V1-E8-03)
+  storage:        { adapter: localfs, root: ".cinqflow/landing" }
   control_tables: { adapter: pg-control, schema: control }
-  catalog:        { adapter: information-schema }
-  sql_query:      { adapter: pg-readonly }
+  catalog:        { adapter: none }
+  sql_query:      { adapter: pg-readonly }    # W1 (CF-V1-E7-02) — NOT on any agent whitelist
   identity:       { adapter: mock, scenarios: goldensets/reference/verato-scenarios.yaml }
   legacy_readonly: { adapter: none }          # Wave 5 only; removed at cutover
 
   # ── group B · platform ────────────────────────────────────────────────────
-  metadata_db:    { dsn: "secret://pg-dsn" }
-  queue:          { adapter: pg-skip-locked }
+  metadata_db:    { dsn: "secret://pg-dsn" }  # -> adapter "postgres" (profile.py:adapter_for)
+  queue:          { adapter: pg-skip-locked } # ADR-0014 — identical at rung 4
   cache:          { adapter: none }           # ADR-0014: no implementation until measured
   authn:          { adapter: static, users: profiles/dev-users.yaml }
   secrets:        { adapter: dotenv, path: ".env" }
@@ -44,11 +54,11 @@ pins:
     prices:
       gpt-5-mini:  [0.25, 2.00]
       gpt-5:       [1.25, 10.00]
-  vector:         { adapter: pgvector, dimensions: 3072 }   # provisioned in W0, populated in W1
-  phi_scrub:      { adapter: presidio, model: en_core_web_lg }
-  notification:   { adapter: console }
-  observability:  { adapter: otlp, endpoint: "http://localhost:4317" }
-  http_edge:      { adapter: uvicorn, host: "127.0.0.1", port: 8000 }
+  vector:         { adapter: pgvector }       # knowledge.chunk — the K2 store's real seat (W1)
+  phi_scrub:      { adapter: presidio }       # dev AND target — install requirements/ai.txt to energize
+  notification:   { adapter: slack-webhook, webhook: "secret://slack-webhook" }  # approvals only in W1
+  observability:  { adapter: none }
+  http_edge:      { adapter: none }           # uvicorn runs api/dev.py directly, outside this pin
   agent_runtime:  { adapter: inproc }         # langgraph seat, unpopulated until Wave 2
 
 # Landing folder layout is a platform constant, not an environment difference:

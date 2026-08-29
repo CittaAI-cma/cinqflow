@@ -8,7 +8,8 @@
     "start": "next start -p 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "playwright test"
+    "test": "playwright test",
+    "lint:tokens": "node scripts/lint-tokens.mjs"
   },
   "dependencies": {
     "next": "^15.5.0",
@@ -16,9 +17,11 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.56.0",
     "@types/node": "^24.5.0",
     "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.2.5",
     "typescript": "^5.9.0"
   }
 }
