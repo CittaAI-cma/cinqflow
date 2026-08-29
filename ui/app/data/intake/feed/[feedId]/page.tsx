@@ -172,6 +172,17 @@ export default async function FeedPage({
       ) : null}
 
       <div className="card">
+        <strong>Column mapping</strong>
+        <p className="note">
+          Which canonical field each source column populates, and — just as importantly — which
+          target fields nothing populates, with the reason somebody gave.
+        </p>
+        <Link className="cited" href={`/data/intake/mapping/${feed.feed_id}`}>
+          Open the mapping →
+        </Link>
+      </div>
+
+      <div className="card">
         <strong>History</strong>
         <p className="note">
           Every version is still here — &ldquo;which version was live in March?&rdquo; is one

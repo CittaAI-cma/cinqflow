@@ -1092,3 +1092,129 @@ class AcceptanceOut(BaseModel):
     inferred_rate: float
     additions: int
     report: str
+
+
+# ── the mapping studio · CF-V1-E6-03 ─────────────────────────────────────────
+
+
+class CaseModel(BaseModel):
+    """One branch of a CONDITIONAL: equality against a listed set.
+
+    Never a predicate. The moment a case can hold an expression, approving a
+    mapping means reading a language rather than reading configuration.
+    """
+
+    when_in: list[str] = Field(default_factory=list)
+    then: str = ""
+
+
+class TransformModel(BaseModel):
+    """What to do with the source value. Parameters only — there is
+    deliberately no `expression`, `sql` or `formula` field on the wire, because
+    there is none in the object."""
+
+    kind: str = "direct"
+    target_type: str | None = None
+    date_format: str | None = None
+    separator: str | None = None
+    part: int | None = None
+    lookup: list[list[str]] = Field(default_factory=list)
+    on_unlisted: str = "reject_row"
+    cases: list[CaseModel] = Field(default_factory=list)
+    literal: str | None = None
+    default_value: str | None = None
+    describe: str = ""
+
+
+class MappingLineModel(BaseModel):
+    """One target field, and where its value comes from.
+
+    Keyed by the TARGET: a target field has exactly one answer to "what
+    populates this?", which is the question a reviewer, a lineage graph and a
+    row-loss investigation all ask.
+    """
+
+    target_entity: str
+    target_field: str
+    source_columns: list[str] = Field(default_factory=list)
+    transform: TransformModel = Field(default_factory=TransformModel)
+    null_policy: str = "pass_through"
+    default_value: str | None = None
+    platform_supplied: bool = False
+    unmapped_reason: str = ""
+    glossary_id: str | None = None
+    notes: str = ""
+    confidence: float | None = None
+    citations: list[str] = Field(default_factory=list)
+    status: str = "mapped"
+    describe: str = ""
+
+
+class MappingFindingOut(BaseModel):
+    """One thing wrong, or worth knowing, about a mapping.
+
+    Three strings for the same reason `ChecklistItemOut` has three: a finding
+    that only names a field gets a placeholder typed into it.
+    """
+
+    key: str
+    address: str
+    severity: str
+    blocks: bool
+    what: str
+    why_it_matters: str
+    how_to_fix: str
+
+
+class MappingIn(BaseModel):
+    """A mapping as a BA authors it by hand. CF-V1-E6-03.
+
+    The manual editor is the fallback AND the correction surface: everything
+    CF-V1-E6-02's agent can propose is expressible here, which is what makes
+    "humans must be able to do by hand everything the AI proposes" a property
+    of the taxonomy rather than a promise.
+    """
+
+    contract_version: int | None = None
+    lines: list[MappingLineModel] = Field(default_factory=list)
+    business_consumers: list[str] = Field(default_factory=list)
+
+
+class MappingOut(BaseModel):
+    feed_id: str
+    version: int
+    lifecycle_state: str
+    status: StatusWord
+    contract_version: int | None = None
+    citation_id: str
+    route: str
+    mapped_count: int
+    total_count: int
+    unmapped_count: int
+    lines: list[MappingLineModel] = Field(default_factory=list)
+    findings: list[MappingFindingOut] = Field(default_factory=list)
+    blocking_count: int = 0
+
+
+class MappingDiffLineOut(BaseModel):
+    """One target field that differs between two mapping versions.
+
+    `loses_its_source` is the field a row-loss investigation starts from, and
+    it is computed rather than described: a line that went from MAPPED to
+    UNMAPPED is how a column silently empties after a release.
+    """
+
+    address: str
+    change: str
+    before: str = ""
+    after: str = ""
+    loses_its_source: bool = False
+
+
+class MappingDiffOut(BaseModel):
+    feed_id: str
+    from_version: int
+    to_version: int
+    lines: list[MappingDiffLineOut] = Field(default_factory=list)
+    fields_losing_their_source: list[str] = Field(default_factory=list)
+    summary: str = ""

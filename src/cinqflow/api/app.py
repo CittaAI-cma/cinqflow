@@ -44,6 +44,7 @@ from cinqflow.api.schemas import (
     CanonicalEntityOut,
     CanonicalFieldOut,
     CanonicalModelOut,
+    CaseModel,
     ChecklistItemOut,
     ClaimOut,
     CloneFeedIn,
@@ -68,6 +69,10 @@ from cinqflow.api.schemas import (
     InheritedOut,
     KeyCandidateOut,
     KeySearchOut,
+    MappingFindingOut,
+    MappingIn,
+    MappingLineModel,
+    MappingOut,
     MaskingPolicyOut,
     NavigationOut,
     OperationsModel,
@@ -95,6 +100,7 @@ from cinqflow.api.schemas import (
     ToolOut,
     TouchedOut,
     TraceStepOut,
+    TransformModel,
     TransitionIn,
     TypeCandidateOut,
     UnknownImpactOut,
@@ -103,6 +109,7 @@ from cinqflow.api.schemas import (
     WorkQueueOut,
 )
 from cinqflow.core import lifecycle, proposals
+from cinqflow.core import mapping as mapping_core
 from cinqflow.core.agents.phi_detection.graph import AGENT as PHI_DETECTION_AGENT
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
 from cinqflow.core.citations import CitationId, CitationKind
@@ -120,12 +127,15 @@ from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
 from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry import canonical, operations, suspension
 from cinqflow.core.registry import clone as registry_clone
+from cinqflow.core.registry import contract as contract_registry
 from cinqflow.core.registry import feed as feed_registry
 from cinqflow.core.registry import search as registry_search
 from cinqflow.core.registry import source as source_registry
+from cinqflow.core.registry.contract import SchemaContract
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.core.registry.wave0 import wave_0_register
+from cinqflow.core.schema_spec import TypeName
 from cinqflow.core.security import Action, may
 from cinqflow.core.tools import CATALOGUE, ToolError
 from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent, RecallGateFailedError
@@ -926,6 +936,105 @@ def create_app(
                 "belongs in one of those.",
             )
         return _canonical_entity_out(found, with_fields=True)
+
+    # ── the mapping studio · CF-V1-E6-03 ─────────────────────────────────────
+    #
+    # The MANUAL editor, and it is built before CF-V1-E6-02's agent on purpose:
+    # "humans must be able to do by hand everything the AI proposes" is only
+    # true by construction if the hand-authoring vocabulary exists first. The
+    # agent then proposes INTO this shape rather than inventing one.
+    #
+    # A mapping is a governed object routed to the DATA STEWARD, so there is no
+    # route here that publishes one — saving produces a DRAFT, and the
+    # lifecycle routes below carry it the rest of the way, exactly like a feed.
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/mapping",
+        response_model=MappingOut,
+        tags=["mapping"],
+    )
+    def get_mapping(
+        feed_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        version: int | None = None,
+    ) -> MappingOut:
+        """The mapping and its findings, validated against both ends.
+
+        Findings travel with the GET rather than only with the save, because a
+        mapping approved months ago can be invalidated by a change at either
+        end — a contract column renamed, a canonical field's PHI flag set —
+        and a reviewer opening it should see that immediately.
+        """
+        try:
+            obj = metadata.get(ObjectType.MAPPING, feed_id, version)
+        except ObjectNotFoundError:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"no mapping for feed {feed_id!r} yet — the canonical browser is at "
+                "/api/canonical, and a mapping is created by PUT on this route",
+            ) from None
+        return _mapping_out(metadata, obj)
+
+    @app.put(
+        f"{API_PREFIX}/feeds/{{feed_id}}/mapping",
+        response_model=MappingOut,
+        tags=["mapping"],
+    )
+    def save_mapping(
+        feed_id: str,
+        body: MappingIn,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        audit: Audit,
+    ) -> MappingOut:
+        """Save a mapping as a new DRAFT version.
+
+        SAVE IS PERMISSIVE, exactly as CF-V1-E3-02 made it for a feed: a
+        half-authored mapping must store, because a BA who has settled forty
+        lines and is waiting on a payer to explain the forty-first needs
+        somewhere to keep the forty. What is refused is a mapping that could
+        not be built at all — a duplicate target, an unknown column — because
+        those are not gaps, they are contradictions, and storing one produces
+        a review screen nobody can act on.
+
+        The BLOCKING findings gate SUBMISSION, not saving. That gate lives in
+        the transition route, where the readiness gate for feeds lives.
+        """
+        try:
+            mapping = _mapping_from(feed_id, body, version=_next_mapping_version(metadata, feed_id))
+        except mapping_core.MappingError as refused:
+            # 400 with the core's own sentence, not a 422 shaped by the model
+            # layer. `MappingError` messages say what to DO — "an unmapped
+            # field is a DECISION" — and a schema complaint would replace that
+            # with the name of a field the author can see is empty.
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(refused)) from None
+        findings = _validate_mapping(metadata, mapping)
+        contradictions = [f for f in mapping_core.blocking(findings) if f.key == "duplicate_target"]
+        if contradictions:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "; ".join(f"{f.address}: {f.what}" for f in contradictions),
+            )
+        draft = mapping_core.mapping_as_governed(
+            mapping,
+            author=principal.as_actor(),
+            business_consumers=tuple(body.business_consumers),
+        )
+        stored = metadata.save(draft)
+        audit.record(
+            object_type=ObjectType.MAPPING,
+            object_id=feed_id,
+            version=stored.version,
+            action="saved_mapping",
+            actor=principal.as_actor(),
+            detail=(
+                f"{mapping.coverage[0]}/{mapping.coverage[1]} fields mapped, "
+                f"{len(mapping.unmapped)} explicitly unmapped, "
+                f"{len(mapping_core.blocking(findings))} blocking finding(s)"
+            ),
+        )
+        return _mapping_out(metadata, stored)
 
     # ── the business glossary · CF-V1-E14-01 ─────────────────────────────────
 
@@ -2257,6 +2366,147 @@ def _packet_for(metadata: MetadataDbPort, target: GovernedObject) -> ImpactPacke
         target,
         tuple(everything),
         evidence=dict(target.body.get("evidence") or {}),
+    )
+
+
+# ── the mapping studio · CF-V1-E6-03 ─────────────────────────────────────────
+
+
+def _contract_of(metadata: MetadataDbPort, feed_id: str) -> SchemaContract | None:
+    """The feed's latest contract, or None if it has none yet.
+
+    None rather than a raise: a BA may draft a mapping against a feed whose
+    contract is still in review, and half a validation is better than a screen
+    that refuses to load.
+    """
+    try:
+        return contract_registry.from_governed(metadata.get(ObjectType.CONTRACT, feed_id))
+    except (ObjectNotFoundError, ValueError):
+        return None
+
+
+def _mapping_from(feed_id: str, body: MappingIn, *, version: int) -> mapping_core.FeedMapping:
+    return mapping_core.FeedMapping(
+        feed_id=feed_id,
+        version=version,
+        contract_version=body.contract_version,
+        lines=tuple(_mapping_line_from(raw) for raw in body.lines),
+    )
+
+
+def _mapping_line_from(raw: MappingLineModel) -> mapping_core.MappingLine:
+    return mapping_core.MappingLine(
+        target_entity=raw.target_entity,
+        target_field=raw.target_field,
+        source_columns=tuple(raw.source_columns),
+        transform=_transform_from(raw.transform),
+        null_policy=mapping_core.NullPolicy(raw.null_policy),
+        default_value=raw.default_value,
+        platform_supplied=raw.platform_supplied,
+        unmapped_reason=raw.unmapped_reason,
+        glossary_id=raw.glossary_id,
+        notes=raw.notes,
+        confidence=raw.confidence,
+        citations=tuple(raw.citations),
+    )
+
+
+def _transform_from(raw: TransformModel) -> mapping_core.Transform:
+    return mapping_core.Transform(
+        kind=mapping_core.TransformKind(raw.kind),
+        target_type=TypeName(raw.target_type) if raw.target_type else None,
+        date_format=raw.date_format,
+        separator=raw.separator,
+        part=raw.part,
+        lookup=tuple((pair[0], pair[1]) for pair in raw.lookup if len(pair) == 2),
+        on_unlisted=mapping_core.UnlistedCode(raw.on_unlisted),
+        cases=tuple(mapping_core.Case(when_in=tuple(c.when_in), then=c.then) for c in raw.cases),
+        literal=raw.literal,
+        default_value=raw.default_value,
+    )
+
+
+def _validate_mapping(
+    metadata: MetadataDbPort, mapping: mapping_core.FeedMapping
+) -> tuple[mapping_core.MappingFinding, ...]:
+    """Both ends, whichever of them exists."""
+    return mapping_core.validate(
+        mapping,
+        contract=_contract_of(metadata, mapping.feed_id),
+        model=_canonical_of(metadata),
+    )
+
+
+def _next_mapping_version(metadata: MetadataDbPort, feed_id: str) -> int:
+    history = list(metadata.history(ObjectType.MAPPING, feed_id))
+    return max((obj.version for obj in history), default=0) + 1
+
+
+def _transform_out(transform: mapping_core.Transform) -> TransformModel:
+    return TransformModel(
+        kind=transform.kind.value,
+        target_type=transform.target_type.value if transform.target_type else None,
+        date_format=transform.date_format,
+        separator=transform.separator,
+        part=transform.part,
+        lookup=[[code, translated] for code, translated in transform.lookup],
+        on_unlisted=transform.on_unlisted.value,
+        cases=[CaseModel(when_in=list(c.when_in), then=c.then) for c in transform.cases],
+        literal=transform.literal,
+        default_value=transform.default_value,
+        describe=transform.describe(),
+    )
+
+
+def _mapping_line_out(line: mapping_core.MappingLine) -> MappingLineModel:
+    return MappingLineModel(
+        target_entity=line.target_entity,
+        target_field=line.target_field,
+        source_columns=list(line.source_columns),
+        transform=_transform_out(line.transform),
+        null_policy=line.null_policy.value,
+        default_value=line.default_value,
+        platform_supplied=line.platform_supplied,
+        unmapped_reason=line.unmapped_reason,
+        glossary_id=line.glossary_id,
+        notes=line.notes,
+        confidence=line.confidence,
+        citations=list(line.citations),
+        status=line.status.value,
+        describe=line.describe(),
+    )
+
+
+def _mapping_finding_out(finding: mapping_core.MappingFinding) -> MappingFindingOut:
+    return MappingFindingOut(
+        key=finding.key,
+        address=finding.address,
+        severity=finding.severity.value,
+        blocks=finding.blocks,
+        what=finding.what,
+        why_it_matters=finding.why_it_matters,
+        how_to_fix=finding.how_to_fix,
+    )
+
+
+def _mapping_out(metadata: MetadataDbPort, obj: GovernedObject) -> MappingOut:
+    mapping = mapping_core.from_governed(obj)
+    findings = _validate_mapping(metadata, mapping)
+    mapped, total = mapping.coverage
+    return MappingOut(
+        feed_id=mapping.feed_id,
+        version=obj.version,
+        lifecycle_state=obj.lifecycle_state.value,
+        status=obj.lifecycle_state.status_word,
+        contract_version=mapping.contract_version,
+        citation_id=str(mapping.citation),
+        route=mapping.citation.route,
+        mapped_count=mapped,
+        total_count=total,
+        unmapped_count=len(mapping.unmapped),
+        lines=[_mapping_line_out(line) for line in mapping.lines],
+        findings=[_mapping_finding_out(f) for f in findings],
+        blocking_count=len(mapping_core.blocking(findings)),
     )
 
 

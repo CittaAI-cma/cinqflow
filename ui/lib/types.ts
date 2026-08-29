@@ -244,3 +244,76 @@ export interface Tool {
   parameters: string[];
   note: string;
 }
+
+// ── the mapping studio · CF-V1-E6-03 ─────────────────────────────────────────
+
+/**
+ * What to do with the source value. Parameters only.
+ *
+ * Note what this interface does NOT have: an `expression`, `sql` or `formula`
+ * field. There is none on the wire because there is none in the object — a
+ * mapping is configuration a steward approves by reading it, and the moment a
+ * line can carry an expression, approving one means reading a language.
+ */
+export interface MappingTransform {
+  kind: string;
+  target_type: string | null;
+  date_format: string | null;
+  separator: string | null;
+  part: number | null;
+  lookup: string[][];
+  on_unlisted: string;
+  cases: { when_in: string[]; then: string }[];
+  literal: string | null;
+  default_value: string | null;
+  describe: string;
+}
+
+/** One target field, and where its value comes from. */
+export interface MappingLine {
+  target_entity: string;
+  target_field: string;
+  source_columns: string[];
+  transform: MappingTransform;
+  null_policy: string;
+  default_value: string | null;
+  platform_supplied: boolean;
+  unmapped_reason: string;
+  glossary_id: string | null;
+  notes: string;
+  confidence: number | null;
+  citations: string[];
+  status: string;
+  describe: string;
+}
+
+/**
+ * One thing wrong, or worth knowing, about a mapping. Three strings, for the
+ * same reason a readiness checklist item has three: a finding that only names
+ * a field gets a placeholder typed into it.
+ */
+export interface MappingFinding {
+  key: string;
+  address: string;
+  severity: string;
+  blocks: boolean;
+  what: string;
+  why_it_matters: string;
+  how_to_fix: string;
+}
+
+export interface Mapping {
+  feed_id: string;
+  version: number;
+  lifecycle_state: string;
+  status: string;
+  contract_version: number | null;
+  citation_id: string;
+  route: string;
+  mapped_count: number;
+  total_count: number;
+  unmapped_count: number;
+  lines: MappingLine[];
+  findings: MappingFinding[];
+  blocking_count: number;
+}
