@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+ui/.next/
+ui/out/
+ui/next-env.d.ts
+
+# Secrets — the secrets pin resolves `secret://name`; the values never land here.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime artifacts
+landing/
+.cinqflow/
+installation-manifest*.json

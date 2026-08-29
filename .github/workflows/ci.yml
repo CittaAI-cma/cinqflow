@@ -1,0 +1,94 @@
+# CINQFLOW CI — the gate set only ever grows.
+#
+# Wave 0 lights the first four rows of the table in
+# memory/03-directives/01-definition-of-done.md. Every later wave adds gates;
+# no wave removes one.
+
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    # Gate: "Core-purity lint (zero vendor imports under core/)" — W0 — proves Law 1, mechanically.
+    name: lint · Law 1 made mechanical
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
+      - name: ruff
+        run: ruff check . && ruff format --check .
+      - name: mypy
+        run: mypy
+      - name: import-linter · the Law-1 contracts
+        run: lint-imports
+      - name: core-purity · URLs, paths, regions, credentials
+        run: python -m conformance.lint_core_purity src/cinqflow/core
+      - name: detect-secrets
+        run: detect-secrets scan --baseline .secrets.baseline
+
+  unit-contract:
+    # Gate: "Full pyramid layers 1-2 on the mock socket (seconds)" — W0 — proves the core's logic on every commit.
+    name: unit + contract · the mock socket
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
+      - name: layers 1-2 — no services running, no credentials present
+        run: pytest -m "unit or contract" -q --cov=cinqflow --cov-report=term-missing
+
+  pipeline:
+    # Gate: "Golden pipelines + invariants on the twin (minutes)" — W0 — proves the whole platform end to end.
+    name: pipeline · golden sets + invariants on the Postgres plane
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: cinqflow
+          POSTGRES_PASSWORD: cinqflow
+          POSTGRES_DB: cinqflow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      CINQFLOW_PROFILE: profiles/ci.yaml
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
+      - name: provision the rung-0.5 plane
+        run: cinqflow install --profile "$CINQFLOW_PROFILE"
+      - name: layers 3-4 — each test in a rolled-back transaction
+        run: pytest -m "pipeline or invariant" -q -n auto
+
+  architecture-drift:
+    # Gate: the atlas and its generated docs cannot diverge.
+    name: architecture-drift · the atlas is the source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - name: the pack is generated, never hand-edited
+        working-directory: ../ours/cinqflow-knowledge-pack
+        continue-on-error: true   # the pack lives outside this repo until it is vendored
+        run: python3 tools/build_knowledge.py --check

@@ -1,0 +1,17 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cinqflow / requirements/formats.txt
+#
+# Parsers beyond delimited/xlsx. Split out because Wave 0 needs none of them and
+# a Wave-0 image should be small enough to argue with.
+#
+# All of these feed core/parsers/, which returns Arrow — so a new format is a
+# new parser and a new golden set, never a new engine.
+# ─────────────────────────────────────────────────────────────────────────────
+
+-r core.txt
+
+hl7apy>=1.3.5                 # ADT v2.x from the 7 HIE feeds via MuleSoft (Wave 3)
+fhir.resources>=8.3,<9.0           # FHIR R4 validation for BCDA / Particle NDJSON (Wave 1+)
+chardet>=7.6                  # the "bad encoding" seeded failure needs a detector in
+                              # order to be REJECTED WITH A STATED REASON rather than
+                              # silently mojibaked into Bronze

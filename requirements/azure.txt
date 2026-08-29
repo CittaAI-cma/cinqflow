@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cinqflow / requirements/azure.txt               RUNGS 3–4 ONLY (client tenant)
+#
+# NEVER installed in the development image. We have no Azure subscription and
+# will never have one — production runs in the client's tenant (chip doc §8.4).
+#
+# THREE packages. That is the whole cost of "port to any Azure subscription" in
+# dependency terms, and it is small because every pin above chose a protocol
+# over a brand.
+# ─────────────────────────────────────────────────────────────────────────────
+
+-r base.txt
+
+azure-identity>=1.25                            # workload identity / managed identity on AKS;
+                                                # federated credentials, no stored secrets
+azure-keyvault-secrets>=4.11                     # secrets pin: resolves the same `secret://name`
+                                                # references the dotenv adapter resolves today
+adlfs>=2026.8.0                                 # storage pin: ADLS Gen2 behind the SAME fsspec
+                                                # adapter as file:// and s3://
+
+# NOT here, on purpose:
+#   • no Azure Monitor OTel exporter — MEASURED, not assumed. As of 2026-08-29 that package
+#                             hard-pins `opentelemetry-sdk~=1.43.0`, which would weld the whole
+#                             platform's OTel version to Microsoft's release cadence — in the
+#                             DEVELOPMENT image, for a package only rungs 3–4 ever use. Instead
+#                             the app emits plain OTLP at every rung and an OpenTelemetry
+#                             Collector (a service in the same Helm chart) forwards to Grafana
+#                             in the twin and to Azure Monitor in the tenant. The observability
+#                             pin therefore costs ZERO Python dependencies at rung 3, and the
+#                             environment difference lives in chart values where it belongs.
+#   • no Entra SDK          — Entra is OIDC; authlib + pyjwt already do it (profile change)
+#   • no Service Bus SDK    — proprietary and unportable; the Postgres queue is unchanged
+#                             at rung 4 (ADR-0014)
+#   • no Redis client       — the cache pin has no implementation until measurement demands one
+#   • no API Management SDK — never design against APIM (atlas FIG 04, traps_avoided)
+#   • no separate LLM SDK   — Azure AI Foundry is reached with `openai` from ai.txt, pointed at
+#                             a tenant endpoint; that is the whole in-tenant switch

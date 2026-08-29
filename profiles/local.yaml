@@ -1,0 +1,55 @@
+# Rung 0.5 — the Postgres data plane. THE DEFAULT DEVELOPMENT PLANE.
+#
+# What has to be running: PostgreSQL 16 + pgvector. That is the entire list.
+#   docs/architecture/plates/05-socket-ladder.md → rungs[0.5]
+
+profile_version: 1
+rung: 0.5
+socket: postgres_plane
+mode: full                      # full | propose_only | observe_only
+
+pins:
+  # ── group A · data plane ──────────────────────────────────────────────────
+  compute_job:    { adapter: pg-compute }
+  orchestration:  { adapter: pg-scheduler }
+  storage:        { adapter: fsspec, root: "file://./landing" }
+  control_tables: { adapter: pg-control, schema: control }
+  catalog:        { adapter: information-schema }
+  sql_query:      { adapter: pg-readonly }
+  identity:       { adapter: mock, scenarios: goldensets/reference/verato-scenarios.yaml }
+  legacy_readonly: { adapter: none }          # Wave 5 only; removed at cutover
+
+  # ── group B · platform ────────────────────────────────────────────────────
+  metadata_db:    { dsn: "secret://pg-dsn" }
+  queue:          { adapter: pg-skip-locked }
+  cache:          { adapter: none }           # ADR-0014: no implementation until measured
+  authn:          { adapter: static, users: profiles/dev-users.yaml }
+  secrets:        { adapter: dotenv, path: ".env" }
+  llm:
+    adapter: openai-compatible
+    endpoint: "secret://llm-endpoint"
+    api_key: "secret://llm-key"
+    routing:
+      small: "secret://llm-model-small"       # classify · extract · rerank
+      large: "secret://llm-model-large"       # generate · reason
+    budgets:
+      per_run_usd: 0.25
+      per_agent_per_day_usd: 5.00
+    pin_versions: true                        # a floating model version is an unpinned experiment
+  vector:         { adapter: pgvector, dimensions: 3072 }   # provisioned in W0, populated in W1
+  phi_scrub:      { adapter: presidio, model: en_core_web_lg }
+  notification:   { adapter: console }
+  observability:  { adapter: otlp, endpoint: "http://localhost:4317" }
+  http_edge:      { adapter: uvicorn, host: "127.0.0.1", port: 8000 }
+  agent_runtime:  { adapter: inproc }         # langgraph seat, unpopulated until Wave 2
+
+# Landing folder layout is a platform constant, not an environment difference:
+#   /<domain>/<source_system>/<feed>/{incoming|processed|rejected|archive}/<business_date>/
+landing:
+  layout: "{domain}/{source_system}/{feed}/{folder}/{business_date}"
+  folders: [incoming, processed, rejected, archive, parked]
+
+agents:
+  pipeline_insight:
+    risk_class: R0                            # observe — always allowed, audited
+    tool_whitelist: read_only                 # NO write tool, at any confidence, in any environment

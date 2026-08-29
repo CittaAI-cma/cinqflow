@@ -1,0 +1,47 @@
+# Rung 0.5 — the CI plane. Identical to local.yaml except where CI must be stricter.
+#
+# The differences are all assertions, not conveniences:
+#   • the LLM pin is `scripted` by default — Lanes 1 and 2 hold NO credentials,
+#     so a test that reaches a real endpoint fails loudly instead of quietly
+#     passing. The `agent-evals` job overrides this pin, and ONLY that job.
+#   • cost caps are asserted, not advisory.
+
+profile_version: 1
+rung: 0.5
+socket: postgres_plane
+mode: full
+
+pins:
+  compute_job:    { adapter: pg-compute }
+  orchestration:  { adapter: pg-scheduler }
+  storage:        { adapter: fsspec, root: "file://./landing" }
+  control_tables: { adapter: pg-control, schema: control }
+  catalog:        { adapter: information-schema }
+  sql_query:      { adapter: pg-readonly }
+  identity:       { adapter: mock, scenarios: goldensets/reference/verato-scenarios.yaml }
+  legacy_readonly: { adapter: none }
+  metadata_db:    { dsn: "postgresql://cinqflow:cinqflow@localhost:5432/cinqflow" }
+  queue:          { adapter: pg-skip-locked }
+  cache:          { adapter: none }
+  authn:          { adapter: static, users: profiles/dev-users.yaml }
+  secrets:        { adapter: env }
+  llm:            { adapter: scripted }       # overridden ONLY by the agent-evals job
+  vector:         { adapter: pgvector, dimensions: 3072 }
+  phi_scrub:      { adapter: presidio, model: en_core_web_lg }
+  notification:   { adapter: console }
+  observability:  { adapter: noop }
+  http_edge:      { adapter: testclient }
+  agent_runtime:  { adapter: inproc }
+
+landing:
+  layout: "{domain}/{source_system}/{feed}/{folder}/{business_date}"
+  folders: [incoming, processed, rejected, archive, parked]
+
+agents:
+  pipeline_insight:
+    risk_class: R0
+    tool_whitelist: read_only
+
+assertions:
+  cost_caps_enforced: true       # a prompt change that doubles spend fails CI like a broken unit test
+  lanes_1_2_credential_free: true

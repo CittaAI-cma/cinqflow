@@ -1,0 +1,40 @@
+# Rung 0 — the mock socket. Nothing runs but Python.
+#
+# Lanes 1 and 2 hold NO live credentials, so a misclassified test fails loudly.
+#   docs/architecture/INVARIANTS.md, testing
+
+profile_version: 1
+rung: 0
+socket: mock
+mode: full
+
+pins:
+  compute_job:    { adapter: mock }
+  orchestration:  { adapter: mock }
+  storage:        { adapter: memfs }
+  control_tables: { adapter: memstore }
+  catalog:        { adapter: dict }
+  sql_query:      { adapter: canned }
+  identity:       { adapter: mock }
+  legacy_readonly: { adapter: none }
+  metadata_db:    { adapter: sqlite, dsn: ":memory:" }
+  queue:          { adapter: memq }
+  cache:          { adapter: none }
+  authn:          { adapter: static, users: profiles/dev-users.yaml }
+  secrets:        { adapter: mem }
+  llm:            { adapter: scripted }       # NO endpoint, NO key — by construction
+  vector:         { adapter: list }
+  phi_scrub:      { adapter: patterns }
+  notification:   { adapter: console }
+  observability:  { adapter: noop }
+  http_edge:      { adapter: testclient }
+  agent_runtime:  { adapter: inproc }
+
+landing:
+  layout: "{domain}/{source_system}/{feed}/{folder}/{business_date}"
+  folders: [incoming, processed, rejected, archive, parked]
+
+agents:
+  pipeline_insight:
+    risk_class: R0
+    tool_whitelist: read_only

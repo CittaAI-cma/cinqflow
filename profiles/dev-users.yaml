@@ -1,0 +1,30 @@
+# The `static` authn adapter's user table — rungs 0 and 0.5 ONLY.
+#
+# This is a STAND-IN for an OIDC provider, not a credential store: it holds no
+# passwords, because CF-V0-E2-01's first "don't" is "store any credentials of
+# its own". It maps a dev identity to the same claims Keycloak (rung 1) and
+# Entra ID (rung 3) will emit. Same code path; only the profile moves.
+
+users:
+  - subject: "dev-engineer@cinqcare.test"
+    name: "Arun Menon"
+    roles: [engineer]
+    scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
+
+  - subject: "dev-analyst@cinqcare.test"
+    name: "Priya Nair"
+    roles: [read_only]
+    scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
+
+  - subject: "dev-admin@cinqcare.test"
+    name: "Steve Mathews"
+    roles: [administrator]
+    scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
+
+  # The exception case CF-V0-E2-01 requires: a real person in NO CINQFLOW group.
+  # They must reach a clear "no access assigned" page — never a broken or empty
+  # application — and the attempt must be logged.
+  - subject: "dev-nogroup@cinqcare.test"
+    name: "Unassigned User"
+    roles: []
+    scopes: { domains: [], feeds: [], environments: [] }

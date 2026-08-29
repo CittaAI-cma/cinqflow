@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cinqflow"
+version = "0.1.0"
+description = "CINQFLOW — a metadata-driven healthcare data platform with a governed AI layer"
+requires-python = ">=3.12"
+
+[project.scripts]
+cinqflow = "cinqflow.installer.cli:app"
+
+# Dependencies are NOT declared here. They live in requirements/*.txt, layered by
+# pin and by rung, because that layering IS the architecture: requirements/azure.txt
+# and requirements/databricks.txt are physically absent from the dev image, and a
+# package that is not installed cannot be imported by accident. See requirements.txt.
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "conformance"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+markers = [
+    "unit:       pyramid layer 1 — a transform, parser or validator, in isolation",
+    "contract:   pyramid layer 2 — one suite, every adapter of a port",
+    "pipeline:   pyramid layer 3 — a golden pipeline: known input, byte-exact output",
+    "invariant:  pyramid layer 4 — a platform law, as a property test",
+    "evaluation: pyramid layer 5 — an AI eval on held-out goldens",
+    "lane1:      AI lane 1 — scripted mock. Proves machinery. NO credentials.",
+    "lane2:      AI lane 2 — recorded cassettes. Proves wiring. NO credentials.",
+    "lane3:      AI lane 3 — the real endpoint. The ONLY source of a quality claim.",
+    "twin:       requires the rung-1 local twin (compose)",
+    "postgres:   requires the rung-0.5 Postgres data plane",
+]
+filterwarnings = ["error::DeprecationWarning:cinqflow.*"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "conformance"]
+target-version = "py312"
+# The impure fixtures are SPECIMENS, not code. They exist to be rejected by
+# conformance/lint_core_purity.py; linting them would be linting the evidence.
+extend-exclude = ["tests/fixtures/impure", "ui"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "TID", "PTH", "RUF", "S", "N", "C4", "DTZ"]
+ignore = ["S101"]  # assert is how tests speak
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "PTH"]
+"conformance/**" = ["S", "PTH"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["cinqflow"]
+strict = true
+warn_unreachable = true
+
+exclude = ["tests/fixtures/impure/"]
+
+[[tool.mypy.overrides]]
+module = ["pyarrow.*", "python_calamine.*", "presidio_analyzer.*", "presidio_anonymizer.*"]
+ignore_missing_imports = true

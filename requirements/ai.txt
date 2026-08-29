@@ -1,0 +1,61 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cinqflow / requirements/ai.txt
+#
+# The intelligence plane. Real from Wave 0 (ADR-0003), safe because development
+# holds zero PHI (ADR-0016).
+#
+# The single most consequential choice in this file is the MODEL FAMILY, and it
+# is made on portability grounds rather than preference: pick the family the
+# target tenant will actually run, so that rung 3 is a profile line and
+# CF-V4-E16-08 becomes a VERIFICATION rather than a re-tune.
+# ─────────────────────────────────────────────────────────────────────────────
+
+-r base.txt
+
+# ── llm pin · rungs 0–2 · the subscription adapter ───────────────────────────
+# One SDK covers both verbs (complete + embed) and both routing classes
+# (small ↔ large), and Azure AI Foundry serves the same models behind the same
+# request shape. The rung-3 swap is therefore endpoint + credential, and the
+# re-baseline measures hosting differences rather than a model change.
+#
+# Routing, budgets, metering, audit, prompt-hash logging and refusal of
+# undeclared endpoints are OURS (CF-V0-E16-01). This SDK is a transport.
+openai>=3.6,<4.0
+
+# ── llm pin · second adapter seat · the Wave-1 bake-off ──────────────────────
+# The eval harness makes model choice a measurement, not a preference. Keeping
+# a second family behind the same port costs one thin adapter and lets Lane 3
+# answer "which model is actually better on OUR golden sets" once, with numbers.
+# Note the trade: this family is not served by Foundry, so choosing it makes the
+# rung-3 completion swap a genuine model change.
+anthropic>=1.2,<2.0
+
+# ── llm pin · the offline lane ───────────────────────────────────────────────
+# ONNX runtime, no credentials, no egress. Lane 1 CI and an air-gapped twin get
+# embeddings and reranking without a key — which is what lets Lanes 1 and 2 hold
+# no live credentials, so a misclassified test fails loudly (FIG 13).
+fastembed>=0.8
+
+# ── phi_scrub pin ────────────────────────────────────────────────────────────
+# Presidio is the scrubbing engine in BOTH worlds — identical software locally
+# and in the tenant, so there is no behavioural gap to discover late (ADR-0016).
+#
+# The spaCy model is installed by the installer and the Dockerfile, pinned to
+# the spaCy minor version, NOT listed here as a wheel URL (a URL pin silently
+# breaks on a spaCy minor bump):
+#
+#     python -m spacy download en_core_web_lg
+#
+# Use en_core_web_lg EVERYWHERE, including CI. The "100% recall on
+# glossary-flagged PHI" gate is meaningless if CI measures a smaller model than
+# production runs.
+presidio-analyzer>=2.2.364
+presidio-anonymizer>=2.2.364
+spacy>=3.8,<4.0
+
+# ── knowledge plane · layout-aware parsing before chunking (Wave 1) ──────────
+# "parse_layout_aware" in FIG 12 is load-bearing: a payer spec chunked without
+# its headings retrieves as soup and cites nothing openable.
+pypdf>=6.16
+python-docx>=1.2
+markdown-it-py>=4.2

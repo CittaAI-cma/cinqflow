@@ -1,0 +1,79 @@
+# The Law-1 contracts.
+#
+#   "core imports no vendor SDK, no URL, no path, no credential"
+#   — docs/architecture/plates/03-chip-anatomy.md
+#
+# Operationally sharpened, and therefore checkable without judgement calls:
+#
+#       core/ PERFORMS NO I/O.
+#
+# Nothing core/ imports may open a socket, a file handle or a database
+# connection. Parsers receive bytes handed to them by the storage adapter and
+# return an Arrow table. That is why the forbidden list below needs no argument
+# about what counts as a "vendor" library.
+#
+# The half of Law 1 that is NOT an import — hardcoded URLs, absolute paths,
+# credentials, region names — is caught by conformance/lint_core_purity.py.
+
+[importlinter]
+root_packages =
+    cinqflow
+include_external_packages = True
+
+[importlinter:contract:core-does-no-io]
+name = core performs no I/O and imports no vendor SDK
+type = forbidden
+source_modules =
+    cinqflow.core
+forbidden_modules =
+    sqlalchemy
+    psycopg
+    httpx
+    requests
+    fsspec
+    s3fs
+    adlfs
+    boto3
+    openai
+    anthropic
+    fastembed
+    azure
+    databricks
+    pyspark
+    delta
+    redis
+    authlib
+    jwt
+    opentelemetry
+    alembic
+    presidio_analyzer
+    presidio_anonymizer
+    asyncssh
+    langgraph
+    langchain_core
+    langsmith
+    fastapi
+    uvicorn
+    typer
+    socket
+    subprocess
+    urllib
+    pathlib
+
+[importlinter:contract:graphs-are-data]
+name = agent graphs are declared in core, never bound to a runtime
+type = forbidden
+source_modules =
+    cinqflow.core.agents
+forbidden_modules =
+    cinqflow.adapters
+    langgraph
+
+[importlinter:contract:layers]
+name = api/workers/installer/simulator -> adapters -> ports -> core
+type = layers
+layers =
+    cinqflow.api : cinqflow.workers : cinqflow.installer : cinqflow.simulator
+    cinqflow.adapters
+    cinqflow.ports
+    cinqflow.core
