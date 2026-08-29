@@ -22,13 +22,14 @@ without severity either loses good data or admits bad data.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum, unique
 
 from cinqflow.core.citations import CitationId, CitationKind
+from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState, ObjectType
 from cinqflow.core.schema_spec import TypeName
 
 
@@ -315,4 +316,125 @@ def not_null(
         columns=(column,),
         predicate=lambda row: str(row.get(column) or "").strip() != "",
         glossary_id=glossary_id,
+    )
+
+
+# ── contracts and rules as governed objects ──────────────────────────────────
+#
+# A contract and its rules travel the same lifecycle as a feed, for the same
+# reason: the engine reads PUBLISHED metadata, so an unapproved contract cannot
+# be enforced and an unapproved rule cannot quarantine anybody's rows. Storing
+# them as governed objects is what makes "which contract version was this batch
+# loaded against?" answerable a year later.
+
+
+def contract_as_governed(
+    contract: SchemaContract,
+    *,
+    author: Actor,
+    created_ts: datetime | None = None,
+) -> GovernedObject:
+    return GovernedObject(
+        object_type=ObjectType.CONTRACT,
+        object_id=contract.feed_id,
+        # The contract already carries its version. Accepting a second one here
+        # would let a caller store v3's columns under v1's number.
+        version=contract.version,
+        lifecycle_state=LifecycleState.DRAFT,
+        created_by=author,
+        created_ts=created_ts or datetime.now(UTC),
+        body={
+            "key_columns": list(contract.key_columns),
+            "columns": [
+                {
+                    "name": column.name,
+                    "type": column.type.value,
+                    "nullable": column.nullable,
+                    "source_name": column.source_name,
+                    "is_phi": column.is_phi,
+                    "precision": column.precision,
+                    "scale": column.scale,
+                    "date_formats": list(column.date_formats),
+                }
+                for column in contract.columns
+            ],
+        },
+    )
+
+
+def from_governed(obj: GovernedObject) -> SchemaContract:
+    if obj.object_type is not ObjectType.CONTRACT:
+        raise ValueError(f"{obj.object_type} is not a schema contract")
+    return SchemaContract(
+        feed_id=obj.object_id,
+        version=obj.version,
+        columns=tuple(
+            ContractColumn(
+                name=column["name"],
+                type=TypeName(column["type"]),
+                nullable=bool(column.get("nullable", True)),
+                source_name=column.get("source_name"),
+                is_phi=bool(column.get("is_phi", False)),
+                precision=column.get("precision"),
+                scale=column.get("scale"),
+                date_formats=tuple(column.get("date_formats", ())),
+            )
+            for column in obj.body.get("columns", [])
+        ),
+        key_columns=tuple(obj.body.get("key_columns", ())),
+    )
+
+
+def rules_as_governed(
+    feed_id: str,
+    rules: Sequence[DqRule],
+    *,
+    author: Actor,
+    version: int = 1,
+    created_ts: datetime | None = None,
+) -> GovernedObject:
+    return GovernedObject(
+        object_type=ObjectType.DQ_RULE,
+        object_id=feed_id,
+        version=version,
+        lifecycle_state=LifecycleState.DRAFT,
+        created_by=author,
+        created_ts=created_ts or datetime.now(UTC),
+        body={
+            "rules": [
+                {
+                    "rule_id": rule.rule_id,
+                    "name": rule.name,
+                    "description": rule.description,
+                    "severity": rule.severity.value,
+                    "columns": list(rule.columns),
+                    "glossary_id": rule.glossary_id,
+                }
+                for rule in rules
+            ]
+        },
+    )
+
+
+def rules_from_governed(obj: GovernedObject) -> tuple[DqRule, ...]:
+    """Rebuild the rules' METADATA. The predicate is deliberately not restored.
+
+    A predicate is executable code; a governed object is data. Rehydrating a
+    callable from a registry row would mean the registry could change what runs
+    without anyone approving code — so the reconstructed rules describe
+    themselves for explanation and citation, and the pipeline is handed real
+    predicates by the compiler.
+    """
+    if obj.object_type is not ObjectType.DQ_RULE:
+        raise ValueError(f"{obj.object_type} is not a rule set")
+    return tuple(
+        DqRule(
+            rule_id=rule["rule_id"],
+            name=rule.get("name", ""),
+            description=rule.get("description", ""),
+            severity=Severity(rule.get("severity", "low")),
+            columns=tuple(rule.get("columns", ())),
+            glossary_id=rule.get("glossary_id"),
+        )
+        for rule in obj.body.get("rules", [])
     )

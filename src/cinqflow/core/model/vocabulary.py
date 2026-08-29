@@ -128,6 +128,28 @@ class BatchState(StrEnum):
     WAITING_DEPENDENCY = "WAITING_DEPENDENCY"
     BLOCKED = "BLOCKED"
 
+    @property
+    def status_word(self) -> StatusWord:
+        """What a user sees. The richer machine stays internal.
+
+        The mapping lives HERE, once, so a screen, a tool result and an agent's
+        answer cannot disagree about whether a RESTARTED batch is Processing.
+        Eight internal states, seven public words — and no eighth word is
+        reachable, because this function is total over the enum.
+        """
+        return {
+            BatchState.RECEIVED: StatusWord.RECEIVED,
+            BatchState.VALIDATED: StatusWord.PROCESSING,
+            BatchState.IN_PROGRESS: StatusWord.PROCESSING,
+            BatchState.RESTARTED: StatusWord.PROCESSING,
+            BatchState.COMPLETED: StatusWord.COMPLETED,
+            BatchState.FAILED: StatusWord.NEEDS_ATTENTION,
+            BatchState.BLOCKED: StatusWord.NEEDS_ATTENTION,
+            # Nothing has gone wrong yet — an upstream feed simply has not
+            # arrived. Calling that Needs Attention trains people to ignore it.
+            BatchState.WAITING_DEPENDENCY: StatusWord.EXPECTED,
+        }[self]
+
 
 @unique
 class FileState(StrEnum):
