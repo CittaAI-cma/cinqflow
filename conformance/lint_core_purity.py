@@ -119,8 +119,14 @@ URL_SCHEME = re.compile(
     r"|mysql|mongodb|redis|jdbc|grpc|wss?)://",
     re.IGNORECASE,
 )
+# Filesystem roots only. Deliberately NOT a generic "starts with /" rule: core/
+# legitimately carries UI routes ("/data/intake/feed/..."), which are domain
+# logic and identical at every rung, whereas "/mnt/adls/raw" is a mount point
+# that differs per environment and therefore belongs in the connection profile.
+# The distinguishing feature is the ROOT, so the root is what is matched.
 ABSOLUTE_PATH = re.compile(
-    r"(?:^|[\s\"'=(,])(?:/(?:mnt|var|etc|opt|usr|home|Users|dbfs|tmp|data)/|[A-Za-z]:\\\\)"
+    r"(?:^|[\s\"'=(,])(?:/(?:mnt|var|etc|opt|usr|home|Users|dbfs|tmp|srv|proc|dev|"
+    r"Volumes|volumes|databricks|lakehouse)/|[A-Za-z]:\\\\|\\\\\\\\[A-Za-z])"
 )
 # Azure regions the deployment plate names, plus the families they belong to.
 REGION_NAME = re.compile(

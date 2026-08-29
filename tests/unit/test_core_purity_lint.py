@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conformance.lint_core_purity import Violation, lint_path
+from conformance.lint_core_purity import Violation, lint_path, lint_source
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -70,3 +70,25 @@ def test_the_real_core_package_is_pure() -> None:
     core = Path(__file__).parent.parent.parent / "src" / "cinqflow" / "core"
     violations = lint_path(core)
     assert violations == [], "\n".join(str(v) for v in violations)
+
+
+@pytest.mark.unit
+def test_a_ui_route_is_not_a_filesystem_path() -> None:
+    """core/ carries the citation-to-route map, and must be allowed to.
+
+    "/data/intake/feed" is identical at rung 0 and rung 4, so it is not
+    environment difference. "/mnt/adls/raw" differs per environment and belongs
+    in the connection profile. The lint distinguishes them by ROOT.
+    """
+    assert lint_path(FIXTURES / "pure" / "routes.py") == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mount", ["/mnt/adls/raw", "/dbfs/landing", "/Volumes/cat/schema/vol", "/var/lib/cinqflow"]
+)
+def test_a_mount_point_in_core_is_still_refused(mount: str) -> None:
+    source = f'LANDING = "{mount}"\n'
+    assert "hardcoded-path" in _kinds(lint_source(source, "core/example.py")), (
+        "a mount point differs per environment; it belongs in the connection profile"
+    )
