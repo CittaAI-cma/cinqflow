@@ -101,6 +101,8 @@ def test_a_citation_is_a_ui_route_and_that_is_the_whole_point() -> None:
     )
     assert parse("rule:DQ-002").route == "/data/intake/rule/DQ-002"
     assert parse("term:member-date-of-birth").route == "/data/intake/glossary/member-date-of-birth"
+    # CF-V1-E5-01. A column is a PANEL on the profile, not a page of its own.
+    assert parse("profile:sha256-abc#DOB").route == "/data/intake/profile/sha256-abc?column=DOB"
 
 
 @pytest.mark.unit
@@ -117,6 +119,7 @@ def test_every_kind_has_a_route_so_no_citation_can_be_a_dead_end() -> None:
         CitationKind.FILE: "file:abc",
         CitationKind.RULE: "rule:DQ-001",
         CitationKind.TERM: "term:a-term",
+        CitationKind.PROFILE: "profile:sha256-abc",
     }
     assert set(samples) == set(CitationKind), "a kind with no sample is a kind with no test"
     for raw in samples.values():

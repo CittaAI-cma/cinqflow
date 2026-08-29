@@ -829,6 +829,52 @@ KNOWLEDGE_SCHEMA = Schema(
 )
 
 
+PROFILING_SCHEMA = Schema(
+    name="profiling",
+    description=(
+        "CF-V1-E5-01 — computed facts about sample files. BESIDE the client's control "
+        "framework, never inside it (ADR-0013). A profile is an OBSERVATION, not a governed "
+        "object: it is never approved, only attached as evidence to the things that are."
+    ),
+    tables=(
+        Table(
+            name="file_profile",
+            comment=(
+                "One profiling run's facts. `profile_id` IS the fingerprint of those facts, "
+                "so re-profiling an unchanged file writes the same row rather than a second "
+                "one — which is what makes the replay proof a database property. "
+                "`profiled_ts` is deliberately OUTSIDE the fingerprint: evidence that has "
+                "not changed must not look newer for having been recomputed."
+            ),
+            columns=(
+                Column("profile_id", TypeName.STRING, nullable=False),
+                _FEED,
+                Column("source_key", TypeName.STRING, nullable=False),
+                Column("source_fingerprint", TypeName.STRING, nullable=False),
+                Column("profiler_version", TypeName.STRING, nullable=False),
+                Column("readable", TypeName.BOOL, nullable=False),
+                Column("would_load", TypeName.BOOL, nullable=False),
+                Column("row_count", TypeName.INT64, nullable=False),
+                Column("column_count", TypeName.INT64, nullable=False),
+                Column("sampled", TypeName.BOOL, nullable=False),
+                # The whole profile, so a stored profile round-trips exactly.
+                # A stale-evidence gate comparing a full profile against a
+                # partial one would call the difference a change.
+                Column("facts", TypeName.JSON, nullable=False),
+                Column("profiled_by", TypeName.STRING, nullable=False),
+                Column("profiled_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("profile_id", "feed_id"),
+            indexes=(("feed_id", "profiled_ts"), ("source_fingerprint",)),
+            # A profile is a computed fact. Correcting one means profiling
+            # again, which produces a new id — so there is no edit path, for
+            # the same reason the audit log has no delete path.
+            append_only=True,
+        ),
+    ),
+)
+
+
 def all_schemas() -> tuple[Schema, ...]:
     """Every schema the installer provisions, in dependency order.
 
@@ -850,4 +896,5 @@ def all_schemas() -> tuple[Schema, ...]:
         QUEUE_SCHEMA,
         PROPOSALS_SCHEMA,
         KNOWLEDGE_SCHEMA,
+        PROFILING_SCHEMA,
     )

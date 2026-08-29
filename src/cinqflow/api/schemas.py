@@ -381,3 +381,159 @@ class NavigationOut(BaseModel):
 
     active_wave: int
     destinations: list[DestinationOut]
+
+
+# ── CF-V1-E5-01 · the deterministic profiler ─────────────────────────────────
+class TypeCandidateOut(BaseModel):
+    """A type and the count that fits it. Both integers travel, so a reader can
+    do the division rather than trust a rounded share."""
+
+    type: str
+    matched: int
+    considered: int
+    share: float
+
+
+class DateFormatOut(BaseModel):
+    label: str
+    matched: int
+
+
+class ColumnProfileOut(BaseModel):
+    """One column's computed facts.
+
+    `narrowest_type` is null where the evidence does not determine one — two
+    types fitting equally is CF-V1-E5-02's "needs your input", and a screen
+    that showed a guess there would be inventing the answer the story exists to
+    refuse.
+    """
+
+    name: str
+    position: int
+    row_count: int
+    null_count: int
+    null_like_count: int
+    distinct_count: int
+    distinct_is_exact: bool
+    is_unique: bool | None
+    min_length: int
+    max_length: int
+    padded_count: int
+    typed_cell_count: int
+    narrowest_type: str | None
+    type_candidates: list[TypeCandidateOut]
+    date_formats: list[DateFormatOut]
+    observed_precision: int | None
+    observed_scale: int | None
+    examples: list[str]
+    top_values: list[list[Any]]
+    min_value: str | None
+    max_value: str | None
+    values_redacted: bool
+    citation_id: str
+    route: str
+
+
+class FindingOut(BaseModel):
+    quirk: str
+    detail: str
+    occurrences: int
+    first_lines: list[int]
+    columns: list[str]
+    blocks_ingestion: bool
+
+
+class KeyCandidateOut(BaseModel):
+    columns: list[str]
+    distinct_count: int
+    populated_rows: int
+    null_rows: int
+    duplicate_values: int
+    is_unique: bool
+    examples: list[list[Any]]
+    values_redacted: bool
+
+
+class RefusalOut(BaseModel):
+    """Why nothing could be profiled, and what to ask the payer for.
+
+    `ask_the_payer` is its own field because it is the only part the BA acts
+    on, and a screen should be able to show it alone.
+    """
+
+    reason: str
+    explanation: str
+    ask_the_payer: str
+
+
+class FileStructureOut(BaseModel):
+    file_format: str
+    encoding: str
+    declared_encoding: str
+    byte_order_mark: str | None
+    delimiter: str | None
+    quote_char: str | None
+    line_ending: str
+    column_count: int
+    data_rows: int
+    bytes_total: int
+    bytes_read: int
+    sampled: bool
+
+
+class KeySearchOut(BaseModel):
+    """What was examined and what was not. A bound nobody states reads as
+    completeness."""
+
+    single_columns_examined: int
+    composite_width: int
+    pairs_examined: int
+    pairs_skipped: int
+    rows_retained: int
+    excluded_columns: list[str]
+    note: str
+
+
+class FileProfileOut(BaseModel):
+    """The profile, as the wizard renders it.
+
+    `would_load` is the answer step 1 owes the BA: this file profiled fine, and
+    the pipeline will still refuse it — here is why, in plain language, weeks
+    before publication rather than at it.
+    """
+
+    profile_id: str
+    profiler_version: str
+    feed_id: str
+    source_key: str
+    source_fingerprint: str
+    readable: bool
+    would_load: bool
+    refusal: RefusalOut | None
+    structure: FileStructureOut
+    columns: list[ColumnProfileOut]
+    findings: list[FindingOut]
+    blockers: list[FindingOut]
+    key_candidates: list[KeyCandidateOut]
+    key_search: KeySearchOut
+    duplicate_rows: int
+    duplicate_groups: int
+    values_redacted: bool
+    profiled_by: str
+    profiled_ts: datetime
+    citation_id: str
+    route: str
+
+
+class ProfileIn(BaseModel):
+    """Profile a file that is already in the landing zone.
+
+    The key rather than an upload body: a file the platform has not landed has
+    not been fingerprinted, registered or size-checked, and profiling it would
+    be the second door landing controls exist to prevent.
+    """
+
+    file_key: str
+    file_format: str = "csv"
+    encoding: str = "utf-8"
+    delimiter: str | None = None

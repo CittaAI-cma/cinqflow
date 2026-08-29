@@ -121,7 +121,9 @@ def test_the_provisioned_schemas_are_the_plate_s_seven_plus_the_platform_s() -> 
     `core/registry/wave0.py` already declared by name — registry.governed_object,
     governance.audit_ledger, audit.agent_action — and Wave 1's three additive
     schemas: `queue` (ADR-0014's Postgres queue + scheduler state), `proposals`
-    (the universal HITL object), `knowledge` (the K2 store, FIG 12)."""
+    (the universal HITL object), `knowledge` (the K2 store, FIG 12) and
+    `profiling` (CF-V1-E5-01's computed evidence — BESIDE the client's control
+    framework, never inside it, per ADR-0013)."""
     assert [s.name for s in all_schemas()] == [
         "landing_ctl",
         "control",
@@ -136,6 +138,7 @@ def test_the_provisioned_schemas_are_the_plate_s_seven_plus_the_platform_s() -> 
         "queue",
         "proposals",
         "knowledge",
+        "profiling",
     ]
 
 

@@ -82,7 +82,7 @@ def _parse_delimited(content: bytes, *, encoding: str, format_name: str) -> Pars
         raise ParseError("the file is empty")
 
     try:
-        text = content.decode(encoding)
+        text = content.decode(_bom_aware(content, encoding))
     except UnicodeDecodeError as exc:
         # Incident, seeded: "bad encoding". REJECTED WITH A STATED REASON,
         # never silently mojibaked into Bronze where it becomes permanent.
@@ -120,6 +120,36 @@ def _parse_delimited(content: bytes, *, encoding: str, format_name: str) -> Pars
     return _to_arrow(columns, rows)
 
 
+#: The byte-order marks a payer export tool actually emits, and the codec that
+#: consumes each one. Excel's "CSV UTF-8" writes the first of these on every
+#: file it saves, so this is an ordinary delivery, not an exotic one.
+_BOMS: tuple[tuple[bytes, str], ...] = (
+    (b"\xef\xbb\xbf", "utf-8-sig"),
+    (b"\xff\xfe", "utf-16"),
+    (b"\xfe\xff", "utf-16"),
+)
+
+
+def _bom_aware(content: bytes, encoding: str) -> str:
+    """Swap in the BOM-consuming codec when the file starts with one.
+
+    Without this, a BOM survives the decode and the FIRST COLUMN'S NAME becomes
+    `﻿MemberID` — which `str.strip()` does not remove. Drift detection then
+    reports the contracted first column as REMOVED and an unknown column as
+    ADDED, and the batch fails on a file that is perfectly good. The profiler
+    reports the BOM either way (CF-V1-E5-01), because a payer who starts
+    sending one is a fact worth knowing; but the platform reading it correctly
+    is not something a BA should have to arrange.
+    """
+    for mark, codec in _BOMS:
+        if content.startswith(mark):
+            # Only override a utf-8 request. A feed declared cp1252 that
+            # arrives with a utf-16 BOM is a genuine disagreement, and
+            # silently switching codecs would hide it.
+            return codec if encoding.lower().replace("_", "-") in {"utf-8", "utf8"} else encoding
+    return encoding
+
+
 def _sniff_delimiter(text: str) -> str:
     """Comma, pipe or tab — the three the estate actually uses.
 
@@ -151,7 +181,7 @@ def _parse_spreadsheet(content: bytes) -> ParsedFile:
 
     columns = tuple(str(cell).strip() for cell in sheet[0])
     rows = [
-        [_cell_to_text(cell) for cell in row]
+        [cell_to_text(cell) for cell in row]
         for row in sheet[1:]
         if any(str(cell).strip() for cell in row)
     ]
@@ -163,7 +193,7 @@ def _parse_spreadsheet(content: bytes) -> ParsedFile:
     return _to_arrow(columns, rows)
 
 
-def _cell_to_text(cell: object) -> str:
+def cell_to_text(cell: object) -> str:
     """Every value becomes a string, losslessly where it matters.
 
     A float that is a whole number is written without its ".0": spreadsheet

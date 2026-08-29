@@ -9,7 +9,11 @@ from typing import Any
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 from cinqflow.ports import port
-from cinqflow.ports.metadata_db import ConcurrentVersionError, ObjectNotFoundError
+from cinqflow.ports.metadata_db import (
+    ConcurrentVersionError,
+    FileProfileRecord,
+    ObjectNotFoundError,
+)
 
 
 @port("metadata_db", "mock")
@@ -25,6 +29,7 @@ class MemMetadataDb:
         self._objects: dict[tuple[ObjectType, str], list[GovernedObject]] = {}
         self._audit: list[AuditEntry] = []
         self._agent_actions: list[AgentAction] = []
+        self._profiles: dict[tuple[str, str], FileProfileRecord] = {}
 
     def save(self, obj: GovernedObject) -> GovernedObject:
         versions = self._objects.setdefault((obj.object_type, obj.object_id), [])
@@ -104,4 +109,39 @@ class MemMetadataDb:
         ]
         # Oldest first: an agent's actions are a NARRATIVE, and reading a
         # trace backwards is how a reviewer misattributes a refusal.
+        return tuple(found[:limit])
+
+    # ── computed evidence · CF-V1-E5-01 ──────────────────────────────────────
+    def record_profile(self, record: FileProfileRecord) -> FileProfileRecord:
+        """First write wins, exactly as the Postgres adapter's ON CONFLICT DO
+        NOTHING does. A mock that overwrote would let the real store's
+        idempotence go untested by every unit test above it."""
+        key = (record.profile_id, record.feed_id)
+        return self._profiles.setdefault(key, record)
+
+    def get_profile(self, profile_id: str, feed_id: str) -> FileProfileRecord:
+        found = self._profiles.get((profile_id, feed_id))
+        if found is None:
+            raise ObjectNotFoundError(f"no profile {profile_id!r} for feed {feed_id!r}")
+        return found
+
+    def list_profiles(
+        self,
+        *,
+        feed_id: str | None = None,
+        profile_id: str | None = None,
+        source_fingerprint: str | None = None,
+        limit: int = 50,
+    ) -> Sequence[FileProfileRecord]:
+        found = [
+            record
+            for record in self._profiles.values()
+            if (feed_id is None or record.feed_id == feed_id)
+            and (profile_id is None or record.profile_id == profile_id)
+            and (
+                source_fingerprint is None
+                or record.profile.source_fingerprint == source_fingerprint
+            )
+        ]
+        found.sort(key=lambda r: (r.profiled_ts, r.profile_id), reverse=True)
         return tuple(found[:limit])

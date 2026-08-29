@@ -35,8 +35,13 @@ from cinqflow.core.model.governed import (
     ObjectType,
 )
 from cinqflow.core.model.vocabulary import ActorType
+from cinqflow.core.profiling import FileProfile
 from cinqflow.ports import port
-from cinqflow.ports.metadata_db import ConcurrentVersionError, ObjectNotFoundError
+from cinqflow.ports.metadata_db import (
+    ConcurrentVersionError,
+    FileProfileRecord,
+    ObjectNotFoundError,
+)
 
 
 def _actor(subject: str, actor_type: str, name: str | None) -> Actor:
@@ -100,6 +105,23 @@ def _audit_entry(row: tuple[Any, ...]) -> AuditEntry:
         from_state=LifecycleState(from_state) if from_state else None,
         to_state=LifecycleState(to_state) if to_state else None,
         detail=detail or "",
+    )
+
+
+def _profile_record(row: tuple[Any, ...]) -> FileProfileRecord:
+    """Rebuild from the stored JSONB.
+
+    The facts column is the whole profile, so what comes back is what went in
+    — including the value-bearing fields, which is why the API redacts on the
+    way OUT by role rather than on the way in. Storing a redacted profile would
+    make the evidence unrecoverable for the role that is allowed to see it.
+    """
+    feed_id, facts, profiled_by, profiled_ts = row
+    return FileProfileRecord(
+        feed_id=feed_id,
+        profile=FileProfile.from_dict(facts if isinstance(facts, dict) else json.loads(facts)),
+        profiled_by=profiled_by,
+        profiled_ts=profiled_ts,
     )
 
 
@@ -361,3 +383,77 @@ class PostgresMetadataDb:
         parameters += (limit,)
         rows = self._db.fetch_all(statement, parameters)
         return tuple(_agent_action(row) for row in rows)
+
+    # ── profiling.file_profile · CF-V1-E5-01 ─────────────────────────────────
+    def record_profile(self, record: FileProfileRecord) -> FileProfileRecord:
+        """ON CONFLICT DO NOTHING — the idempotence is the DATABASE's, not a
+        check somebody remembered to write.
+
+        The primary key is (profile_id, feed_id) and profile_id is the digest
+        of the facts, so a re-run over unchanged bytes collides by
+        construction and the original row keeps its original timestamp. That
+        is what makes "profiling statistics exactly reproducible on re-run"
+        observable in the store rather than only in a test.
+        """
+        profile = record.profile
+        self._db.execute(
+            "INSERT INTO profiling.file_profile (profile_id, feed_id, source_key, "
+            "source_fingerprint, profiler_version, readable, would_load, row_count, "
+            "column_count, sampled, facts, profiled_by, profiled_ts) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (profile_id, feed_id) DO NOTHING",
+            (
+                profile.profile_id,
+                record.feed_id,
+                profile.source_key,
+                profile.source_fingerprint,
+                profile.profiler_version,
+                profile.readable,
+                profile.would_load,
+                profile.structure.data_rows,
+                profile.structure.column_count,
+                profile.structure.sampled,
+                json.dumps(profile.to_dict(), sort_keys=True, default=str),
+                record.profiled_by,
+                record.profiled_ts,
+            ),
+        )
+        # Read back rather than return the argument: on a conflict the stored
+        # row is the FIRST one, and returning the caller's copy would report a
+        # timestamp the store does not hold.
+        return self.get_profile(profile.profile_id, record.feed_id)
+
+    def get_profile(self, profile_id: str, feed_id: str) -> FileProfileRecord:
+        row = self._db.fetch_one(
+            "SELECT feed_id, facts, profiled_by, profiled_ts FROM profiling.file_profile "
+            "WHERE profile_id = %s AND feed_id = %s",
+            (profile_id, feed_id),
+        )
+        if row is None:
+            raise ObjectNotFoundError(f"no profile {profile_id!r} for feed {feed_id!r}")
+        return _profile_record(row)
+
+    def list_profiles(
+        self,
+        *,
+        feed_id: str | None = None,
+        profile_id: str | None = None,
+        source_fingerprint: str | None = None,
+        limit: int = 50,
+    ) -> Sequence[FileProfileRecord]:
+        statement = (
+            "SELECT feed_id, facts, profiled_by, profiled_ts FROM profiling.file_profile WHERE 1=1"
+        )
+        parameters: tuple[Any, ...] = ()
+        if feed_id is not None:
+            statement += " AND feed_id = %s"
+            parameters += (feed_id,)
+        if profile_id is not None:
+            statement += " AND profile_id = %s"
+            parameters += (profile_id,)
+        if source_fingerprint is not None:
+            statement += " AND source_fingerprint = %s"
+            parameters += (source_fingerprint,)
+        statement += " ORDER BY profiled_ts DESC, profile_id DESC LIMIT %s"
+        parameters += (limit,)
+        return tuple(_profile_record(row) for row in self._db.fetch_all(statement, parameters))

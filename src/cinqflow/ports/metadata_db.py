@@ -19,10 +19,32 @@ machine.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
+from cinqflow.core.profiling import FileProfile
+
+
+@dataclass(frozen=True)
+class FileProfileRecord:
+    """One stored profiling run — the facts, plus who ran them and when.
+
+    The profile itself is content-addressed and carries no clock, so the two
+    fields that DO vary between runs live out here where they cannot disturb
+    the fingerprint.
+    """
+
+    feed_id: str
+    profile: FileProfile
+    profiled_by: str
+    profiled_ts: datetime
+
+    @property
+    def profile_id(self) -> str:
+        return self.profile.profile_id
 
 
 class MetadataError(RuntimeError):
@@ -114,3 +136,49 @@ class MetadataDbPort(Protocol):
     def read_agent_actions(
         self, *, run_id: str | None = None, agent: str | None = None, limit: int = 100
     ) -> Sequence[AgentAction]: ...
+
+    # ── computed evidence · CF-V1-E5-01 ──────────────────────────────────────
+    #
+    # A file profile is NOT a governed object: nobody approves a fact, and it
+    # carries no version because re-computing it from the same bytes produces
+    # the same answer. It sits behind this pin rather than a new one because it
+    # is the platform's own record of its own work — the same Postgres holding
+    # the registry, the governance trail and the audit log — and because the
+    # things it is evidence FOR are all stored here already. Plate 04's verb
+    # for this pin reads `persist_governed_objects_and_audit`; the evidence
+    # tables widen it, and the plate says so as of this story.
+
+    def record_profile(self, record: FileProfileRecord) -> FileProfileRecord:
+        """Store a profiling run's facts, idempotently.
+
+        Re-profiling an unchanged file must be a no-op, not a second row: the
+        profile's id IS the fingerprint of its facts, so an identical run
+        collides by construction. The FIRST write wins and keeps its
+        timestamp — evidence that has not changed must not look newer for
+        having been recomputed, or a stale-evidence gate starts passing things
+        it should hold.
+        """
+        ...
+
+    def get_profile(self, profile_id: str, feed_id: str) -> FileProfileRecord:
+        """Raises ObjectNotFoundError, for the reasons named on that class."""
+        ...
+
+    def list_profiles(
+        self,
+        *,
+        feed_id: str | None = None,
+        profile_id: str | None = None,
+        source_fingerprint: str | None = None,
+        limit: int = 50,
+    ) -> Sequence[FileProfileRecord]:
+        """Newest first.
+
+        `source_fingerprint` answers "have we already profiled this exact
+        file?", which is what makes re-upload cheap. `profile_id` answers
+        "what does `profile:sha256-…` point at?" without the caller having to
+        know which feed it was run for — a citation carries an id, not a feed,
+        and a citation that cannot be resolved from what it carries is a dead
+        end wearing an address.
+        """
+        ...

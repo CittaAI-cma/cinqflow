@@ -134,3 +134,34 @@ def test_parsers_perform_no_io() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "open" not in called
+
+
+def test_a_byte_order_mark_does_not_become_part_of_the_first_column_name() -> None:
+    """Excel's "CSV UTF-8" writes one on every save, and `str.strip()` does not
+    remove it.
+
+    Left in place, the first column arrives named `﻿member_id`: drift
+    detection then reports the contracted column REMOVED and an unknown one
+    ADDED, and a perfectly good file fails. CF-V1-E5-01's profiler still
+    REPORTS the BOM — a payer who starts sending one has changed their export
+    tool — but reading it correctly is not something a BA should have to
+    arrange.
+    """
+    parsed = parse(b"\xef\xbb\xbf" + CSV, file_format="csv")
+    assert parsed.columns == ("member_id", "first_name", "date_of_birth")
+    assert parsed.row_count == 2
+
+
+def test_a_bom_on_a_feed_declaring_another_encoding_is_not_silently_reinterpreted() -> None:
+    """The BOM override applies only to a feed declared utf-8.
+
+    A feed declared cp1252 that arrives with a utf-16 mark is a genuine
+    disagreement between the registry and the payer. cp1252 decodes every byte,
+    so nothing raises — and switching codecs underneath would make the
+    disagreement invisible. Instead the mark survives into the data, where the
+    profiler reports it (CF-V1-E5-01) and somebody settles which side is
+    wrong.
+    """
+    parsed = parse(b"\xff\xfe" + CSV, file_format="csv", encoding="cp1252")
+    assert parsed.columns[0] != "member_id", "the declared encoding was honoured, not overridden"
+    assert "member_id" in parsed.columns[0], "and the disagreement is visible rather than hidden"

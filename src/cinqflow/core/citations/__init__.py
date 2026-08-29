@@ -45,6 +45,11 @@ class CitationKind(StrEnum):
     FEED = "feed"
     PLAN = "plan"
     CONTRACT = "contract"
+    #: CF-V1-E5-01. An OBSERVATION about a file, not a governed object — so it
+    #: carries no version. Its subject is the profile's own fingerprint, which
+    #: makes `profile:sha256-…#DOB` an address for one computed fact and gives
+    #: CF-V1-E5-02 something to cite for every claim it interprets.
+    PROFILE = "profile"
     MAPPING = "mapping"
     BATCH = "batch"
     RECON = "recon"
@@ -136,6 +141,11 @@ class CitationId:
                 return f"/operations/control/error/{self.subject}"
             case CitationKind.FILE:
                 return f"/data/explorer/landing/{self.subject}"
+            case CitationKind.PROFILE:
+                # A column is a panel on the profile, not a page of its own —
+                # one depth level, like every other drawer.
+                column = f"?column={self.fragment}" if self.fragment else ""
+                return f"/data/intake/profile/{self.subject}{column}"
             case CitationKind.RULE:
                 return f"/data/intake/rule/{self.subject}"
             case CitationKind.TERM:

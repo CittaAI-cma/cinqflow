@@ -69,5 +69,11 @@ warn_unreachable = true
 exclude = ["tests/fixtures/impure/"]
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*", "python_calamine.*", "presidio_analyzer.*", "presidio_anonymizer.*"]
+module = [
+    "pyarrow.*",
+    "python_calamine.*",
+    "openpyxl.*",
+    "presidio_analyzer.*",
+    "presidio_anonymizer.*",
+]
 ignore_missing_imports = true

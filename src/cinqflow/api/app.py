@@ -39,21 +39,31 @@ from cinqflow.api.schemas import (
     BatchOut,
     BudgetOut,
     ClaimOut,
+    ColumnProfileOut,
     ContractOut,
+    DateFormatOut,
     DestinationOut,
     FeedIn,
     FeedOut,
+    FileProfileOut,
+    FileStructureOut,
+    FindingOut,
     GlossaryTermOut,
     GovernedOut,
     HomeSlotOut,
     ImpactPacketOut,
+    KeyCandidateOut,
+    KeySearchOut,
     NavigationOut,
     PrincipalOut,
+    ProfileIn,
+    RefusalOut,
     RowsOut,
     ToolOut,
     TouchedOut,
     TraceStepOut,
     TransitionIn,
+    TypeCandidateOut,
     UnknownImpactOut,
     UnknownOut,
     WorkQueueOut,
@@ -70,6 +80,7 @@ from cinqflow.core.model.governed import (
 )
 from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
 from cinqflow.core.persona import home_for
+from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
 from cinqflow.core.registry import feed as feed_registry
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
@@ -80,7 +91,9 @@ from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
 from cinqflow.intelligence.tools import ToolContext, ToolResult, all_dq_rule_entries, invoke
 from cinqflow.ports.authn import AuthnPort, Principal
 from cinqflow.ports.control_tables import BatchControl, ControlTablesPort
-from cinqflow.ports.metadata_db import MetadataDbPort, ObjectNotFoundError
+from cinqflow.ports.metadata_db import FileProfileRecord, MetadataDbPort, ObjectNotFoundError
+from cinqflow.ports.storage import StoragePort
+from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
 
 API_PREFIX = "/api"
 
@@ -133,6 +146,18 @@ def _authn(request: Request) -> AuthnPort:
     return request.app.state.wiring.authn  # type: ignore[no-any-return]
 
 
+def _profiler(request: Request) -> Profiler | None:
+    """The profiler, or None when no storage pin is fitted.
+
+    None rather than a stub: a deployment with no landing zone should say so,
+    and a stubbed profiler would answer a question about a file it never read.
+    """
+    storage = request.app.state.storage
+    if storage is None:
+        return None
+    return Profiler(storage=storage, metadata=request.app.state.metadata_db)
+
+
 Store = Annotated[MetadataDbPort, Depends(_store)]
 Control = Annotated[ControlTablesPort, Depends(_control)]
 Audit = Annotated[AuditLog, Depends(_audit)]
@@ -146,6 +171,7 @@ def create_app(
     metadata_db: MetadataDbPort,
     plane_register: ExecutionPlaneRegister | None = None,
     control_tables: ControlTablesPort | None = None,
+    storage: StoragePort | None = None,
     agent_factory: AgentFactory | None = None,
     budget: Budget | None = None,
 ) -> FastAPI:
@@ -166,6 +192,10 @@ def create_app(
     app.state.metadata_db = metadata_db
     app.state.plane_register = plane_register or wave_0_register()
     app.state.control_tables = control_tables or MemStoreControlTables()
+    # No default. Unlike control tables, there is no in-memory landing zone
+    # that would be honest here: a profiler pointed at an empty store would
+    # answer "file not found" for every real sample.
+    app.state.storage = storage
     app.state.agent_factory = agent_factory
     # The cap the observability screen reports against. A screen showing spend
     # with no cap beside it is a number, not a control.
@@ -352,6 +382,124 @@ def create_app(
             _glossary_out(t, *states.get(t.glossary_id, ("draft", 1)))
             for t in _glossary_of(metadata).for_column(column_name)
         ]
+
+    # ── the deterministic profiler · CF-V1-E5-01 ─────────────────────────────
+    #
+    # Step 1 of the wizard. Everything these routes return is arithmetic over
+    # the file's bytes: no model is called, nothing is inferred, and the AI
+    # stories downstream cite `profile:<id>#<column>` for every fact they
+    # interpret.
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/profile",
+        response_model=FileProfileOut,
+        tags=["profiling"],
+    )
+    def profile_sample(
+        feed_id: str,
+        body: ProfileIn,
+        request: Request,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        audit: Audit,
+    ) -> FileProfileOut:
+        """Profile a landed sample file.
+
+        Synchronous, because a sample profiles in seconds and a BA staring at a
+        spinner they cannot poll is worse than a request that takes a moment.
+        A file that cannot be read comes back 200 with `readable: false` and a
+        refusal — it is a fact about the file, not a failure of the request,
+        and a 500 would tell the BA nothing they can act on.
+        """
+        profiler = _profiler(request)
+        if profiler is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no storage pin is fitted on this deployment, so there is no landing zone "
+                "to read a sample from.",
+            )
+        try:
+            record = profiler.profile(
+                feed_id=feed_id,
+                file_key=body.file_key,
+                file_format=body.file_format,
+                encoding=body.encoding,
+                delimiter=body.delimiter,
+                profiled_by=principal.subject,
+            )
+        except ProfileTargetMissingError as missing:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(missing)) from None
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=feed_id,
+            action="profile_file",
+            actor=principal.as_actor(),
+            detail=f"{body.file_key} -> {record.profile_id}",
+        )
+        return _profile_out(record, principal)
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/profiles",
+        response_model=list[FileProfileOut],
+        tags=["profiling"],
+    )
+    def list_feed_profiles(
+        feed_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+        limit: int = 20,
+    ) -> list[FileProfileOut]:
+        """Every profiling run for this feed, newest first — the status view.
+
+        More than one is normal and informative: a payer's file changing shape
+        between samples is visible here as two profiles with different
+        fingerprints.
+        """
+        return [
+            _profile_out(record, principal)
+            for record in metadata.list_profiles(feed_id=feed_id, limit=limit)
+        ]
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/profiles/{{profile_id}}",
+        response_model=FileProfileOut,
+        tags=["profiling"],
+    )
+    def get_feed_profile(
+        feed_id: str,
+        profile_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> FileProfileOut:
+        """What a `profile:<id>` citation opens."""
+        try:
+            record = metadata.get_profile(profile_id, feed_id)
+        except ObjectNotFoundError:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, f"no profile {profile_id!r} for feed {feed_id!r}"
+            ) from None
+        return _profile_out(record, principal)
+
+    @app.get(
+        f"{API_PREFIX}/profiles/{{profile_id}}",
+        response_model=FileProfileOut,
+        tags=["profiling"],
+    )
+    def resolve_profile_citation(
+        profile_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> FileProfileOut:
+        """Resolve `profile:<id>` without being told which feed it belongs to.
+
+        A citation carries an id, not a feed — so a citation that could only be
+        resolved by someone who already knew the feed would be a dead end
+        wearing an address. That is the one thing the citation vocabulary is
+        not allowed to contain.
+        """
+        found = metadata.list_profiles(profile_id=profile_id, limit=1)
+        if not found:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no profile {profile_id!r}")
+        return _profile_out(found[0], principal)
 
     # ── governance · CF-V1-E11-01 — the one lifecycle, exposed ───────────────
     #
@@ -979,6 +1127,140 @@ def _glossary_out(term: GlossaryTerm, state: str, version: int) -> GlossaryTermO
         version=version,
         citation_id=str(citation),
         route=citation.route,
+    )
+
+
+def _profile_out(record: FileProfileRecord, principal: Principal) -> FileProfileOut:
+    """The profile on the wire, with values shown only to those who may edit.
+
+        "Send sample data anywhere except storage the BA's role can access."
+        — CF-V1-E5-01, a documented don't
+
+    The BA working the sample needs the example values — judging a mapping
+    without seeing what is in the column is guesswork. Everyone else gets the
+    statistics with the values stripped. Because `FileProfile.fingerprint`
+    covers the FACTS and not the values, both readers see the SAME
+    `profile_id`: a steward reviewing the redacted view and the BA who ran it
+    are provably looking at one piece of evidence.
+    """
+    profile = record.profile
+    if not may(principal, Action.EDIT_FEED, feed_id=record.feed_id):
+        profile = profile.without_values()
+    structure = profile.structure
+    return FileProfileOut(
+        profile_id=profile.profile_id,
+        profiler_version=profile.profiler_version,
+        feed_id=record.feed_id,
+        source_key=profile.source_key,
+        source_fingerprint=profile.source_fingerprint,
+        readable=profile.readable,
+        would_load=profile.would_load,
+        refusal=(
+            None
+            if profile.refusal is None
+            else RefusalOut(
+                reason=profile.refusal.reason.value,
+                explanation=profile.refusal.explanation,
+                ask_the_payer=profile.refusal.ask_the_payer,
+            )
+        ),
+        structure=FileStructureOut(
+            file_format=structure.file_format,
+            encoding=structure.encoding,
+            declared_encoding=structure.declared_encoding,
+            byte_order_mark=structure.byte_order_mark,
+            delimiter=structure.delimiter,
+            quote_char=structure.quote_char,
+            line_ending=structure.line_ending,
+            column_count=structure.column_count,
+            data_rows=structure.data_rows,
+            bytes_total=structure.bytes_total,
+            bytes_read=structure.bytes_read,
+            sampled=structure.sampled,
+        ),
+        columns=[_column_profile_out(profile, column) for column in profile.columns],
+        findings=[_finding_out(f) for f in profile.findings],
+        blockers=[_finding_out(f) for f in profile.blockers],
+        key_candidates=[
+            KeyCandidateOut(
+                columns=list(key.columns),
+                distinct_count=key.distinct_count,
+                populated_rows=key.populated_rows,
+                null_rows=key.null_rows,
+                duplicate_values=key.duplicate_values,
+                is_unique=key.is_unique,
+                examples=[[value, list(lines)] for value, lines in key.examples],
+                values_redacted=key.values_redacted,
+            )
+            for key in profile.key_candidates
+        ],
+        key_search=KeySearchOut(
+            single_columns_examined=profile.key_search.single_columns_examined,
+            composite_width=profile.key_search.composite_width,
+            pairs_examined=profile.key_search.pairs_examined,
+            pairs_skipped=profile.key_search.pairs_skipped,
+            rows_retained=profile.key_search.rows_retained,
+            excluded_columns=list(profile.key_search.excluded_columns),
+            note=profile.key_search.note,
+        ),
+        duplicate_rows=profile.duplicates.duplicate_rows,
+        duplicate_groups=profile.duplicates.duplicate_groups,
+        values_redacted=profile.values_redacted,
+        profiled_by=record.profiled_by,
+        profiled_ts=record.profiled_ts,
+        citation_id=str(profile.citation),
+        route=profile.citation.route,
+    )
+
+
+def _column_profile_out(profile: FileProfile, column: ColumnProfile) -> ColumnProfileOut:
+    citation = profile.citation_for(column.name)
+    return ColumnProfileOut(
+        name=column.name,
+        position=column.position,
+        row_count=column.row_count,
+        null_count=column.null_count,
+        null_like_count=column.null_like_count,
+        distinct_count=column.distinct_count,
+        distinct_is_exact=column.distinct_is_exact,
+        is_unique=column.is_unique,
+        min_length=column.min_length,
+        max_length=column.max_length,
+        padded_count=column.padded_count,
+        typed_cell_count=column.typed_cell_count,
+        narrowest_type=column.narrowest_type.value if column.narrowest_type else None,
+        type_candidates=[
+            TypeCandidateOut(
+                type=candidate.type.value,
+                matched=candidate.matched,
+                considered=candidate.considered,
+                share=candidate.share,
+            )
+            for candidate in column.type_candidates
+        ],
+        date_formats=[
+            DateFormatOut(label=fmt.label, matched=fmt.matched) for fmt in column.date_formats
+        ],
+        observed_precision=column.observed_precision,
+        observed_scale=column.observed_scale,
+        examples=list(column.examples),
+        top_values=[[value, count] for value, count in column.top_values],
+        min_value=column.min_value,
+        max_value=column.max_value,
+        values_redacted=column.values_redacted,
+        citation_id=str(citation),
+        route=citation.route,
+    )
+
+
+def _finding_out(finding: Finding) -> FindingOut:
+    return FindingOut(
+        quirk=finding.quirk.value,
+        detail=finding.detail,
+        occurrences=finding.occurrences,
+        first_lines=list(finding.first_lines),
+        columns=list(finding.columns),
+        blocks_ingestion=finding.blocks_ingestion,
     )
 
 
