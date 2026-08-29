@@ -35,6 +35,35 @@ READ_ONLY = "dev-analyst@cinqcare.test"
 ADMIN = "dev-admin@cinqcare.test"
 
 FEED_ID = "fidelis-downstate-roster"
+
+#: CF-V1-E3-02's activation checklist means a feed cannot be SUBMITTED until it
+#: could be operated — so every governance fixture from here on carries a
+#: complete operational envelope. That is the story working, not a tax on the
+#: tests: a governance suite that could submit a feed with no owner and no SLA
+#: would be proving the lifecycle over an object nobody could run.
+OPERATIONS: dict[str, Any] = {
+    "source_id": "fidelis-ny",
+    "direction": "inbound",
+    "delivery_method": "sftp",
+    "endpoint_ref": "fidelis-downstate-sftp",
+    "owners": [
+        {"role": "business", "subject": "meera@cinqcare.test", "display_name": "Meera Rao"},
+        {"role": "technical", "subject": "sam@cinqcare.test", "display_name": "Sam Okafor"},
+    ],
+    "service_level": {
+        "expected_by_local_time": "06:00",
+        "timezone": "America/New_York",
+        "calendar": "business_days",
+        "grace_minutes": 30,
+        "escalate_after_minutes": 120,
+    },
+    "volume": {"typical_records": 40000, "tolerance_percent": 20},
+    "alert_chain": [
+        {"after_minutes": 30, "channel": "email", "notify": ["sam@cinqcare.test"]},
+        {"after_minutes": 120, "channel": "pager", "notify": ["meera@cinqcare.test"]},
+    ],
+}
+
 FEED_BODY: dict[str, Any] = {
     "feed_id": FEED_ID,
     "domain": "membership",
@@ -44,6 +73,7 @@ FEED_BODY: dict[str, Any] = {
     "file_pattern": r"^_CINQDOWNSTATE_Member_Roster_\d{8}\.xlsx$",
     "schedule_cron": "0 6 * * 1",
     "sample_filename": "_CINQDOWNSTATE_Member_Roster_20260801.xlsx",
+    "operations": OPERATIONS,
 }
 
 

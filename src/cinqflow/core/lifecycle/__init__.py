@@ -37,6 +37,7 @@ from cinqflow.core.model.governed import (
     ObjectType,
 )
 from cinqflow.core.model.identity import Role
+from cinqflow.core.registry.operations import ActivationBlockedError, readiness_of
 
 
 class ApprovalRoutingError(LifecycleViolationError):
@@ -108,7 +109,23 @@ def submit(
     obj: GovernedObject, *, actor: Actor, comment: str = "", now: datetime | None = None
 ) -> tuple[GovernedObject, AuditEntry]:
     """Draft -> In Review (and Rejected -> Draft -> In Review is two acts,
-    deliberately: the resubmission is visible in the trail, not elided)."""
+    deliberately: the resubmission is visible in the trail, not elided).
+
+    CF-V1-E3-02 adds the READINESS gate here rather than at save. A
+    half-gathered feed must SAVE — an analyst waiting three days for a payer's
+    SLA needs somewhere to keep what they have — and what is refused is asking
+    somebody to review a feed nobody could operate. Validation-at-save teaches
+    people to type placeholder values into required fields, and a registry
+    full of `owner@example.com` is worse than one with visible gaps.
+
+    Placed in the ENGINE rather than in the route so that every path to
+    submission is gated: `readiness_of` is total over `ObjectType`, so later
+    stories widen the checklist by teaching that function about their type
+    rather than by adding a second guard somewhere else.
+    """
+    ready = readiness_of(obj)
+    if not ready.is_ready:
+        raise ActivationBlockedError(obj.object_id, ready)
     moved, entry = obj.transition_to(LifecycleState.PENDING_REVIEW, actor=actor, now=now)
     return moved, _with_comment(entry, comment)
 

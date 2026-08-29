@@ -67,6 +67,107 @@ class PrincipalOut(BaseModel):
     home_slots: list[HomeSlotOut] = []
 
 
+class OwnerModel(BaseModel):
+    """A named person who is accountable. CF-V1-E3-02.
+
+    `display_name` is required by the type, not checked in a handler: a feed
+    owned by an address is a feed nobody will admit to owning when it breaks.
+    """
+
+    role: str
+    subject: str
+    display_name: str
+
+
+class ServiceLevelModel(BaseModel):
+    """When the file is due. `timezone` is an IANA NAME, never an offset —
+    an offset is right for half the year."""
+
+    expected_by_local_time: str
+    timezone: str
+    calendar: str = "business_days"
+    grace_minutes: int = 30
+    escalate_after_minutes: int = 120
+
+
+class VolumeModel(BaseModel):
+    """What a normal delivery looks like, so an abnormal one is visible."""
+
+    minimum_records: int | None = None
+    maximum_records: int | None = None
+    typical_records: int | None = None
+    tolerance_percent: int = 20
+
+
+class AlertTierModel(BaseModel):
+    """One rung of the escalation ladder: after how long, and who."""
+
+    after_minutes: int
+    channel: str
+    notify: list[str] = Field(default_factory=list)
+
+
+class LinkedDocumentModel(BaseModel):
+    """A spec, a companion guide, a runbook. The reference is data — but a
+    reference carrying a credential is refused by core."""
+
+    kind: str
+    label: str
+    reference: str
+
+
+class OperationsModel(BaseModel):
+    """The operational envelope around a feed's six engine fields.
+
+    ONE model in both directions, deliberately: there is no field here a
+    client may read and not write, so two models would be two places for the
+    same list of fields to drift apart.
+    """
+
+    source_id: str = ""
+    direction: str = "inbound"
+    delivery_method: str = "sftp"
+    #: The connection profile's NAME for the endpoint. Never a host — core
+    #: refuses anything that looks like a location.
+    endpoint_ref: str = ""
+    owners: list[OwnerModel] = Field(default_factory=list)
+    service_level: ServiceLevelModel | None = None
+    volume: VolumeModel | None = None
+    alert_chain: list[AlertTierModel] = Field(default_factory=list)
+    documents: list[LinkedDocumentModel] = Field(default_factory=list)
+    notes: str = ""
+
+
+class ChecklistItemOut(BaseModel):
+    """One thing that must be true before a feed can be operated.
+
+    Three strings, not one. A checklist that says only "owner is required"
+    gets `data@company.com` typed into it; `why_it_matters` and `how_to_fix`
+    are what make somebody do the real thing instead.
+    """
+
+    key: str
+    question: str
+    satisfied: bool
+    why_it_matters: str
+    how_to_fix: str
+
+
+class ReadinessOut(BaseModel):
+    """Whether this feed can be activated, and what is missing if not.
+
+    Sent with every feed so the form shows the same checklist the lifecycle
+    enforces — one function, one answer, no screen showing green while the
+    submit button returns 403.
+    """
+
+    feed_id: str
+    is_ready: bool
+    outstanding: int
+    items: list[ChecklistItemOut]
+    explanation: str
+
+
 class FeedOut(BaseModel):
     feed_id: str
     domain: str
@@ -82,6 +183,29 @@ class FeedOut(BaseModel):
     )
     citation_id: str
     route: str
+    operations: OperationsModel = Field(default_factory=OperationsModel)
+    readiness: ReadinessOut | None = None
+
+
+class SourceIn(BaseModel):
+    """An organisation that sends or receives data. CF-V1-E3-02."""
+
+    source_id: str
+    name: str
+    kind: str = "payer"
+    endpoint_ref: str = ""
+    line_of_business: list[str] = Field(default_factory=list)
+    states: list[str] = Field(default_factory=list)
+    owners: list[OwnerModel] = Field(default_factory=list)
+    counterparty_contact: str = ""
+    notes: str = ""
+
+
+class SourceOut(SourceIn):
+    version: int
+    lifecycle_state: str
+    status: StatusWord
+    feed_ids: list[str] = Field(default_factory=list)
 
 
 class FeedIn(BaseModel):
@@ -103,6 +227,10 @@ class FeedIn(BaseModel):
     min_size_bytes: int | None = None
     max_size_bytes: int | None = None
     allows_leading_underscore: bool = True
+    #: CF-V1-E3-02. Optional on save and required for ACTIVATION — a
+    #: half-gathered feed must be storable, or an analyst waiting three days
+    #: for a payer's SLA has nowhere to keep what they already have.
+    operations: OperationsModel | None = None
 
 
 class AuditOut(BaseModel):
@@ -205,6 +333,32 @@ class UnknownImpactOut(BaseModel):
 
     name: str
     reason: str
+
+
+class ReferenceOut(BaseModel):
+    """One object that would be affected by changing this one, and the path
+    that found it — so a reader can check the reasoning, not just the count."""
+
+    object_type: str
+    object_id: str
+    version: int
+    lifecycle_state: str
+    via: str
+
+
+class ReferencesOut(BaseModel):
+    """The "referenced everywhere" view. CF-V1-E3-02.
+
+    COMPUTED from the reference graph, never from a list somebody maintains.
+    A registry whose "used by" column is hand-kept is a registry whose "used
+    by" column is wrong.
+    """
+
+    object_type: str
+    object_id: str
+    version: int
+    references: list[ReferenceOut]
+    unknowns: list[UnknownImpactOut] = Field(default_factory=list)
 
 
 class ImpactPacketOut(BaseModel):

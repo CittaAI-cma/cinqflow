@@ -312,9 +312,7 @@ def test_every_named_column_carries_a_rationale_a_steward_can_act_on(result) -> 
         assert column.citations, f"{column.source_name} has no citation to open"
 
 
-def test_over_flagging_is_reported_and_bounded_by_usefulness(
-    result, glossary: Glossary
-) -> None:
+def test_over_flagging_is_reported_and_bounded_by_usefulness(result, glossary: Glossary) -> None:
     """Over-flagging is the SAFE direction and is never gated on correctness —
     but a detector that protects every column has told a steward nothing while
     appearing to work, so the eval says how much of it there is."""
@@ -327,9 +325,7 @@ def test_over_flagging_is_reported_and_bounded_by_usefulness(
     )
 
 
-def test_the_call_is_metered_and_leaves_an_audit_row(
-    agent: PhiDetectionAgent, result
-) -> None:
+def test_the_call_is_metered_and_leaves_an_audit_row(agent: PhiDetectionAgent, result) -> None:
     """ "100% of model calls carry prompt hash, model version, cost and caller
     identity in the audit log." """
     assert result.model_called, "the mixed roster must leave the model something to do"

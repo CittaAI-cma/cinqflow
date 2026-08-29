@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import Link from "next/link";
 import { CitationChip } from "@/components/Cited";
 import { RefusalNotice } from "@/components/Refusal";
@@ -54,6 +55,104 @@ export default async function FeedPage({
           <dd>{feed.lifecycle_state}</dd>
         </dl>
       </div>
+
+      {/* CF-V1-E3-02. The SAME computation the submit button enforces — so
+          this list can never show green while activation returns 403. */}
+      {feed.readiness && !feed.readiness.is_ready ? (
+        <div className="card">
+          <strong>
+            Not ready to activate — {feed.readiness.outstanding} thing(s) still missing
+          </strong>
+          <p className="note">
+            You can keep saving as you go. What is blocked is asking somebody to review a feed
+            nobody could operate yet.
+          </p>
+          <dl className="kv">
+            {feed.readiness.items
+              .filter((item) => !item.satisfied)
+              .map((item) => (
+                <Fragment key={item.key}>
+                  <dt>{item.question}</dt>
+                  <dd>
+                    {item.why_it_matters}
+                    <br />
+                    <span className="note">To fix: {item.how_to_fix}</span>
+                  </dd>
+                </Fragment>
+              ))}
+          </dl>
+        </div>
+      ) : null}
+
+      <div className="card">
+        <strong>Who runs this feed</strong>
+        {feed.operations.owners.length === 0 ? (
+          <p className="note">Nobody is named yet.</p>
+        ) : (
+          <dl className="kv">
+            {feed.operations.owners.map((owner) => (
+              <Fragment key={owner.role}>
+                <dt>{owner.role.replace("_", " ")}</dt>
+                <dd>
+                  {owner.display_name} <span className="note">({owner.subject})</span>
+                </dd>
+              </Fragment>
+            ))}
+          </dl>
+        )}
+      </div>
+
+      <div className="card">
+        <strong>When it is due, and what happens when it is not</strong>
+        {feed.operations.service_level ? (
+          <p className="note">
+            Expected by {feed.operations.service_level.expected_by_local_time}{" "}
+            {feed.operations.service_level.timezone} on{" "}
+            {feed.operations.service_level.calendar.replace(/_/g, " ")}, with{" "}
+            {feed.operations.service_level.grace_minutes} minutes of grace.
+          </p>
+        ) : (
+          <p className="note">
+            No arrival time is set, so this feed can never be Missing — only not-yet-arrived.
+          </p>
+        )}
+        {feed.operations.alert_chain.length > 0 ? (
+          <ol>
+            {feed.operations.alert_chain.map((tier) => (
+              <li key={tier.after_minutes}>
+                after {tier.after_minutes} minutes — {tier.channel} to {tier.notify.join(", ")}
+              </li>
+            ))}
+          </ol>
+        ) : null}
+      </div>
+
+      {feed.operations.volume ? (
+        <div className="card">
+          <strong>What a normal delivery looks like</strong>
+          <p className="note">
+            {feed.operations.volume.typical_records !== null
+              ? `Typically ${feed.operations.volume.typical_records.toLocaleString()} records, ±${feed.operations.volume.tolerance_percent}%.`
+              : `Between ${feed.operations.volume.minimum_records ?? "?"} and ${feed.operations.volume.maximum_records ?? "?"} records.`}{" "}
+            A delivery outside this is loadable and wrong, which is the failure nothing else
+            catches.
+          </p>
+        </div>
+      ) : null}
+
+      {feed.operations.documents.length > 0 ? (
+        <div className="card">
+          <strong>Documents</strong>
+          <ul>
+            {feed.operations.documents.map((doc) => (
+              <li key={doc.reference}>
+                <a href={doc.reference}>{doc.label}</a>{" "}
+                <span className="note">{doc.kind.replace(/_/g, " ")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="card">
         <strong>Ask about this feed</strong>

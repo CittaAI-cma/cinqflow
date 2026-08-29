@@ -45,7 +45,7 @@ NAME = PromptTemplate(
             "- YOU CANNOT UNPROTECT ANYTHING. Setting `is_phi` to false is refused by the "
             "platform and the attempt is recorded against this run. If you believe a "
             "column is not protected health information, say so in `rationale` and leave "
-            f"`is_phi` true — it reaches a steward as \"{PROTECTED_PENDING_REVIEW}\", which "
+            f'`is_phi` true — it reaches a steward as "{PROTECTED_PENDING_REVIEW}", which '
             "is the correct outcome and the only one available.\n"
             "- YOU ARE NOT BEING SHOWN ANY VALUES, on purpose. Column names, counts, "
             "lengths and value-shape hit rates are the evidence; do not ask for samples "

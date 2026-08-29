@@ -19,6 +19,7 @@ the audit trail and both universal negatives (ADR-0006) — there is no private
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -149,7 +150,13 @@ def from_governed(obj: GovernedObject) -> FeedRecord:
     """
     if obj.object_type is not ObjectType.FEED:
         raise FeedValidationError(f"{obj.object_type} is not a feed")
-    return FeedRecord(**obj.body)
+    # Only the fields the ENGINE reads. CF-V1-E3-02 stores the operational
+    # envelope — owners, SLA, calendars, volumes, alert chain — in the same
+    # body under `operations`, and the engine record must ignore it rather
+    # than choke on it: a `FeedRecord(**body)` here would make adding any
+    # organisational field to the registry a breaking change to the loader.
+    fields = {f.name for f in dataclasses.fields(FeedRecord)}
+    return FeedRecord(**{key: value for key, value in obj.body.items() if key in fields})
 
 
 def executable(obj: GovernedObject) -> FeedRecord:

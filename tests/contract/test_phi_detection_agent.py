@@ -288,9 +288,7 @@ def test_a_detector_that_misses_a_flagged_column_raises_instead_of_proposing(sto
         feed_id=FEED,
         profile_id="sha256-x",
         columns=(
-            ColumnClassification(
-                source_name="DOB", position=1, is_phi=False, basis=Basis.GLOSSARY
-            ),
+            ColumnClassification(source_name="DOB", position=1, is_phi=False, basis=Basis.GLOSSARY),
         ),
     )
     with pytest.raises(RecallGateFailedError, match="DOB"):
@@ -314,9 +312,7 @@ def test_the_overall_confidence_is_the_weakest_column(store, profile) -> None:  
     """Averaging would let five glossary-certain columns hide the one the
     platform is protecting because it has no idea what it is."""
     result, _ = _propose(store, profile)
-    assert result.proposal.confidence == min(
-        c.confidence for c in result.classification.columns
-    )
+    assert result.proposal.confidence == min(c.confidence for c in result.classification.columns)
 
 
 # ── the routes ───────────────────────────────────────────────────────────────
@@ -444,9 +440,7 @@ def test_a_deployment_with_no_llm_pin_says_what_still_works(store, tmp_path) -> 
 
 
 def _approve(client: TestClient, proposal_id: str, subject: str, **body):  # type: ignore[no-untyped-def]
-    return client.post(
-        f"/api/proposals/{proposal_id}/approve", json=body, headers=_as(subject)
-    )
+    return client.post(f"/api/proposals/{proposal_id}/approve", json=body, headers=_as(subject))
 
 
 def test_approving_a_classification_needs_a_contract_to_attach_it_to(
@@ -531,9 +525,7 @@ def test_a_ba_may_not_clear_a_flag_while_accepting_the_classification(
 
 
 def _reclassify(client: TestClient, proposal_id: str, subject: str, **body):  # type: ignore[no-untyped-def]
-    return client.post(
-        f"/api/proposals/{proposal_id}/reclassify", json=body, headers=_as(subject)
-    )
+    return client.post(f"/api/proposals/{proposal_id}/reclassify", json=body, headers=_as(subject))
 
 
 def test_the_reclassify_route_is_the_stewards_and_not_the_analysts(

@@ -20,6 +20,7 @@ that can only be tested the way production runs it.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum, unique
@@ -40,6 +41,7 @@ from cinqflow.api.schemas import (
     AuditOut,
     BatchOut,
     BudgetOut,
+    ChecklistItemOut,
     ClaimOut,
     ColumnProfileOut,
     ContractOut,
@@ -61,16 +63,23 @@ from cinqflow.api.schemas import (
     KeySearchOut,
     MaskingPolicyOut,
     NavigationOut,
+    OperationsModel,
+    OwnerModel,
     PhiColumnOut,
     PhiRecallOut,
     PrincipalOut,
     ProfileIn,
     ProposalOut,
     ProposedColumnOut,
+    ReadinessOut,
     ReclassifyIn,
+    ReferenceOut,
+    ReferencesOut,
     RefusalOut,
     RejectProposalIn,
     RowsOut,
+    SourceIn,
+    SourceOut,
     ToolOut,
     TouchedOut,
     TraceStepOut,
@@ -97,6 +106,8 @@ from cinqflow.core.phi import Basis, ColumnClassification, PhiDowngradeRefusedEr
 from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
 from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry import feed as feed_registry
+from cinqflow.core.registry import operations
+from cinqflow.core.registry import source as source_registry
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.core.registry.wave0 import wave_0_register
@@ -311,6 +322,7 @@ def create_app(
         created already-executable."""
         record = _record_from(body)
         obj = record.as_governed(author=principal.as_actor())
+        obj = replace(obj, body={**obj.body, "operations": _operations_body(body)})
         saved = metadata.save(obj)
         audit.record(
             object_type=ObjectType.FEED,
@@ -347,8 +359,16 @@ def create_app(
                 f"body names {record.feed_id!r} but the URL names {feed_id!r} — "
                 "an edit that renames the thing it edits is a create in disguise",
             )
+        # An absent envelope KEEPS the stored one rather than clearing it. An
+        # edit to the schedule must not silently drop the owners and the SLA,
+        # and a PUT that quietly empties fields the caller did not mention is
+        # how a feed becomes un-activatable without anybody touching it.
+        envelope = current.body.get("operations") or {}
+        if body.operations is not None:
+            envelope = _operations_body(body)
         amended = current.new_version(
-            record.as_governed(author=principal.as_actor()).body, actor=principal.as_actor()
+            {**record.as_governed(author=principal.as_actor()).body, "operations": envelope},
+            actor=principal.as_actor(),
         )
         saved = metadata.save(amended)
         audit.record(
@@ -359,6 +379,122 @@ def create_app(
             actor=principal.as_actor(),
         )
         return _feed_out(saved)
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/readiness",
+        response_model=ReadinessOut,
+        tags=["intake"],
+    )
+    def feed_readiness(
+        feed_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> ReadinessOut:
+        """What is still missing before this feed can be operated. CF-V1-E3-02.
+
+        The SAME function the lifecycle refuses with, so the form and the
+        submit button cannot disagree.
+        """
+        return _readiness_out(_load(metadata, feed_id))
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/references",
+        response_model=ReferencesOut,
+        tags=["intake"],
+    )
+    def feed_references(
+        feed_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> ReferencesOut:
+        """Everything that would be affected by changing this feed.
+
+        The "referenced everywhere" view, COMPUTED from the reference graph.
+        A registry whose "used by" column is hand-maintained is a registry
+        whose "used by" column is wrong — and the version people trust most is
+        the one nobody has updated since March.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        return _references_out(metadata, _load(metadata, feed_id))
+
+    # ── sources · CF-V1-E3-02 ────────────────────────────────────────────────
+
+    @app.get(f"{API_PREFIX}/sources", response_model=list[SourceOut], tags=["intake"])
+    def list_sources(
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> list[SourceOut]:
+        return [
+            _source_out(obj, _feeds_of_source(metadata, obj.object_id))
+            for obj in metadata.list(ObjectType.SOURCE)
+        ]
+
+    @app.get(f"{API_PREFIX}/sources/{{source_id}}", response_model=SourceOut, tags=["intake"])
+    def get_source(
+        source_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        version: int | None = None,
+    ) -> SourceOut:
+        try:
+            obj = metadata.get(ObjectType.SOURCE, source_id, version)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        return _source_out(obj, _feeds_of_source(metadata, source_id))
+
+    @app.post(
+        f"{API_PREFIX}/sources",
+        response_model=SourceOut,
+        status_code=status.HTTP_201_CREATED,
+        tags=["intake"],
+    )
+    def create_source(
+        body: SourceIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.CREATE_FEED))],
+    ) -> SourceOut:
+        """Created as a DRAFT, at v1, like every governed object."""
+        saved = metadata.save(_source_from(body).as_governed(author=principal.as_actor()))
+        audit.record(
+            object_type=ObjectType.SOURCE,
+            object_id=saved.object_id,
+            version=saved.version,
+            action="create",
+            actor=principal.as_actor(),
+        )
+        return _source_out(saved)
+
+    @app.put(f"{API_PREFIX}/sources/{{source_id}}", response_model=SourceOut, tags=["intake"])
+    def edit_source(
+        source_id: str,
+        body: SourceIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+    ) -> SourceOut:
+        """An edit is a NEW VERSION in Draft — never an in-place change."""
+        try:
+            current = metadata.get(ObjectType.SOURCE, source_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        record = _source_from(body)
+        if record.source_id != source_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"body names {record.source_id!r} but the URL names {source_id!r} — "
+                "an edit that renames the thing it edits is a create in disguise",
+            )
+        saved = metadata.save(current.new_version(record.as_body(), actor=principal.as_actor()))
+        audit.record(
+            object_type=ObjectType.SOURCE,
+            object_id=saved.object_id,
+            version=saved.version,
+            action="amend",
+            actor=principal.as_actor(),
+        )
+        return _source_out(saved, _feeds_of_source(metadata, source_id))
 
     # ── the business glossary · CF-V1-E14-01 ─────────────────────────────────
 
@@ -1072,20 +1208,6 @@ def create_app(
             lambda obj: lifecycle.submit(obj, actor=principal.as_actor(), comment=body.comment),
         )
 
-    def _packet_for(metadata: MetadataDbPort, target: GovernedObject) -> ImpactPacket:
-        """Impact from the WHOLE registry, every time. Computing it from a
-        cached subset is how an approver ends up signing yesterday's blast
-        radius."""
-        everything: list[GovernedObject] = []
-        for object_type in ObjectType:
-            for obj in metadata.list(object_type):
-                everything.extend(metadata.history(object_type, obj.object_id))
-        return build_packet(
-            target,
-            tuple(everything),
-            evidence=dict(target.body.get("evidence") or {}),
-        )
-
     @app.get(
         f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/packet",
         response_model=ImpactPacketOut,
@@ -1563,7 +1685,11 @@ def _load(metadata: MetadataDbPort, feed_id: str, version: int | None = None) ->
 
 def _record_from(body: FeedIn) -> feed_registry.FeedRecord:
     try:
-        return feed_registry.FeedRecord(**body.model_dump())
+        fields = body.model_dump()
+        # The envelope is not an engine field. It travels in the same body,
+        # under its own key — see `feed.from_governed`.
+        fields.pop("operations", None)
+        return feed_registry.FeedRecord(**fields)
     except feed_registry.PatternSampleMismatchError as mismatch:
         # A pattern that does not match a real filename is refused BEFORE save,
         # with the side-by-side diff — incident #1 was a leading underscore
@@ -1571,6 +1697,43 @@ def _record_from(body: FeedIn) -> feed_registry.FeedRecord:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(mismatch)) from None
     except feed_registry.FeedValidationError as invalid:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(invalid)) from None
+
+
+def _operations_body(body: FeedIn) -> dict[str, Any]:
+    """Validate the envelope in CORE, then store what core accepted.
+
+    Round-tripping through `FeedOperations` rather than storing the request
+    body verbatim is what makes the refusals real: a timezone offset, a
+    credentialled document link and an alert chain that does not escalate are
+    all rejected here, at the boundary, rather than discovered when somebody
+    reads the row.
+    """
+    if body.operations is None:
+        return {}
+    try:
+        return operations.FeedOperations.from_body(body.operations.model_dump()).as_body()
+    except (operations.OperationsValidationError, ValueError) as invalid:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(invalid)) from None
+
+
+def _readiness_out(obj: GovernedObject) -> ReadinessOut:
+    ready = operations.readiness_of(obj)
+    return ReadinessOut(
+        feed_id=obj.object_id,
+        is_ready=ready.is_ready,
+        outstanding=len(ready.outstanding),
+        items=[
+            ChecklistItemOut(
+                key=item.key,
+                question=item.question,
+                satisfied=item.satisfied,
+                why_it_matters=item.why_it_matters,
+                how_to_fix=item.how_to_fix,
+            )
+            for item in ready.items
+        ],
+        explanation=ready.explain(obj.object_id),
+    )
 
 
 def _feed_out(obj: GovernedObject) -> FeedOut:
@@ -1589,6 +1752,120 @@ def _feed_out(obj: GovernedObject) -> FeedOut:
         status=obj.lifecycle_state.status_word,
         citation_id=str(citation),
         route=citation.route,
+        operations=OperationsModel(
+            **operations.FeedOperations.from_body(body.get("operations")).as_body()
+        ),
+        # Sent with every feed, so the form's checklist and the lifecycle's
+        # refusal are the same computation. A screen showing green while the
+        # submit button returns 403 is the classic shape of a rule implemented
+        # twice.
+        readiness=_readiness_out(obj),
+    )
+
+
+def _source_out(obj: GovernedObject, feed_ids: tuple[str, ...] = ()) -> SourceOut:
+    record = source_registry.SourceRecord.from_governed(obj)
+    return SourceOut(
+        source_id=record.source_id,
+        name=record.name,
+        kind=record.kind.value,
+        endpoint_ref=record.endpoint_ref,
+        line_of_business=list(record.line_of_business),
+        states=list(record.states),
+        owners=[
+            OwnerModel(role=o.role.value, subject=o.subject, display_name=o.display_name)
+            for o in record.owners
+        ],
+        counterparty_contact=record.counterparty_contact,
+        notes=record.notes,
+        version=obj.version,
+        lifecycle_state=obj.lifecycle_state.value,
+        status=obj.lifecycle_state.status_word,
+        feed_ids=list(feed_ids),
+    )
+
+
+def _source_from(body: SourceIn) -> source_registry.SourceRecord:
+    try:
+        return source_registry.SourceRecord(
+            source_id=body.source_id,
+            name=body.name,
+            kind=source_registry.SourceKind(body.kind),
+            endpoint_ref=body.endpoint_ref,
+            line_of_business=tuple(body.line_of_business),
+            states=tuple(body.states),
+            owners=tuple(
+                operations.Owner(
+                    role=operations.OwnerRole(o.role),
+                    subject=o.subject,
+                    display_name=o.display_name,
+                )
+                for o in body.owners
+            ),
+            counterparty_contact=body.counterparty_contact,
+            notes=body.notes,
+        )
+    except (source_registry.SourceValidationError, ValueError) as invalid:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(invalid)) from None
+
+
+def _packet_for(metadata: MetadataDbPort, target: GovernedObject) -> ImpactPacket:
+    """Impact from the WHOLE registry, every time. Computing it from a cached
+    subset is how an approver ends up signing yesterday's blast radius.
+
+    Module level rather than a closure inside `create_app`: CF-V1-E3-02's
+    "referenced everywhere" view is the same computation as CF-V1-E11-02's
+    approval packet, and two copies of it would be two answers to "what does
+    this change touch".
+    """
+    everything: list[GovernedObject] = []
+    for object_type in ObjectType:
+        for obj in metadata.list(object_type):
+            everything.extend(metadata.history(object_type, obj.object_id))
+    return build_packet(
+        target,
+        tuple(everything),
+        evidence=dict(target.body.get("evidence") or {}),
+    )
+
+
+def _references_out(metadata: MetadataDbPort, target: GovernedObject) -> ReferencesOut:
+    """The reference graph, read for one object.
+
+    Built from the WHOLE registry every time rather than from a cache: a
+    "referenced everywhere" view computed from a subset is the same failure as
+    a hand-maintained one, arriving by a route nobody thinks to check.
+    """
+    packet = _packet_for(metadata, target)
+    return ReferencesOut(
+        object_type=target.object_type.value,
+        object_id=target.object_id,
+        version=target.version,
+        references=[
+            ReferenceOut(
+                object_type=touched.object_type.value,
+                object_id=touched.object_id,
+                version=touched.version,
+                lifecycle_state=touched.lifecycle_state.value,
+                via=touched.via,
+            )
+            for touched in (*packet.engineering_impact, *packet.business_impact)
+        ],
+        unknowns=[
+            UnknownImpactOut(name=unknown.name, reason=unknown.reason)
+            for unknown in packet.unknowns
+        ],
+    )
+
+
+def _feeds_of_source(metadata: MetadataDbPort, source_id: str) -> tuple[str, ...]:
+    """Which feeds name this source. Computed, never a maintained list."""
+    return tuple(
+        sorted(
+            obj.object_id
+            for obj in metadata.list(ObjectType.FEED)
+            if str((obj.body.get("operations") or {}).get("source_id", "")) == source_id
+        )
     )
 
 
@@ -1863,9 +2140,7 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
         applied_object_id=proposal.applied_object_id,
         applied_version=proposal.applied_version,
         grounding_citations=[str(c) for c in proposal.grounding_citations],
-        columns=(
-            [] if is_phi_agent else [ProposedColumnOut(**_column_fields(r)) for r in records]
-        ),
+        columns=([] if is_phi_agent else [ProposedColumnOut(**_column_fields(r)) for r in records]),
         phi_columns=(
             [PhiColumnOut(**_phi_column_fields(r)) for r in records] if is_phi_agent else []
         ),
@@ -1997,9 +2272,7 @@ def _phi_contract_body(
         ) from None
 
     flags = {
-        str(r.get("source_name")): r
-        for r in accepted.get("records", ())
-        if isinstance(r, dict)
+        str(r.get("source_name")): r for r in accepted.get("records", ()) if isinstance(r, dict)
     }
     columns = []
     for column in current.body.get("columns", ()):

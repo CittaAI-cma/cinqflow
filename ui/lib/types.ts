@@ -46,6 +46,59 @@ export interface Navigation {
   destinations: Destination[];
 }
 
+/** CF-V1-E3-02. One thing that must be true before a feed can be operated. */
+export interface ChecklistItem {
+  key: string;
+  question: string;
+  satisfied: boolean;
+  why_it_matters: string;
+  how_to_fix: string;
+}
+
+export interface Readiness {
+  feed_id: string;
+  is_ready: boolean;
+  outstanding: number;
+  items: ChecklistItem[];
+  explanation: string;
+}
+
+export interface Owner {
+  role: string;
+  subject: string;
+  display_name: string;
+}
+
+/**
+ * The operational envelope around a feed's six engine fields. CF-V1-E3-02.
+ *
+ * `endpoint_ref` is the connection profile's NAME for the endpoint, never a
+ * host — so this object is the same in every environment.
+ */
+export interface FeedOperations {
+  source_id: string;
+  direction: string;
+  delivery_method: string;
+  endpoint_ref: string;
+  owners: Owner[];
+  service_level: {
+    expected_by_local_time: string;
+    timezone: string;
+    calendar: string;
+    grace_minutes: number;
+    escalate_after_minutes: number;
+  } | null;
+  volume: {
+    minimum_records: number | null;
+    maximum_records: number | null;
+    typical_records: number | null;
+    tolerance_percent: number;
+  } | null;
+  alert_chain: { after_minutes: number; channel: string; notify: string[] }[];
+  documents: { kind: string; label: string; reference: string }[];
+  notes: string;
+}
+
 export interface Feed {
   feed_id: string;
   domain: string;
@@ -59,6 +112,24 @@ export interface Feed {
   status: StatusWord;
   citation_id: string;
   route: string;
+  operations: FeedOperations;
+  readiness: Readiness | null;
+}
+
+export interface Source {
+  source_id: string;
+  name: string;
+  kind: string;
+  endpoint_ref: string;
+  line_of_business: string[];
+  states: string[];
+  owners: Owner[];
+  counterparty_contact: string;
+  notes: string;
+  version: number;
+  lifecycle_state: string;
+  status: StatusWord;
+  feed_ids: string[];
 }
 
 export interface Batch {

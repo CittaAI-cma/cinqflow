@@ -24,6 +24,7 @@ export default async function DataIntake() {
       </p>
 
       <p className="note">
+        <Link href="/data/intake/sources">Sources</Link> — who sends us data, and who to ring ·{" "}
         <Link href="/data/intake/proposals">Agent proposals awaiting review</Link> — everything an
         agent has suggested and nobody has decided. Nothing there is in effect.
       </p>
