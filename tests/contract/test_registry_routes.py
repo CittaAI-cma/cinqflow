@@ -321,3 +321,146 @@ def test_the_references_view_is_scoped_like_everything_else(client: TestClient) 
     client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
     missing = client.get("/api/feeds/not-a-feed/references", headers=_as(BA))
     assert missing.status_code == 404
+
+
+# ── clone and search · CF-V1-E3-03 ───────────────────────────────────────────
+
+MEDICAID: dict[str, Any] = {
+    "feed_id": "centene-medicaid-roster",
+    "domain": "membership",
+    "source_system": "centene",
+    "file_format": "csv",
+    "landing_path": "landing/centene/medicaid",
+    "file_pattern": r"^CENTENE_Medicaid_Roster_\d{8}\.csv$",
+    "schedule_cron": "0 6 * * 1",
+    "sample_filename": "CENTENE_Medicaid_Roster_20260801.csv",
+    "operations": {**OPERATIONS, "source_id": "centene-ny"},
+}
+
+
+def test_the_registry_can_be_searched_and_filtered(client: TestClient) -> None:
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    client.post("/api/feeds", json=MEDICAID, headers=_as(BA))
+
+    assert len(client.get("/api/feeds", headers=_as(BA)).json()) == 2
+    found = client.get("/api/feeds?q=medicaid", headers=_as(BA)).json()
+    assert [f["feed_id"] for f in found] == ["centene-medicaid-roster"]
+    assert (
+        client.get("/api/feeds?source_id=centene-ny", headers=_as(BA)).json()[0]["feed_id"]
+        == "centene-medicaid-roster"
+    )
+    assert client.get("/api/feeds?state=draft", headers=_as(BA)).json() != []
+
+
+def test_search_never_reveals_a_feed_the_caller_cannot_see(client: TestClient) -> None:
+    """The scope check runs BEFORE the filter, or the search box becomes the
+    way to find out which feeds exist."""
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    for query in ("", "?q=fidelis", "?domain=membership"):
+        assert client.get(f"/api/feeds{query}", headers=_as(PLATFORM)).status_code == 200
+
+
+def test_the_platform_offers_the_feed_worth_cloning_from(client: TestClient) -> None:
+    """ "Centene Medicare is a near-clone of Medicaid" — and the platform says
+    so from the registry's own fields, with its reasons attached."""
+    client.post("/api/feeds", json=MEDICAID, headers=_as(BA))
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+
+    ranked = client.get(f"/api/feeds/{MEDICAID['feed_id']}/similar", headers=_as(BA)).json()
+    assert ranked, "a membership roster from another payer is worth offering"
+    assert ranked[0]["feed_id"] == FEED_ID
+    assert any("same domain" in reason for reason in ranked[0]["reasons"])
+
+
+def test_a_clone_copies_the_configuration_and_none_of_the_approval(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    client.post("/api/feeds", json=MEDICAID, headers=_as(BA))
+    created = client.post(
+        f"/api/feeds/{MEDICAID['feed_id']}/clone",
+        json={
+            "new_feed_id": "centene-medicare-roster",
+            "overrides": {
+                "landing_path": "landing/centene/medicare",
+                "file_pattern": r"^CENTENE_Medicare_Roster_\d{8}\.csv$",
+                "sample_filename": "CENTENE_Medicare_Roster_20260801.csv",
+            },
+        },
+        headers=_as(BA),
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+
+    assert body["cloned_from"] == MEDICAID["feed_id"]
+    assert all(obj["lifecycle_state"] == "draft" for obj in body["created"])
+    assert all(obj["version"] == 1 for obj in body["created"])
+    assert all(obj["approved_by_subject"] is None for obj in body["created"])
+
+    clone = store.get(ObjectType.FEED, "centene-medicare-roster")
+    assert clone.body["operations"]["owners"] == OPERATIONS["owners"]
+    assert clone.body["landing_path"] == "landing/centene/medicare"
+
+
+def test_the_clone_response_carries_the_differences_panel(client: TestClient) -> None:
+    client.post("/api/feeds", json=MEDICAID, headers=_as(BA))
+    body = client.post(
+        f"/api/feeds/{MEDICAID['feed_id']}/clone",
+        json={
+            "new_feed_id": "centene-medicare-roster",
+            "overrides": {"landing_path": "landing/centene/medicare"},
+        },
+        headers=_as(BA),
+    ).json()
+
+    changed = {d["field_path"]: d for d in body["differences"]}
+    assert changed["landing_path"]["original"] == "landing/centene/medicaid"
+    assert changed["landing_path"]["clone"] == "landing/centene/medicare"
+
+
+def test_cloning_from_a_draft_warns_that_nobody_approved_it(client: TestClient) -> None:
+    """ "Unapproved inherited parts marked." The original here has never been
+    reviewed, so the clone inherits a draft rather than a decision."""
+    client.post("/api/feeds", json=MEDICAID, headers=_as(BA))
+    body = client.post(
+        f"/api/feeds/{MEDICAID['feed_id']}/clone",
+        json={"new_feed_id": "centene-medicare-roster"},
+        headers=_as(BA),
+    ).json()
+
+    assert body["warnings"], "cloning a draft must say so"
+    assert "nobody has approved it" in body["warnings"][0]
+    assert body["inherited"][0]["was_approved"] is False
+
+
+def test_cloning_onto_an_existing_feed_is_refused(client: TestClient) -> None:
+    client.post("/api/feeds", json=MEDICAID, headers=_as(BA))
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    refused = client.post(
+        f"/api/feeds/{MEDICAID['feed_id']}/clone",
+        json={"new_feed_id": FEED_ID},
+        headers=_as(BA),
+    )
+    assert refused.status_code == 409
+    assert "already exists" in refused.json()["detail"]
+
+
+def test_a_read_only_user_may_not_clone(client: TestClient) -> None:
+    client.post("/api/feeds", json=MEDICAID, headers=_as(BA))
+    refused = client.post(
+        f"/api/feeds/{MEDICAID['feed_id']}/clone",
+        json={"new_feed_id": "centene-medicare-roster"},
+        headers=_as(READ_ONLY),
+    )
+    assert refused.status_code == 403
+
+
+def test_every_cloned_object_leaves_an_audit_row(client: TestClient, store: MemMetadataDb) -> None:
+    client.post("/api/feeds", json=MEDICAID, headers=_as(BA))
+    client.post(
+        f"/api/feeds/{MEDICAID['feed_id']}/clone",
+        json={"new_feed_id": "centene-medicare-roster"},
+        headers=_as(BA),
+    )
+    ledger = store.read_audit(object_id="centene-medicare-roster")
+    assert any(e.action == "cloned" for e in ledger)
+    assert any(MEDICAID["feed_id"] in e.detail for e in ledger)

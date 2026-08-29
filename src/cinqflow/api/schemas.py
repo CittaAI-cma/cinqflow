@@ -278,6 +278,72 @@ class GovernedOut(BaseModel):
     body: dict[str, Any] = {}
 
 
+class SimilarFeedOut(BaseModel):
+    """A feed worth cloning from, and WHY it ranked. CF-V1-E3-03.
+
+    `reasons` travels because a ranked list with no explanation is a ranked
+    list somebody scrolls past — and because the score is deterministic
+    arithmetic a BA is entitled to check.
+    """
+
+    feed_id: str
+    score: int
+    reasons: list[str]
+    lifecycle_state: str
+    domain: str
+    source_system: str
+
+
+class CloneFeedIn(BaseModel):
+    """Clone this feed's configuration into a new draft. CF-V1-E3-03."""
+
+    new_feed_id: str
+    #: Applied over the copied body. `operations` merges one level deep, so a
+    #: BA changing the line of business does not restate the owners and the SLA.
+    overrides: dict[str, Any] = Field(default_factory=dict)
+    #: Which related object types to bring across. Absent means all of them —
+    #: the contract, the mappings and the rules, which are the morning's work
+    #: somebody already did.
+    include: list[str] | None = None
+
+
+class InheritedOut(BaseModel):
+    """One object the clone received, and whether anybody had approved it."""
+
+    object_type: str
+    source_object_id: str
+    source_version: int
+    source_state: str
+    new_object_id: str
+    was_approved: bool
+
+
+class DifferenceOut(BaseModel):
+    """One field where the clone and its original disagree."""
+
+    object_type: str
+    field_path: str
+    original: Any = None
+    clone: Any = None
+
+
+class CloneOut(BaseModel):
+    """What the clone produced, and everything a reviewer should know.
+
+    `warnings` is "unapproved inherited parts marked" — a mapping copied from
+    a published feed carries somebody's signature behind it, and the same
+    mapping copied from a draft carries nobody's.
+    """
+
+    feed_id: str
+    cloned_from: str
+    cloned_from_version: int
+    created: list[GovernedOut]
+    inherited: list[InheritedOut]
+    differences: list[DifferenceOut]
+    warnings: list[str]
+
+
 class TransitionIn(BaseModel):
     """A governance act's payload. `comment` is optional on submit/approve and
     REQUIRED on request-changes and reject — enforced by the lifecycle engine,

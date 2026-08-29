@@ -155,6 +155,16 @@ export default async function FeedPage({
       ) : null}
 
       <div className="card">
+        <strong>Start a new feed from this one</strong>
+        <p className="note">
+          A clone inherits the contract, the mappings and the rules — and none of the approval.
+        </p>
+        <Link className="cited" href={`/data/intake/feed/${feed.feed_id}/clone`}>
+          Clone this feed →
+        </Link>
+      </div>
+
+      <div className="card">
         <strong>Ask about this feed</strong>
         <p className="note">
           The compiled plan, the contract and the rules are explained by the Pipeline Insight

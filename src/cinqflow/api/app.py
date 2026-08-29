@@ -43,12 +43,15 @@ from cinqflow.api.schemas import (
     BudgetOut,
     ChecklistItemOut,
     ClaimOut,
+    CloneFeedIn,
+    CloneOut,
     ColumnProfileOut,
     ContractOut,
     CorrectionOut,
     DateFormatOut,
     DestinationOut,
     DetectPhiIn,
+    DifferenceOut,
     FeedIn,
     FeedOut,
     FileProfileOut,
@@ -59,6 +62,7 @@ from cinqflow.api.schemas import (
     HomeSlotOut,
     ImpactPacketOut,
     InferSchemaIn,
+    InheritedOut,
     KeyCandidateOut,
     KeySearchOut,
     MaskingPolicyOut,
@@ -78,6 +82,7 @@ from cinqflow.api.schemas import (
     RefusalOut,
     RejectProposalIn,
     RowsOut,
+    SimilarFeedOut,
     SourceIn,
     SourceOut,
     ToolOut,
@@ -105,8 +110,10 @@ from cinqflow.core.persona import home_for
 from cinqflow.core.phi import Basis, ColumnClassification, PhiDowngradeRefusedError, reclassify
 from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
 from cinqflow.core.proposals import Proposal, ProposalState
+from cinqflow.core.registry import clone as registry_clone
 from cinqflow.core.registry import feed as feed_registry
 from cinqflow.core.registry import operations
+from cinqflow.core.registry import search as registry_search
 from cinqflow.core.registry import source as source_registry
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
@@ -282,17 +289,175 @@ def create_app(
     def list_feeds(
         metadata: Store,
         principal: Annotated[Principal, Depends(require(Action.VIEW))],
+        q: str = "",
+        domain: str = "",
+        source_system: str = "",
+        source_id: str = "",
+        delivery_method: str = "",
+        state: str = "",
+        owner: str = "",
+        not_ready: bool = False,
     ) -> list[FeedOut]:
         """Scope is applied while the list is BUILT, never to a finished response.
 
         "Apply a scope filter to results rather than to the query"
         — INVARIANTS.md, a documented don't
+
+        CF-V1-E3-03's filters are applied in the SAME pass, and after the
+        scope check rather than before it: an out-of-scope feed must be
+        invisible in search exactly as it is in the list, or the search box
+        becomes the way to find out which feeds exist.
         """
-        return [
-            _feed_out(obj)
+        visible = [
+            obj
             for obj in metadata.list(ObjectType.FEED)
             if principal.scopes.covers_feed(obj.object_id)
         ]
+        criteria = registry_search.FeedFilter(
+            text=q,
+            domain=domain,
+            source_system=source_system,
+            source_id=source_id,
+            delivery_method=delivery_method,
+            lifecycle_state=state,
+            owner=owner,
+            not_ready=not_ready,
+        )
+        readiness = {obj.object_id: operations.readiness_of(obj).is_ready for obj in visible}
+        return [
+            _feed_out(obj) for obj in registry_search.search(visible, criteria, readiness=readiness)
+        ]
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/similar",
+        response_model=list[SimilarFeedOut],
+        tags=["intake"],
+    )
+    def similar_feeds(
+        feed_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+        limit: int = 5,
+    ) -> list[SimilarFeedOut]:
+        """Which feeds this one is worth cloning from, and why. CF-V1-E3-03.
+
+        Deterministic arithmetic over the registry's own structured fields —
+        so "why is this first" has an answer in one line, and no model is
+        involved in a question the data already settles.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        target = _load(metadata, feed_id)
+        candidates = [
+            obj
+            for obj in metadata.list(ObjectType.FEED)
+            if principal.scopes.covers_feed(obj.object_id)
+        ]
+        return [
+            SimilarFeedOut(
+                feed_id=match.feed_id,
+                score=match.score,
+                reasons=list(match.reasons),
+                lifecycle_state=match.feed.lifecycle_state.value,
+                domain=str(match.feed.body.get("domain", "")),
+                source_system=str(match.feed.body.get("source_system", "")),
+            )
+            for match in registry_search.similar_to(target, candidates, limit=limit)
+        ]
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/clone",
+        response_model=CloneOut,
+        status_code=status.HTTP_201_CREATED,
+        tags=["intake"],
+    )
+    def clone_feed(
+        feed_id: str,
+        body: CloneFeedIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.CREATE_FEED))],
+    ) -> CloneOut:
+        """Copy a feed's configuration into fresh drafts. CF-V1-E3-03.
+
+        CONFIGURATION IS INHERITED, HISTORY IS NOT. The clone gets the
+        contract, the mappings and the rules; it gets none of the approval,
+        none of the audit trail and none of the evidence. A clone that
+        arrived Approved would let one review approve two feeds.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        original = _load(metadata, feed_id)
+
+        registry: list[GovernedObject] = []
+        for object_type in ObjectType:
+            registry.extend(metadata.list(object_type))
+
+        try:
+            result = registry_clone.clone_feed(
+                original,
+                registry,
+                new_feed_id=body.new_feed_id,
+                author=principal.as_actor(),
+                overrides=body.overrides,
+                include=(
+                    frozenset(ObjectType(t) for t in body.include)
+                    if body.include is not None
+                    else None
+                ),
+            )
+        except (registry_clone.CloneError, ValueError) as refused:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(refused)) from None
+
+        try:
+            metadata.get(ObjectType.FEED, body.new_feed_id)
+        except ObjectNotFoundError:
+            pass
+        else:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"feed {body.new_feed_id!r} already exists. A clone creates a new feed; "
+                "editing an existing one is a new version of that feed.",
+            )
+
+        for obj in result.objects:
+            metadata.save(obj)
+            audit.record(
+                object_type=obj.object_type,
+                object_id=obj.object_id,
+                version=obj.version,
+                action="cloned",
+                actor=principal.as_actor(),
+                detail=f"from {feed_id}@v{original.version}",
+            )
+
+        return CloneOut(
+            feed_id=result.feed_id,
+            cloned_from=result.cloned_from,
+            cloned_from_version=result.cloned_from_version,
+            created=[_governed_out(obj) for obj in result.objects],
+            inherited=[
+                InheritedOut(
+                    object_type=item.object_type.value,
+                    source_object_id=item.source_object_id,
+                    source_version=item.source_version,
+                    source_state=item.source_state.value,
+                    new_object_id=item.new_object_id,
+                    was_approved=item.was_approved,
+                )
+                for item in result.inherited
+            ],
+            differences=[
+                DifferenceOut(
+                    object_type=d.object_type.value,
+                    field_path=d.field_path,
+                    original=d.original,
+                    clone=d.clone,
+                )
+                for d in result.differences
+            ],
+            warnings=list(result.warnings),
+        )
 
     @app.get(f"{API_PREFIX}/feeds/{{feed_id}}", response_model=FeedOut, tags=["intake"])
     def get_feed(
