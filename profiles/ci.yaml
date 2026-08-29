@@ -20,7 +20,9 @@ pins:
   sql_query:      { adapter: pg-readonly }
   identity:       { adapter: mock, scenarios: goldensets/reference/verato-scenarios.yaml }
   legacy_readonly: { adapter: none }
-  metadata_db:    { dsn: "postgresql://cinqflow:cinqflow@localhost:5432/cinqflow" }
+  # A reference, not a value — even in CI, and even for a throwaway container.
+  # The one profile that embeds a DSN is the one that teaches everyone else to.
+  metadata_db:    { dsn: "secret://pg-dsn" }
   queue:          { adapter: pg-skip-locked }
   cache:          { adapter: none }
   authn:          { adapter: static, users: profiles/dev-users.yaml }

@@ -42,6 +42,7 @@ faker>=40.0                   # simulator: names, addresses, dates. Coded fields
 import-linter>=2.14            # layered + forbidden-module contracts (see .importlinter)
 ruff>=0.16
 mypy>=2.3,<3.0
+types-PyYAML>=6.0            # the profile loader is typed, and yaml ships no stubs
 detect-secrets>=1.5           # the "no credential in core" half of the purity check
 pip-audit>=2.10
 bandit>=1.9
