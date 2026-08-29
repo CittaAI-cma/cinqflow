@@ -572,6 +572,28 @@ class CorrectionOut(BaseModel):
     is_addition: bool
 
 
+class PhiColumnOut(BaseModel):
+    """One column's PHI verdict, with the basis it rests on. CF-V1-E5-03.
+
+    `basis` is on the wire rather than derived in the client because the whole
+    review screen turns on it: "the glossary says so" and "nothing identified
+    this, so we are protecting it" are the same flag and completely different
+    asks of a steward's attention.
+    """
+
+    source_name: str
+    position: int
+    is_phi: bool
+    basis: str
+    phi_kind: str | None = None
+    code_set: str | None = None
+    confidence: float = 0.0
+    needs_steward_review: bool = False
+    glossary_id: str | None = None
+    rationale: str = ""
+    citations: list[str] = Field(default_factory=list)
+
+
 class ProposalOut(BaseModel):
     """One agent proposal, as the review screen renders it.
 
@@ -603,6 +625,55 @@ class ProposalOut(BaseModel):
     refusals: list[str]
     corrections: list[CorrectionOut]
     model_called: bool = True
+    # ── CF-V1-E5-03 · populated for `phi-detection` proposals only ───────────
+    #
+    # A second list rather than a second response model, so ONE review queue
+    # renders every R2 agent's output. `agent` says which list is populated;
+    # the other is empty, and a client that renders both renders correctly for
+    # either without knowing the agent's name.
+    phi_columns: list[PhiColumnOut] = Field(default_factory=list)
+    needs_steward_review: list[str] = Field(default_factory=list)
+    masked_columns: list[str] = Field(default_factory=list)
+
+
+class DetectPhiIn(BaseModel):
+    """Ask the agent to classify a stored profile's columns."""
+
+    profile_id: str
+
+
+class MaskingPolicyOut(BaseModel):
+    """What E2 masks, as the approved classification left it.
+
+    Read from the proposal's stored payload rather than recomputed, so the
+    masking a steward approved and the masking that runs are provably one
+    document.
+    """
+
+    feed_id: str
+    profile_id: str
+    proposal_id: str
+    state: str
+    masked_columns: list[str]
+    unmasked_columns: list[str]
+    pending_steward: list[str]
+
+
+class PhiRecallOut(BaseModel):
+    """The gate, computed against the client's own glossary.
+
+    `expected` is how many of this file's columns the glossary flags;
+    `protected` is how many of those the classification protected. The gate is
+    equality — reported as two integers so it can be checked rather than
+    trusted.
+    """
+
+    protected: int
+    expected: int
+    passes: bool
+    missed: list[str]
+    over_flagged: list[str]
+    report: str
 
 
 class InferSchemaIn(BaseModel):
@@ -637,6 +708,24 @@ class ApproveProposalIn(BaseModel):
     comment: str = ""
     columns: list[ColumnDecisionIn] = Field(default_factory=list)
     key_columns: list[str] = Field(default_factory=list)
+
+
+class ReclassifyIn(BaseModel):
+    """A steward's decision about what columns hold. CF-V1-E5-03.
+
+    `rationale` is required by the type rather than checked in the handler,
+    because this is the one request in the platform that can reduce the
+    protection on a field — and the schema is the earliest place to say a
+    reason is not optional.
+    """
+
+    rationale: str = Field(min_length=1)
+    columns: list[ColumnDecisionIn] = Field(default_factory=list)
+
+    def as_approval(self) -> ApproveProposalIn:
+        """The same shape the approve path uses, so both routes fold a
+        reviewer's decisions in through ONE function and cannot drift."""
+        return ApproveProposalIn(comment=self.rationale, columns=self.columns)
 
 
 class RejectProposalIn(BaseModel):

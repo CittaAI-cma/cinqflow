@@ -61,12 +61,18 @@ from typing import Any, Self
 
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.parsers import cell_to_text
+from cinqflow.core.patterns import BY_ID, PATTERNS, Pattern
 from cinqflow.core.schema_spec import TypeName
 
 #: Bumped when a computation changes. It is part of the fingerprint, so a
 #: profiler that starts counting nulls differently produces visibly different
 #: evidence rather than quietly disagreeing with a stored profile.
-PROFILER_VERSION = "1.0.0"
+#:
+#: 1.1.0 · CF-V1-E5-03 added `ColumnProfile.pattern_matches`. Every profile
+#: computed by 1.0.0 therefore has a different id from the same file profiled
+#: now — which is correct and is the reason the version is IN the fingerprint:
+#: the older row is not wrong, it is evidence about less.
+PROFILER_VERSION = "1.1.0"
 
 #: "A 50MB sample profiles in minutes with progress" — the story's bound, as a
 #: default rather than a hope.
@@ -85,6 +91,12 @@ DEFAULT_RETAIN_ROWS = 100_000
 EXAMPLE_VALUES = 5
 TOP_VALUES = 10
 FIRST_LINES = 5
+
+#: CF-V1-E5-03's free-text bounds. Longer than the widest identifier or code
+#: this estate carries (an eleven-character MBI), and various enough that the
+#: column cannot be an enumeration.
+FREE_TEXT_MIN_LENGTH = 40
+FREE_TEXT_DISTINCT_RATIO = 0.8
 
 #: What payers write when they mean null. A literal "NULL" in a CSV is a
 #: four-character string, and a column that is 40% these is not 0% null — it is
@@ -219,6 +231,39 @@ class TypeCandidate:
 
 
 @dataclass(frozen=True)
+class PatternMatch:
+    """How many values fitted one declared value shape. CF-V1-E5-03.
+
+    Counted HERE rather than by the PHI detector, and that placement is the
+    story's whole economics. The profiler already streams every value once; a
+    detector sampling five example values would report a rate computed from
+    five values and call it evidence. `matched`/`considered` over the whole
+    sample is arithmetic a reviewer can check.
+
+    Two integers and an id — no values, no floats — so this fingerprints
+    exactly like `TypeCandidate` does, and a re-profile of unchanged bytes
+    still collides onto the same row.
+    """
+
+    pattern_id: str
+    matched: int
+    considered: int
+
+    @property
+    def is_total(self) -> bool:
+        return self.considered > 0 and self.matched == self.considered
+
+    @property
+    def share(self) -> float:
+        """Display only. The two integers are what evidence is compared on."""
+        return self.matched / self.considered if self.considered else 0.0
+
+    @property
+    def pattern(self) -> Pattern | None:
+        return BY_ID.get(self.pattern_id)
+
+
+@dataclass(frozen=True)
 class DateFormatMatch:
     """Which date spelling arrived, and how often.
 
@@ -268,6 +313,10 @@ class ColumnProfile:
     padded_count: int = 0
     type_candidates: tuple[TypeCandidate, ...] = ()
     date_formats: tuple[DateFormatMatch, ...] = ()
+    #: CF-V1-E5-03. Counts against the declared value shapes — never a verdict
+    #: about what the column holds. Only shapes with at least one match are
+    #: carried, so a forty-column file does not store 800 zeroes.
+    pattern_matches: tuple[PatternMatch, ...] = ()
     #: Widest numeric shape observed, so a decimal contract can declare
     #: precision and scale — which `schema_spec.Column` REQUIRES it to.
     observed_precision: int | None = None
@@ -356,6 +405,56 @@ class ColumnProfile:
         if not total:
             return TypeName.STRING
         return total[0] if len(total) == 1 else None
+
+    # ── CF-V1-E5-03 · what the shapes say, and what they do not ─────────────
+    @property
+    def total_pattern_matches(self) -> tuple[PatternMatch, ...]:
+        """Shapes that fitted EVERY populated value. Reported in declaration
+        order, so two runs list them identically."""
+        return tuple(m for m in self.pattern_matches if m.is_total)
+
+    @property
+    def decisive_patterns(self) -> tuple[PatternMatch, ...]:
+        """Shapes that fitted everything AND could not have done so by accident.
+
+        This is the only pattern evidence that settles anything on its own. A
+        column where this is non-empty is a column the platform can name by
+        computation; everywhere else the shapes are a hint and the decision
+        needs the glossary, the column's name, or a person.
+        """
+        return tuple(
+            m
+            for m in self.total_pattern_matches
+            if (pattern := m.pattern) is not None and pattern.discriminating
+        )
+
+    @property
+    def is_free_text(self) -> bool:
+        """Long, various, untypeable prose — a `NOTES` column.
+
+        The blueprint's rule for CF-V1-E5-03 is that free text is treated as
+        PHI until a steward decides otherwise, so the platform has to be able
+        to RECOGNISE free text rather than assert it. Three measured facts,
+        all of which must hold:
+
+          • nothing narrower than string fits, so it is not a code or a date;
+          • the longest value is longer than any identifier or code in this
+            estate (the widest is an eleven-character MBI);
+          • values barely repeat, which is what separates prose from an
+            enumeration of long-ish labels like `PRIMARY CARE PHYSICIAN`.
+
+        Bounded on the low side too: a column of thirty distinct values that
+        happen to be sixty characters long is a category list, not prose.
+        """
+        if self.populated_count == 0 or self.narrowest_type is not TypeName.STRING:
+            return False
+        if self.max_length <= FREE_TEXT_MIN_LENGTH:
+            return False
+        if not self.distinct_is_exact:
+            # The distinct cap bit, which means the column has more than
+            # 200,000 distinct values. Nothing enumerable is that various.
+            return True
+        return self.distinct_count / self.populated_count >= FREE_TEXT_DISTINCT_RATIO
 
     def without_values(self) -> Self:
         return replace(
@@ -503,6 +602,8 @@ class FileProfile:
                 )
             for fmt in column.date_formats:
                 lines.append(f"  date={fmt.label}:{fmt.matched}")
+            for shape in column.pattern_matches:
+                lines.append(f"  shape={shape.pattern_id}:{shape.matched}/{shape.considered}")
         for finding in self.findings:
             lines.append(
                 f"finding={finding.quirk.value}:{finding.occurrences}"
@@ -654,6 +755,14 @@ class FileProfile:
                     "date_formats": [
                         {"label": d.label, "matched": d.matched} for d in c.date_formats
                     ],
+                    "pattern_matches": [
+                        {
+                            "pattern_id": m.pattern_id,
+                            "matched": m.matched,
+                            "considered": m.considered,
+                        }
+                        for m in c.pattern_matches
+                    ],
                     "examples": list(c.examples),
                     "top_values": [[v, n] for v, n in c.top_values],
                     "min_value": c.min_value,
@@ -773,6 +882,19 @@ class FileProfile:
                             considered=int(t["considered"]),
                         )
                         for t in c.get("type_candidates", ())
+                    ),
+                    pattern_matches=tuple(
+                        PatternMatch(
+                            pattern_id=str(m["pattern_id"]),
+                            matched=int(m["matched"]),
+                            considered=int(m["considered"]),
+                        )
+                        for m in c.get("pattern_matches", ())
+                        # A shape this build no longer declares is DROPPED
+                        # rather than carried as an unreadable id: the
+                        # profiler version in the fingerprint already says the
+                        # evidence was computed by a different build.
+                        if str(m["pattern_id"]) in BY_ID
                     ),
                     date_formats=tuple(
                         DateFormatMatch(label=d["label"], matched=int(d["matched"]))
@@ -941,6 +1063,7 @@ class _ColumnAccumulator:
         "null_count",
         "null_like_count",
         "padded_count",
+        "pattern_hits",
         "position",
         "row_count",
         "typed_cell_count",
@@ -962,6 +1085,7 @@ class _ColumnAccumulator:
         self.max_int_digits = 0
         self.max_scale = 0
         self.matches: dict[TypeName, int] = {name: 0 for name, _ in _RECOGNISERS}
+        self.pattern_hits: dict[str, int] = {p.pattern_id: 0 for p in PATTERNS}
         self.date_labels: Counter[str] = Counter()
         self._distinct: set[str] = set()
         self._distinct_overflowed = False
@@ -997,6 +1121,13 @@ class _ColumnAccumulator:
             self.date_labels[label] += 1
         if _is_decimal(text):
             self._widen_numeric(text)
+
+        # CF-V1-E5-03. Every shape, every value — one pass, no sampling. A hit
+        # rate computed from five example values would be a number nobody
+        # should act on, and acting on it is the whole point.
+        for pattern in PATTERNS:
+            if pattern.matches(text):
+                self.pattern_hits[pattern.pattern_id] += 1
 
         if not self._distinct_overflowed:
             if len(self._distinct) >= self._cap and text not in self._distinct:
@@ -1046,6 +1177,16 @@ class _ColumnAccumulator:
             date_formats=tuple(
                 DateFormatMatch(label=label, matched=count)
                 for label, count in sorted(self.date_labels.items())
+            ),
+            # Declaration order, and only the shapes something actually fitted.
+            pattern_matches=tuple(
+                PatternMatch(
+                    pattern_id=pattern.pattern_id,
+                    matched=self.pattern_hits[pattern.pattern_id],
+                    considered=self.considered,
+                )
+                for pattern in PATTERNS
+                if self.pattern_hits[pattern.pattern_id]
             ),
             observed_precision=(self.max_int_digits + self.max_scale) if decimal_seen else None,
             observed_scale=self.max_scale if decimal_seen else None,

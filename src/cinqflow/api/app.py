@@ -46,6 +46,7 @@ from cinqflow.api.schemas import (
     CorrectionOut,
     DateFormatOut,
     DestinationOut,
+    DetectPhiIn,
     FeedIn,
     FeedOut,
     FileProfileOut,
@@ -58,11 +59,15 @@ from cinqflow.api.schemas import (
     InferSchemaIn,
     KeyCandidateOut,
     KeySearchOut,
+    MaskingPolicyOut,
     NavigationOut,
+    PhiColumnOut,
+    PhiRecallOut,
     PrincipalOut,
     ProfileIn,
     ProposalOut,
     ProposedColumnOut,
+    ReclassifyIn,
     RefusalOut,
     RejectProposalIn,
     RowsOut,
@@ -76,6 +81,7 @@ from cinqflow.api.schemas import (
     WorkQueueOut,
 )
 from cinqflow.core import lifecycle, proposals
+from cinqflow.core.agents.phi_detection.graph import AGENT as PHI_DETECTION_AGENT
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.impact import ImpactPacket, ImpactUnknownError, Touched, build_packet
@@ -87,6 +93,7 @@ from cinqflow.core.model.governed import (
 )
 from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
 from cinqflow.core.persona import home_for
+from cinqflow.core.phi import Basis, ColumnClassification, PhiDowngradeRefusedError, reclassify
 from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
 from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry import feed as feed_registry
@@ -95,6 +102,7 @@ from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.core.registry.wave0 import wave_0_register
 from cinqflow.core.security import Action, may
 from cinqflow.core.tools import CATALOGUE, ToolError
+from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent, RecallGateFailedError
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.tools import ToolContext, ToolResult, all_dq_rule_entries, invoke
@@ -111,6 +119,10 @@ API_PREFIX = "/api"
 #: people it is about never see.
 SCHEMA_ACCEPTANCE_GATE = 0.90
 
+#: CF-V1-E5-03's agent name, imported rather than spelled, so a rename cannot
+#: leave the routes filtering for an agent that no longer exists.
+PHI_AGENT = PHI_DETECTION_AGENT
+
 #: Build an agent for ONE caller. Never a shared agent — a shared agent is a
 #: shared scope, and the tool context is where the caller's RBAC lives.
 AgentFactory = Callable[[Principal, "ControlTablesPort", MetadataDbPort], PipelineInsightAgent]
@@ -119,6 +131,9 @@ AgentFactory = Callable[[Principal, "ControlTablesPort", MetadataDbPort], Pipeli
 #: whichever metadata pin the request is served by, which on the real plane is
 #: a per-request transaction.
 SchemaInferenceFactory = Callable[[MetadataDbPort], SchemaInferenceAgent]
+
+#: Same reasoning, same lifetime. CF-V1-E5-03.
+PhiDetectionFactory = Callable[[MetadataDbPort], PhiDetectionAgent]
 
 
 @unique
@@ -193,6 +208,7 @@ def create_app(
     storage: StoragePort | None = None,
     agent_factory: AgentFactory | None = None,
     schema_inference_factory: SchemaInferenceFactory | None = None,
+    phi_detection_factory: PhiDetectionFactory | None = None,
     budget: Budget | None = None,
 ) -> FastAPI:
     """Build the app from PINS.
@@ -221,6 +237,7 @@ def create_app(
     # 500ing — the deterministic profile and the manual editor still work,
     # which is exactly what a deployment with no model endpoint should offer.
     app.state.schema_inference_factory = schema_inference_factory
+    app.state.phi_detection_factory = phi_detection_factory
     # The cap the observability screen reports against. A screen showing spend
     # with no cap beside it is a number, not a control.
     app.state.llm_budget = budget or Budget(
@@ -590,6 +607,126 @@ def create_app(
         )
         return _proposal_out(result.proposal, model_called=result.model_called)
 
+    # ── PHI and code-set detection · CF-V1-E5-03 ─────────────────────────────
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/detect-phi",
+        response_model=ProposalOut,
+        tags=["intelligence"],
+    )
+    def detect_phi(
+        feed_id: str,
+        body: DetectPhiIn,
+        request: Request,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        audit: Audit,
+    ) -> ProposalOut:
+        """Classify every column of a stored profile: PHI, code set, or neither.
+
+        A 500 rather than a proposal if the recall gate fails, deliberately.
+        `RecallGateFailedError` means the detector did not protect a column the
+        client's own glossary flags — that is a broken control, not a
+        low-quality suggestion, and it must not reach a queue where somebody
+        could approve it.
+        """
+        agent_factory = request.app.state.phi_detection_factory
+        if agent_factory is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no LLM pin is fitted on this deployment, so PHI detection is not "
+                "available. Note that the glossary flags, the value-shape arithmetic "
+                "and the free-text rule need no model — fit the pin to have the "
+                "remaining columns named.",
+            )
+        try:
+            record = metadata.get_profile(body.profile_id, feed_id)
+        except ObjectNotFoundError:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"no profile {body.profile_id!r} for feed {feed_id!r} — profile the sample first",
+            ) from None
+
+        try:
+            result = agent_factory(metadata).propose(
+                record.profile,
+                feed_id=feed_id,
+                glossary=_glossary_of(metadata),
+                caller=principal.as_actor(),
+            )
+        except RecallGateFailedError as broken:
+            audit.record(
+                object_type=ObjectType.FEED,
+                object_id=feed_id,
+                action="refused:detect_phi",
+                actor=principal.as_actor(),
+                detail=str(broken),
+            )
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(broken)) from None
+
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=feed_id,
+            action="detect_phi",
+            actor=principal.as_actor(),
+            detail=(
+                f"{result.proposal.proposal_id} · {len(result.phi_columns)} of "
+                f"{len(result.classification.columns)} columns protected, "
+                f"{len(result.needs_steward_review)} awaiting a steward, "
+                f"model_called={result.model_called}"
+            ),
+        )
+        return _proposal_out(result.proposal, model_called=result.model_called)
+
+    @app.get(
+        f"{API_PREFIX}/proposals/{{proposal_id}}/recall",
+        response_model=PhiRecallOut,
+        tags=["intelligence"],
+    )
+    def phi_recall(
+        proposal_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> PhiRecallOut:
+        """The 100% recall gate, recomputed from the stored classification.
+
+        Exposed rather than kept in the eval for the same reason the
+        acceptance rate is: a control only CI can see is a control nobody
+        maintains. Recomputed from the payload against the CURRENT glossary,
+        so a term flagged PHI after the run shows up here as a miss — which is
+        exactly the alert a steward wants.
+        """
+        try:
+            proposal = metadata.get_proposal(proposal_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no proposal {proposal_id!r}") from None
+        return _recall_out(proposal, _glossary_of(metadata))
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/masking-policy",
+        response_model=MaskingPolicyOut,
+        tags=["intelligence"],
+    )
+    def masking_policy_for(
+        feed_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> MaskingPolicyOut:
+        """What E2 would mask for this feed, from the newest classification.
+
+        The newest — not the newest APPROVED. A classification awaiting review
+        already masks everything it flagged, because "treated PHI until a
+        steward decides" means the protection is in place while the decision
+        is pending. `state` travels so the caller can see which it is.
+        """
+        candidates = metadata.list_proposals(feed_id=feed_id, agent=PHI_AGENT, limit=1)
+        if not candidates:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"no PHI classification for feed {feed_id!r} — run detection on a profile first",
+            )
+        return _masking_policy_out(candidates[0])
+
     @app.get(f"{API_PREFIX}/proposals", response_model=list[ProposalOut], tags=["intelligence"])
     def list_proposals(
         metadata: Store,
@@ -656,6 +793,19 @@ def create_app(
             key="source_name",
             fields=("name", "type", "nullable", "is_phi", "date_format"),
         )
+        if proposal.agent == PHI_AGENT:
+            try:
+                _refuse_downgrades_on_the_approve_path(corrections)
+            except PhiDowngradeRefusedError as refused:
+                audit.record(
+                    object_type=ObjectType.CONTRACT,
+                    object_id=proposal.feed_id or proposal_id,
+                    action="refused:phi_downgrade",
+                    actor=principal.as_actor(),
+                    detail=str(refused),
+                )
+                raise HTTPException(status.HTTP_403_FORBIDDEN, str(refused)) from None
+
         try:
             decided = proposals.approve(
                 proposal,
@@ -667,7 +817,16 @@ def create_app(
                 decided,
                 object_type=ObjectType.CONTRACT,
                 object_id=proposal.feed_id or "",
-                body=_contract_body(accepted, key_columns=tuple(body.key_columns)),
+                body=(
+                    _phi_contract_body(
+                        metadata,
+                        proposal.feed_id or "",
+                        accepted,
+                        _cleared_by_steward(corrections),
+                    )
+                    if proposal.agent == PHI_AGENT
+                    else _contract_body(accepted, key_columns=tuple(body.key_columns))
+                ),
                 version=_next_contract_version(metadata, proposal.feed_id or ""),
             )
         except proposals.ProposalError as refused:
@@ -689,6 +848,106 @@ def create_app(
             action="applied_proposal",
             actor=principal.as_actor(),
             detail=f"{proposal_id} · {len(corrections)} correction(s)",
+        )
+        return _proposal_out(stored)
+
+    @app.post(
+        f"{API_PREFIX}/proposals/{{proposal_id}}/reclassify",
+        response_model=ProposalOut,
+        tags=["intelligence"],
+    )
+    def reclassify_proposal(
+        proposal_id: str,
+        body: ReclassifyIn,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.APPROVE))],
+        audit: Audit,
+    ) -> ProposalOut:
+        """A steward's decision about what a column holds. CF-V1-E5-03.
+
+        THE ONLY PATH THAT CAN REDUCE PROTECTION, and it requires the APPROVE
+        permission, a named human and a stated reason. The reason is not
+        ceremony: masking, the vector store's PHI-absence guarantee and E7's
+        rule suggestions all read these flags, so an unexplained downgrade is
+        an unreviewable one.
+
+        Like the approve route, this ACCEPTS the classification and produces a
+        DRAFT contract authored by the steward — so their decision travels the
+        same lifecycle as anything else they would have typed by hand.
+        """
+        try:
+            proposal = metadata.get_proposal(proposal_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no proposal {proposal_id!r}") from None
+        if proposal.agent != PHI_AGENT:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"proposal {proposal_id!r} is from {proposal.agent!r}, which classifies "
+                "nothing. Reclassification is a PHI decision.",
+            )
+
+        accepted = _apply_decisions(proposal.payload, body.as_approval())
+        corrections = proposals.diff_fields(
+            proposal.payload, accepted, key="source_name", fields=("is_phi",)
+        )
+        cleared = _cleared_by_steward(corrections)
+        current = {
+            str(r.get("source_name")): r
+            for r in proposal.payload.get("records", ())
+            if isinstance(r, dict)
+        }
+        try:
+            for source_name in sorted(cleared):
+                record = current.get(source_name, {})
+                # Routed through the CORE function rather than re-checked here,
+                # so the rule cannot come to differ between this route and the
+                # steward screen a later wave builds.
+                reclassify(
+                    ColumnClassification(
+                        source_name=source_name,
+                        position=int(record.get("position", 0)),
+                        is_phi=True,
+                        basis=Basis(str(record.get("basis", Basis.PRECAUTION.value))),
+                    ),
+                    is_phi=False,
+                    steward=principal.as_actor(),
+                    rationale=body.rationale,
+                )
+            decided = proposals.approve(
+                proposal,
+                approver=principal.as_actor(),
+                comment=body.rationale,
+                corrections=corrections,
+            )
+            applied, draft = proposals.apply(
+                decided,
+                object_type=ObjectType.CONTRACT,
+                object_id=proposal.feed_id or "",
+                body=_phi_contract_body(metadata, proposal.feed_id or "", accepted, cleared),
+                version=_next_contract_version(metadata, proposal.feed_id or ""),
+            )
+        except (PhiDowngradeRefusedError, proposals.ProposalError) as refused:
+            audit.record(
+                object_type=ObjectType.CONTRACT,
+                object_id=proposal.feed_id or proposal_id,
+                action="refused:reclassify",
+                actor=principal.as_actor(),
+                detail=str(refused),
+            )
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(refused)) from None
+
+        metadata.save(draft)
+        stored = metadata.record_proposal(applied)
+        audit.record(
+            object_type=ObjectType.CONTRACT,
+            object_id=draft.object_id,
+            version=draft.version,
+            action="reclassified",
+            actor=principal.as_actor(),
+            detail=(
+                f"{proposal_id} · cleared {', '.join(sorted(cleared)) or 'nothing'} · "
+                f"{body.rationale}"
+            ),
         )
         return _proposal_out(stored)
 
@@ -1513,8 +1772,76 @@ def _finding_out(finding: Finding) -> FindingOut:
     )
 
 
+def _phi_column_fields(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_name": str(record.get("source_name", "")),
+        "position": int(record.get("position", 0)),
+        "is_phi": bool(record.get("is_phi", False)),
+        "basis": str(record.get("basis", "precaution")),
+        "phi_kind": record.get("phi_kind"),
+        "code_set": record.get("code_set"),
+        "confidence": float(record.get("confidence", 0.0)),
+        "needs_steward_review": bool(record.get("needs_steward_review", False)),
+        "glossary_id": record.get("glossary_id"),
+        "rationale": str(record.get("rationale", "")),
+        "citations": list(record.get("citations", ())),
+    }
+
+
+def _recall_out(proposal: Proposal, glossary: Glossary) -> PhiRecallOut:
+    """Recompute the gate from a stored classification.
+
+    Rebuilt from the payload rather than from a stored number, because a
+    recall figure written at classification time cannot notice that a term was
+    flagged PHI last Tuesday. The arithmetic is trivial and the staleness is
+    the whole risk.
+    """
+    records = [r for r in proposal.payload.get("records", ()) if isinstance(r, dict)]
+    expected = [r for r in records if glossary.is_phi_column(str(r.get("source_name", "")))]
+    protected = [r for r in expected if r.get("is_phi")]
+    missed = [str(r.get("source_name")) for r in expected if not r.get("is_phi")]
+    over = [
+        str(r.get("source_name"))
+        for r in records
+        if r.get("is_phi") and not glossary.is_phi_column(str(r.get("source_name", "")))
+    ]
+    return PhiRecallOut(
+        protected=len(protected),
+        expected=len(expected),
+        passes=not missed,
+        missed=missed,
+        over_flagged=over,
+        report=(
+            f"{len(protected)}/{len(expected)} glossary-flagged columns protected"
+            + (f" — MISSED: {', '.join(missed)}" if missed else " — gate holds")
+            + f" · {len(over)} column(s) protected that the glossary does not flag "
+            "(the safe direction, reported not gated)"
+        ),
+    )
+
+
+def _masking_policy_out(proposal: Proposal) -> MaskingPolicyOut:
+    records = [r for r in proposal.payload.get("records", ()) if isinstance(r, dict)]
+    return MaskingPolicyOut(
+        feed_id=proposal.feed_id or "",
+        profile_id=str(proposal.payload.get("profile_id", "")),
+        proposal_id=proposal.proposal_id,
+        state=proposal.state.value,
+        masked_columns=[str(r.get("source_name")) for r in records if r.get("is_phi")],
+        unmasked_columns=[str(r.get("source_name")) for r in records if not r.get("is_phi")],
+        pending_steward=[
+            str(r.get("source_name")) for r in records if r.get("needs_steward_review")
+        ],
+    )
+
+
 def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalOut:
     records = proposal.payload.get("records", ())
+    # ONE queue, two record shapes. Dispatched on the agent's name rather than
+    # sniffed from the payload's keys: a payload that grows a `basis` field
+    # would silently change how every proposal renders, and the agent is what
+    # actually determines the shape.
+    is_phi_agent = proposal.agent == PHI_AGENT
     return ProposalOut(
         proposal_id=proposal.proposal_id,
         agent=proposal.agent,
@@ -1536,7 +1863,14 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
         applied_object_id=proposal.applied_object_id,
         applied_version=proposal.applied_version,
         grounding_citations=[str(c) for c in proposal.grounding_citations],
-        columns=[ProposedColumnOut(**_column_fields(r)) for r in records],
+        columns=(
+            [] if is_phi_agent else [ProposedColumnOut(**_column_fields(r)) for r in records]
+        ),
+        phi_columns=(
+            [PhiColumnOut(**_phi_column_fields(r)) for r in records] if is_phi_agent else []
+        ),
+        needs_steward_review=list(proposal.payload.get("needs_steward_review", ())),
+        masked_columns=list(proposal.payload.get("masked_columns", ())),
         needs_input=list(proposal.payload.get("needs_input", ())),
         refusals=list(proposal.payload.get("refusals", ())),
         corrections=[
@@ -1594,6 +1928,106 @@ def _apply_decisions(payload: dict[str, Any], body: ApproveProposalIn) -> dict[s
                 accepted["needs_input"] = False
         records.append(accepted)
     return {**payload, "records": records}
+
+
+def _refuse_downgrades_on_the_approve_path(
+    corrections: tuple[proposals.Correction, ...],
+) -> None:
+    """Accepting a classification may raise a flag. It may never clear one.
+
+    TWO ACTS, TWO DOORS, and the split is the point rather than an
+    inconvenience. Accepting an agent's draft is AUTHORING, which a Business
+    Analyst does (`EDIT_FEED`). Clearing a PHI flag is a STEWARD's decision
+    with their name and their reason on it (`APPROVE`), and it goes through
+    `/reclassify`. Folding the two into one route would mean either a BA could
+    unprotect a column while accepting a contract, or a steward would need
+    authoring rights they are deliberately not given.
+    """
+    cleared = _cleared_by_steward(corrections)
+    if not cleared:
+        return
+    raise PhiDowngradeRefusedError(
+        f"clearing the PHI flag on {', '.join(sorted(cleared))} is a data steward's "
+        "decision, not part of accepting a classification. Accept it as it stands, or "
+        "ask a steward to use the reclassify route — where their name and their reason "
+        "are recorded. Masking everywhere reads these flags."
+    )
+
+
+def _cleared_by_steward(corrections: tuple[proposals.Correction, ...]) -> frozenset[str]:
+    """Columns a reviewer explicitly unprotected, by name.
+
+    Needed because "the classification says not PHI" and "a steward decided
+    not PHI" look identical in the accepted records and must not be treated
+    alike: the first may only ever RAISE the contract's flag, the second is
+    the one act that may lower it.
+    """
+    return frozenset(
+        c.field_path.removesuffix(".is_phi")
+        for c in corrections
+        if c.field_path.endswith(".is_phi") and c.accepted is False
+    )
+
+
+def _phi_contract_body(
+    metadata: MetadataDbPort,
+    feed_id: str,
+    accepted: dict[str, Any],
+    cleared: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Merge approved PHI flags onto the feed's existing contract columns.
+
+    The flags attach to a CONTRACT, because that is the object the pipeline
+    reads and the object masking is derived from — so this story's approval
+    produces the next version of the same object CF-V1-E5-02's approval
+    produced, rather than a parallel document that could disagree with it.
+
+    Refuses when no contract exists yet, and says which story to run first.
+    That ordering is real: a PHI flag is a property OF a contract column, and
+    there is nowhere to put one before the columns are named.
+    """
+    try:
+        current = metadata.get(ObjectType.CONTRACT, feed_id)
+    except ObjectNotFoundError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"feed {feed_id!r} has no data contract yet, and a PHI flag is a property "
+            "of a contract column. Approve a schema contract first — the classification "
+            "stays in the queue and every flagged column stays masked meanwhile.",
+        ) from None
+
+    flags = {
+        str(r.get("source_name")): r
+        for r in accepted.get("records", ())
+        if isinstance(r, dict)
+    }
+    columns = []
+    for column in current.body.get("columns", ()):
+        source_name = str(column.get("source_name"))
+        record = flags.get(source_name)
+        if record is None:
+            columns.append(column)
+            continue
+        columns.append(
+            {
+                **column,
+                # RAISED OR KEPT — never lowered except by the one act that is
+                # allowed to lower it. A classification and a contract are two
+                # sources of the same flag, and combining them by OR is the
+                # only rule that cannot lose one. `cleared` is the steward's
+                # explicit decision, already checked for a named human and a
+                # stated reason, and it is what breaks the OR.
+                "is_phi": (
+                    bool(record.get("is_phi"))
+                    if source_name in cleared
+                    else bool(column.get("is_phi")) or bool(record.get("is_phi"))
+                ),
+                "phi_kind": record.get("phi_kind"),
+                "code_set": record.get("code_set"),
+                "phi_basis": record.get("basis"),
+            }
+        )
+    return {**current.body, "columns": columns}
 
 
 def _contract_body(accepted: dict[str, Any], *, key_columns: tuple[str, ...]) -> dict[str, Any]:

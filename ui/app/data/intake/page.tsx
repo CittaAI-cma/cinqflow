@@ -23,6 +23,11 @@ export default async function DataIntake() {
         What feeds exist, what should arrive, what arrived, and what is Missing.
       </p>
 
+      <p className="note">
+        <Link href="/data/intake/proposals">Agent proposals awaiting review</Link> — everything an
+        agent has suggested and nobody has decided. Nothing there is in effect.
+      </p>
+
       {feeds.length === 0 ? (
         <div className="card note">
           No feeds registered. A feed is six fields — domain, format, landing folder,

@@ -26,6 +26,7 @@ from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
+from cinqflow.core.agents.phi_detection.prompts import TEMPLATES as PHI_TEMPLATES
 from cinqflow.core.agents.pipeline_insight.prompts import TEMPLATES
 from cinqflow.core.agents.schema_inference.prompts import TEMPLATES as SCHEMA_TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
@@ -140,7 +141,7 @@ def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
             )
         )
     )
-    for template in (*TEMPLATES, *SCHEMA_TEMPLATES):
+    for template in (*TEMPLATES, *SCHEMA_TEMPLATES, *PHI_TEMPLATES):
         store.save(_published(template.as_governed(author=AUTHOR)))
 
     started = now - timedelta(hours=9)
