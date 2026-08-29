@@ -188,6 +188,40 @@ class PostgresMetadataDb:
         )
         return obj
 
+    def record_transition(self, obj: GovernedObject, entry: AuditEntry) -> GovernedObject:
+        # State and approver columns only — the body column is deliberately
+        # absent from this UPDATE, so a transition cannot smuggle an edit past
+        # versioning. The audit row lands in the same connection, which at
+        # call sites running inside `pg_control.commit` makes the pair one
+        # transaction: both writes, or neither.
+        row = self._db.fetch_one(
+            "SELECT 1 FROM registry.governed_object WHERE object_type = %s "
+            "AND object_id = %s AND version = %s",
+            (obj.object_type.value, obj.object_id, obj.version),
+        )
+        if row is None:
+            raise ObjectNotFoundError(
+                f"{obj.object_type}:{obj.object_id}@v{obj.version} was never saved — "
+                "a state change to a phantom row is a lost approval"
+            )
+        self._db.execute(
+            "UPDATE registry.governed_object SET lifecycle_state = %s, "
+            "approved_by_subject = %s, approved_by_type = %s, approved_by_name = %s, "
+            "approved_ts = %s WHERE object_type = %s AND object_id = %s AND version = %s",
+            (
+                obj.lifecycle_state.value,
+                obj.approved_by.subject if obj.approved_by else None,
+                obj.approved_by.actor_type.value if obj.approved_by else None,
+                obj.approved_by.display_name if obj.approved_by else None,
+                obj.approved_ts,
+                obj.object_type.value,
+                obj.object_id,
+                obj.version,
+            ),
+        )
+        self.append_audit(entry)
+        return self.get(obj.object_type, obj.object_id, obj.version)
+
     def get(
         self, object_type: ObjectType, object_id: str, version: int | None = None
     ) -> GovernedObject:

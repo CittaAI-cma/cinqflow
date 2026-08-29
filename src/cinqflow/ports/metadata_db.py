@@ -59,6 +59,19 @@ class MetadataDbPort(Protocol):
         """
         ...
 
+    def record_transition(self, obj: GovernedObject, entry: AuditEntry) -> GovernedObject:
+        """Persist a LIFECYCLE TRANSITION of an existing version — state and
+        approver columns only, never the body — together with its audit row.
+
+        One verb for both writes, deliberately: `transition_to` returns the
+        moved object AND its entry as a pair, and a port that let a caller
+        persist one without the other would un-make that guarantee at the
+        first crash between two calls. Refuses (ObjectNotFoundError) a
+        transition of a version that was never saved — a state change to a
+        phantom row is a lost approval.
+        """
+        ...
+
     def get(
         self, object_type: ObjectType, object_id: str, version: int | None = None
     ) -> GovernedObject:

@@ -25,17 +25,26 @@ from cinqflow.core.model.vocabulary import ActorType
 
 @unique
 class Role(StrEnum):
-    """Wave 0 ships two, plus the administrator who assigns them.
+    """Wave 0 shipped three; Wave 1 adds the four E11-01's routing cannot be
+    honest without (ADR-0022) — one per lane of plate 14's approval table.
 
-    The full seven-role matrix with source/feed/domain/environment scoping is
-    CF-V4-E2-02. Starting with two is not a shortcut: it is the smallest set
-    that makes the Read-Only server-side denial testable, which is the actual
-    Wave-0 guarantee.
+    Note what the ENGINEER did NOT become: an approver. "The person who builds
+    a feed does not sign it off" is a Wave-0 guarantee with a test, and plate
+    14 names `platform_engineer` as a routing target distinct from the person
+    who authors and operates. Overloading one role onto both would have
+    dissolved the segregation quietly, in the one table nobody re-reads.
+
+    The full matrix with source/feed/domain/environment scoping is still
+    CF-V4-E2-02 — that story widens `_PERMITTED`; it does not revisit this.
     """
 
     ENGINEER = "engineer"
     READ_ONLY = "read_only"
     ADMINISTRATOR = "administrator"
+    BUSINESS_ANALYST = "business_analyst"
+    DATA_STEWARD = "data_steward"
+    PLATFORM_ENGINEER = "platform_engineer"
+    BUSINESS_APPROVER = "business_approver"
 
     @property
     def may_change_things(self) -> bool:

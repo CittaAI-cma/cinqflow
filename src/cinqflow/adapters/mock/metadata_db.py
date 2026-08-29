@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 from cinqflow.core.model.agent_action import AgentAction
@@ -36,6 +37,26 @@ class MemMetadataDb:
         versions.append(obj)
         versions.sort(key=lambda v: v.version)
         return obj
+
+    def record_transition(self, obj: GovernedObject, entry: AuditEntry) -> GovernedObject:
+        versions = self._objects.get((obj.object_type, obj.object_id), [])
+        for index, stored in enumerate(versions):
+            if stored.version == obj.version:
+                # State and approver move; the body is the STORED one — a
+                # transition that could smuggle a body edit would let an
+                # amendment skip versioning.
+                versions[index] = replace(
+                    stored,
+                    lifecycle_state=obj.lifecycle_state,
+                    approved_by=obj.approved_by,
+                    approved_ts=obj.approved_ts,
+                )
+                self._audit.append(entry)
+                return versions[index]
+        raise ObjectNotFoundError(
+            f"{obj.object_type}:{obj.object_id}@v{obj.version} was never saved — "
+            "a state change to a phantom row is a lost approval"
+        )
 
     def get(
         self, object_type: ObjectType, object_id: str, version: int | None = None

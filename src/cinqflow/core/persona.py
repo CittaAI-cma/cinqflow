@@ -109,7 +109,11 @@ SLOTS: dict[HomeSlot, Slot] = {
         # not a nice-to-have — "plumbing that never renders these has not
         # delivered" — and it cannot be built until the definitions behind it
         # have named stewards (open questions Q12, Q13).
-        Slot(HomeSlot.PHASE1_OUTPUTS, "The four Phase-1 outputs I own, and their freshness.", wave=1),
+        Slot(
+            HomeSlot.PHASE1_OUTPUTS,
+            "The four Phase-1 outputs I own, and their freshness.",
+            wave=1,
+        ),
         Slot(HomeSlot.TRUST_TODAY, "Can I trust today's data, by domain.", wave=1),
         Slot(HomeSlot.ANALYST_COST, "What this incident costs the analyst side.", wave=1),
         Slot(HomeSlot.AUTONOMY_NOW, "What the agent may do right now, and what it earned.", wave=1),

@@ -44,6 +44,7 @@ class Action(StrEnum):
     SUBMIT_FOR_REVIEW = "submit_for_review"
     APPROVE = "approve"
     PUBLISH = "publish"
+    RETIRE = "retire"
     RUN_PIPELINE = "run_pipeline"
     RETRY_BATCH = "retry_batch"
     MANAGE_USERS = "manage_users"
@@ -56,10 +57,15 @@ class Action(StrEnum):
         return self not in {Action.VIEW, Action.ASK_AGENT}
 
 
-# Wave 0's matrix. Data, not code: CF-V4-E2-02 widens the table rather than
-# rewriting the decision.
+# The matrix. Data, not code: CF-V4-E2-02 widens the table rather than
+# rewriting the decision. WHICH object types a holder of APPROVE may approve is
+# a second, separate question — answered by `core/lifecycle.APPROVAL_ROUTING`,
+# never here. This table says what a role may attempt; the router says where.
 _PERMITTED: dict[Role, frozenset[Action]] = {
     Role.READ_ONLY: frozenset({Action.VIEW, Action.ASK_AGENT}),
+    # The engineer BUILDS and OPERATES. Note what is still absent, unchanged
+    # from Wave 0: approve and publish. "Separate create, approve, publish and
+    # operate rights" — the person who builds a feed does not sign it off.
     Role.ENGINEER: frozenset(
         {
             Action.VIEW,
@@ -70,6 +76,29 @@ _PERMITTED: dict[Role, frozenset[Action]] = {
             Action.RUN_PIPELINE,
             Action.RETRY_BATCH,
         }
+    ),
+    # Plate 14's `platform_engineer` — the technical approver, and a DIFFERENT
+    # person from the one who wrote the thing.
+    Role.PLATFORM_ENGINEER: frozenset(
+        {Action.VIEW, Action.ASK_AGENT, Action.APPROVE, Action.PUBLISH, Action.RETIRE}
+    ),
+    # The BA authors and submits; nothing they author can they approve — and
+    # even if a BA were also granted APPROVE, the core's SelfApprovalError
+    # holds. Two independent layers, deliberately.
+    Role.BUSINESS_ANALYST: frozenset(
+        {
+            Action.VIEW,
+            Action.ASK_AGENT,
+            Action.CREATE_FEED,
+            Action.EDIT_FEED,
+            Action.SUBMIT_FOR_REVIEW,
+        }
+    ),
+    Role.DATA_STEWARD: frozenset(
+        {Action.VIEW, Action.ASK_AGENT, Action.APPROVE, Action.PUBLISH, Action.RETIRE}
+    ),
+    Role.BUSINESS_APPROVER: frozenset(
+        {Action.VIEW, Action.ASK_AGENT, Action.APPROVE, Action.PUBLISH}
     ),
     # An administrator manages ACCESS. Note what is absent: an administrator
     # cannot approve either. "Separate create, approve, publish and operate

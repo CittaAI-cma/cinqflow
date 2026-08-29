@@ -43,18 +43,26 @@ from cinqflow.api.schemas import (
     DestinationOut,
     FeedIn,
     FeedOut,
+    GovernedOut,
     HomeSlotOut,
     NavigationOut,
     PrincipalOut,
     RowsOut,
     ToolOut,
     TraceStepOut,
+    TransitionIn,
     UnknownOut,
+    WorkQueueOut,
 )
+from cinqflow.core import lifecycle
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.intelligence import Budget
-from cinqflow.core.model.governed import GovernedObject, ObjectType
+from cinqflow.core.model.governed import (
+    GovernedObject,
+    LifecycleViolationError,
+    ObjectType,
+)
 from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
 from cinqflow.core.persona import home_for
 from cinqflow.core.registry import feed as feed_registry
@@ -275,7 +283,218 @@ def create_app(
         )
         return _feed_out(saved)
 
-    # ── governance ───────────────────────────────────────────────────────────
+    # ── governance · CF-V1-E11-01 — the one lifecycle, exposed ───────────────
+    #
+    # Five acts, one engine. Every refusal below is a 403 AND a ledger row —
+    # the two universal negatives (author-approves-own, publish-without-named-
+    # approver) are raised by core/model/governed.py; the routing refusal
+    # (steward-approves-a-contract) by core/lifecycle. This layer only loads,
+    # asks, persists and records — it decides nothing.
+
+    def _governance_act(
+        act: str,
+        object_type: ObjectType,
+        object_id: str,
+        principal: Principal,
+        metadata: MetadataDbPort,
+        audit: AuditLog,
+        perform: Callable[[GovernedObject], tuple[GovernedObject, Any]],
+    ) -> GovernedOut:
+        if object_type is ObjectType.FEED and not principal.scopes.covers_feed(object_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        try:
+            current = metadata.get(object_type, object_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        try:
+            moved, entry = perform(current)
+        except LifecycleViolationError as refusal:
+            # Refused AND logged — a guardrail nobody can see fire is a comment.
+            audit.record(
+                object_type=object_type,
+                object_id=object_id,
+                version=current.version,
+                action=f"refused:{act}",
+                actor=principal.as_actor(),
+                detail=str(refusal),
+            )
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(refusal)) from None
+        return _governed_out(metadata.record_transition(moved, entry))
+
+    @app.post(
+        f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/submit",
+        response_model=GovernedOut,
+        tags=["governance"],
+    )
+    def submit_for_review(
+        object_type: ObjectType,
+        object_id: str,
+        body: TransitionIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.SUBMIT_FOR_REVIEW))],
+    ) -> GovernedOut:
+        """Draft -> In Review. A resubmission after request-changes keeps the
+        whole conversation: the comments live on the object's audit trail."""
+        return _governance_act(
+            "submit",
+            object_type,
+            object_id,
+            principal,
+            metadata,
+            audit,
+            lambda obj: lifecycle.submit(obj, actor=principal.as_actor(), comment=body.comment),
+        )
+
+    @app.post(
+        f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/approve",
+        response_model=GovernedOut,
+        tags=["governance"],
+    )
+    def approve_object(
+        object_type: ObjectType,
+        object_id: str,
+        body: TransitionIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.APPROVE))],
+    ) -> GovernedOut:
+        """THE negative-first route. The author approving their own change and
+        the wrong role approving this type are both refused by layers below
+        this one — and both leave a row. Tests made those attempts before this
+        handler existed."""
+        return _governance_act(
+            "approve",
+            object_type,
+            object_id,
+            principal,
+            metadata,
+            audit,
+            lambda obj: lifecycle.approve(
+                obj,
+                actor=principal.as_actor(),
+                roles=frozenset(principal.roles),
+                comment=body.comment,
+            ),
+        )
+
+    @app.post(
+        f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/request-changes",
+        response_model=GovernedOut,
+        tags=["governance"],
+    )
+    def request_changes(
+        object_type: ObjectType,
+        object_id: str,
+        body: TransitionIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.APPROVE))],
+    ) -> GovernedOut:
+        """In Review -> Draft, comment REQUIRED. The author edits and resubmits
+        with the history intact — the reviewer sees exactly what changed since
+        their request, because versions and comments both persist."""
+        return _governance_act(
+            "request-changes",
+            object_type,
+            object_id,
+            principal,
+            metadata,
+            audit,
+            lambda obj: lifecycle.request_changes(
+                obj,
+                actor=principal.as_actor(),
+                roles=frozenset(principal.roles),
+                comment=body.comment,
+            ),
+        )
+
+    @app.post(
+        f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/publish",
+        response_model=GovernedOut,
+        tags=["governance"],
+    )
+    def publish_object(
+        object_type: ObjectType,
+        object_id: str,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.PUBLISH))],
+    ) -> GovernedOut:
+        """Approved -> Published. Only now will the engine read it — execution
+        gates on the READER (`executable()` refuses anything else), so nothing
+        unapproved can run even if a route were mis-guarded."""
+        return _governance_act(
+            "publish",
+            object_type,
+            object_id,
+            principal,
+            metadata,
+            audit,
+            lambda obj: lifecycle.publish(
+                obj, actor=principal.as_actor(), roles=frozenset(principal.roles)
+            ),
+        )
+
+    @app.post(
+        f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/retire",
+        response_model=GovernedOut,
+        tags=["governance"],
+    )
+    def retire_object(
+        object_type: ObjectType,
+        object_id: str,
+        body: TransitionIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.RETIRE))],
+    ) -> GovernedOut:
+        """-> Retired. Feeds retire, never vanish; there is no DELETE anywhere
+        on this API for a governed object, guarded or otherwise."""
+        return _governance_act(
+            "retire",
+            object_type,
+            object_id,
+            principal,
+            metadata,
+            audit,
+            lambda obj: lifecycle.retire(
+                obj,
+                actor=principal.as_actor(),
+                roles=frozenset(principal.roles),
+                comment=body.comment,
+            ),
+        )
+
+    @app.get(f"{API_PREFIX}/work-queue", response_model=WorkQueueOut, tags=["governance"])
+    def work_queue(
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> WorkQueueOut:
+        """One view of everything awaiting this person, across every object
+        type — the screen-shaped proof that there is ONE lifecycle. Feed-scoped
+        objects the caller cannot reach are filtered where the list is built."""
+        everything: list[GovernedObject] = []
+        for object_type in ObjectType:
+            for obj in metadata.list(object_type):
+                if object_type is ObjectType.FEED and not principal.scopes.covers_feed(
+                    obj.object_id
+                ):
+                    continue
+                everything.append(obj)
+        roles = frozenset(principal.roles)
+        return WorkQueueOut(
+            awaiting_my_review=[
+                _governed_out(o)
+                for o in lifecycle.awaiting_review_by(
+                    tuple(everything), roles=roles, subject=principal.subject
+                )
+            ],
+            my_submissions=[
+                _governed_out(o)
+                for o in lifecycle.submitted_by(tuple(everything), subject=principal.subject)
+            ],
+        )
 
     @app.get(f"{API_PREFIX}/audit", response_model=list[AuditOut], tags=["governance"])
     def read_audit(
@@ -605,6 +824,23 @@ def _feed_out(obj: GovernedObject) -> FeedOut:
         status=obj.lifecycle_state.status_word,
         citation_id=str(citation),
         route=citation.route,
+    )
+
+
+def _governed_out(obj: GovernedObject) -> GovernedOut:
+    return GovernedOut(
+        object_type=obj.object_type.value,
+        object_id=obj.object_id,
+        version=obj.version,
+        lifecycle_state=obj.lifecycle_state.value,
+        status=obj.lifecycle_state.status_word,
+        created_by_subject=obj.created_by.subject,
+        created_by_name=obj.created_by.display_name,
+        created_ts=obj.created_ts,
+        approved_by_subject=obj.approved_by.subject if obj.approved_by else None,
+        approved_by_name=obj.approved_by.display_name if obj.approved_by else None,
+        approved_ts=obj.approved_ts,
+        body=obj.body,
     )
 
 

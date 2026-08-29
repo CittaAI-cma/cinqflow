@@ -131,6 +131,42 @@ class ContractOut(BaseModel):
     unknowns: list[UnknownOut]
 
 
+class GovernedOut(BaseModel):
+    """Any governed object, as the lifecycle sees it — one shape for all ten
+    types, because there is one state machine (ADR-0006). Type-specific detail
+    stays in `body`; everything governance needs is a first-class field."""
+
+    object_type: str
+    object_id: str
+    version: int
+    lifecycle_state: str
+    status: StatusWord
+    created_by_subject: str
+    created_by_name: str
+    created_ts: datetime
+    approved_by_subject: str | None = None
+    approved_by_name: str | None = None
+    approved_ts: datetime | None = None
+    body: dict[str, Any] = {}
+
+
+class TransitionIn(BaseModel):
+    """A governance act's payload. `comment` is optional on submit/approve and
+    REQUIRED on request-changes and reject — enforced by the lifecycle engine,
+    not by this schema, so a second client cannot relax it."""
+
+    comment: str = ""
+
+
+class WorkQueueOut(BaseModel):
+    """Everything awaiting one person, across every object type — the proof
+    there is ONE lifecycle. `awaiting_my_review` never contains the caller's
+    own work: the queue does not offer what the engine would refuse."""
+
+    awaiting_my_review: list[GovernedOut]
+    my_submissions: list[GovernedOut]
+
+
 class ProblemOut(BaseModel):
     """A refusal that explains itself.
 

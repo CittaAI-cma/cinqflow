@@ -21,6 +21,30 @@ users:
     roles: [administrator]
     scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
 
+  # Wave 1 (ADR-0022): the four roles E11-01's routing cannot be honest
+  # without. The BA authors; the steward approves mappings/rules/glossary;
+  # the platform engineer is the technical approver; the business approver
+  # co-signs publications. Same claims shape as above.
+  - subject: "dev-ba@cinqcare.test"
+    name: "Meera Iyer"
+    roles: [business_analyst]
+    scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
+
+  - subject: "dev-steward@cinqcare.test"
+    name: "Daniel Okafor"
+    roles: [data_steward]
+    scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
+
+  - subject: "dev-platform@cinqcare.test"
+    name: "Ravi Shankar"
+    roles: [platform_engineer]
+    scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
+
+  - subject: "dev-approver@cinqcare.test"
+    name: "Grace Lin"
+    roles: [business_approver]
+    scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
+
   # The exception case CF-V0-E2-01 requires: a real person in NO CINQFLOW group.
   # They must reach a clear "no access assigned" page — never a broken or empty
   # application — and the attempt must be logged.

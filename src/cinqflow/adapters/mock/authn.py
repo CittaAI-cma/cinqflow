@@ -72,6 +72,18 @@ _DEFAULT_USERS: dict[str, Principal] = {
     "dev-admin@cinqcare.test": _principal(
         "dev-admin@cinqcare.test", "Steve Mathews", Role.ADMINISTRATOR
     ),
+    # Wave 1 (ADR-0022) — the four roles E11-01's routing needs to be real.
+    # Kept in step with profiles/dev-users.yaml by a test, not by memory.
+    "dev-ba@cinqcare.test": _principal("dev-ba@cinqcare.test", "Meera Iyer", Role.BUSINESS_ANALYST),
+    "dev-steward@cinqcare.test": _principal(
+        "dev-steward@cinqcare.test", "Daniel Okafor", Role.DATA_STEWARD
+    ),
+    "dev-platform@cinqcare.test": _principal(
+        "dev-platform@cinqcare.test", "Ravi Shankar", Role.PLATFORM_ENGINEER
+    ),
+    "dev-approver@cinqcare.test": _principal(
+        "dev-approver@cinqcare.test", "Grace Lin", Role.BUSINESS_APPROVER
+    ),
     # A real person in no CINQFLOW group — the exception case, not an error case.
     "dev-nogroup@cinqcare.test": _principal("dev-nogroup@cinqcare.test", "Unassigned User"),
 }
