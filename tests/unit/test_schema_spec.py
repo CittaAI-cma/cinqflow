@@ -123,7 +123,9 @@ def test_the_provisioned_schemas_are_the_plate_s_seven_plus_the_platform_s() -> 
     schemas: `queue` (ADR-0014's Postgres queue + scheduler state), `proposals`
     (the universal HITL object), `knowledge` (the K2 store, FIG 12) and
     `profiling` (CF-V1-E5-01's computed evidence — BESIDE the client's control
-    framework, never inside it, per ADR-0013)."""
+    framework, never inside it, per ADR-0013) and `ops` (CF-V1-E3-04's feed
+    suspensions: OPERATIONAL state, deliberately not governance, so that
+    lifting a pause needs no approver while publishing configuration does)."""
     assert [s.name for s in all_schemas()] == [
         "landing_ctl",
         "control",
@@ -139,6 +141,7 @@ def test_the_provisioned_schemas_are_the_plate_s_seven_plus_the_platform_s() -> 
         "proposals",
         "knowledge",
         "profiling",
+        "ops",
     ]
 
 

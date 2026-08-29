@@ -69,6 +69,7 @@ from cinqflow.api.schemas import (
     NavigationOut,
     OperationsModel,
     OwnerModel,
+    PauseFeedIn,
     PhiColumnOut,
     PhiRecallOut,
     PrincipalOut,
@@ -81,10 +82,13 @@ from cinqflow.api.schemas import (
     ReferencesOut,
     RefusalOut,
     RejectProposalIn,
+    ResumeFeedIn,
     RowsOut,
     SimilarFeedOut,
     SourceIn,
     SourceOut,
+    SuspensionEventOut,
+    SuspensionOut,
     ToolOut,
     TouchedOut,
     TraceStepOut,
@@ -92,6 +96,7 @@ from cinqflow.api.schemas import (
     TypeCandidateOut,
     UnknownImpactOut,
     UnknownOut,
+    VersionDiffOut,
     WorkQueueOut,
 )
 from cinqflow.core import lifecycle, proposals
@@ -112,7 +117,7 @@ from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
 from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry import clone as registry_clone
 from cinqflow.core.registry import feed as feed_registry
-from cinqflow.core.registry import operations
+from cinqflow.core.registry import operations, suspension
 from cinqflow.core.registry import search as registry_search
 from cinqflow.core.registry import source as source_registry
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
@@ -582,6 +587,202 @@ def create_app(
         if not principal.scopes.covers_feed(feed_id):
             raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
         return _references_out(metadata, _load(metadata, feed_id))
+
+    # ── pause and resume · CF-V1-E3-04 ───────────────────────────────────────
+    #
+    # OPERATIONAL, not governance. `RUN_PIPELINE` rather than `APPROVE`,
+    # because stopping and starting a feed is an operator's decision — and
+    # requiring an approver to lift a pause would mean finding a steward at
+    # 3am to turn the tap back on.
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/pause",
+        response_model=SuspensionOut,
+        tags=["operations"],
+    )
+    def pause_feed(
+        feed_id: str,
+        body: PauseFeedIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.RUN_PIPELINE))],
+    ) -> SuspensionOut:
+        """Stop new work. Anything already running finishes."""
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        _load(metadata, feed_id)
+        try:
+            event = suspension.pause(
+                feed_id,
+                actor=principal.as_actor(),
+                reason=body.reason,
+                now=datetime.now(UTC),
+                resumes_after=body.resumes_after,
+            )
+        except suspension.SuspensionError as refused:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(refused)) from None
+
+        metadata.record_suspension(event)
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=feed_id,
+            action="paused",
+            actor=principal.as_actor(),
+            detail=body.reason,
+        )
+        return _suspension_out(metadata.current_suspension(feed_id))
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/resume",
+        response_model=SuspensionOut,
+        tags=["operations"],
+    )
+    def resume_feed(
+        feed_id: str,
+        body: ResumeFeedIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.RUN_PIPELINE))],
+    ) -> SuspensionOut:
+        """Start it again. No reason required and no approver — see
+        `core.registry.suspension.resume` for why that asymmetry is right."""
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        _load(metadata, feed_id)
+        metadata.record_suspension(
+            suspension.resume(
+                feed_id, actor=principal.as_actor(), now=datetime.now(UTC), reason=body.reason
+            )
+        )
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=feed_id,
+            action="resumed",
+            actor=principal.as_actor(),
+            detail=body.reason,
+        )
+        return _suspension_out(metadata.current_suspension(feed_id))
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/suspension",
+        response_model=SuspensionOut,
+        tags=["operations"],
+    )
+    def feed_suspension(
+        feed_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> SuspensionOut:
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        return _suspension_out(metadata.current_suspension(feed_id))
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/suspensions",
+        response_model=list[SuspensionEventOut],
+        tags=["operations"],
+    )
+    def feed_suspension_history(
+        feed_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+        limit: int = 50,
+    ) -> list[SuspensionEventOut]:
+        """The pause ledger. Read beside the version history: together they
+        answer "which version was live in March, and was it running?"."""
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        return [
+            SuspensionEventOut(
+                feed_id=event.feed_id,
+                action=event.action.value,
+                reason=event.reason,
+                actor_subject=event.actor.subject,
+                actor_name=event.actor.display_name,
+                occurred_ts=event.occurred_ts,
+                resumes_after=event.resumes_after,
+            )
+            for event in metadata.list_suspensions(feed_id=feed_id, limit=limit)
+        ]
+
+    # ── version history and the side-by-side diff · CF-V1-E3-04 ──────────────
+
+    @app.get(
+        f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/history",
+        response_model=list[GovernedOut],
+        tags=["governance"],
+    )
+    def object_history(
+        object_type: ObjectType,
+        object_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> list[GovernedOut]:
+        """Every version, newest first — "which version was live in March?"
+        is one click, because every version is still here."""
+        if object_type is ObjectType.FEED and not principal.scopes.covers_feed(object_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        versions = metadata.history(object_type, object_id)
+        if not versions:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        return [_governed_out(obj) for obj in reversed(versions)]
+
+    @app.get(
+        f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/diff",
+        response_model=VersionDiffOut,
+        tags=["governance"],
+    )
+    def object_diff(
+        object_type: ObjectType,
+        object_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+        from_version: int | None = None,
+        to_version: int | None = None,
+    ) -> VersionDiffOut:
+        """Two versions, side by side. CF-V1-E3-04.
+
+        Defaults to the previous version against the latest, because that is
+        the comparison somebody wants nine times in ten and asking them to
+        type two numbers to get it is a screen they stop using.
+
+        The SAME `differences` computation the clone panel uses — "how does
+        this differ" has one answer in the platform, not one per screen.
+        """
+        if object_type is ObjectType.FEED and not principal.scopes.covers_feed(object_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        versions = metadata.history(object_type, object_id)
+        if len(versions) < 2 and (from_version is None or to_version is None):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{object_type.value}:{object_id} has only {len(versions)} version — "
+                "there is nothing to compare it with yet.",
+            )
+        by_version = {obj.version: obj for obj in versions}
+        left = by_version.get(from_version if from_version is not None else versions[-2].version)
+        right = by_version.get(to_version if to_version is not None else versions[-1].version)
+        if left is None or right is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+
+        return VersionDiffOut(
+            object_type=object_type.value,
+            object_id=object_id,
+            from_version=left.version,
+            to_version=right.version,
+            from_state=left.lifecycle_state.value,
+            to_state=right.lifecycle_state.value,
+            from_author=left.created_by.subject,
+            to_author=right.created_by.subject,
+            differences=[
+                DifferenceOut(
+                    object_type=d.object_type.value,
+                    field_path=d.field_path,
+                    original=d.original,
+                    clone=d.clone,
+                )
+                for d in registry_clone.differences_between(left, right)
+            ],
+        )
 
     # ── sources · CF-V1-E3-02 ────────────────────────────────────────────────
 
@@ -1991,6 +2192,21 @@ def _packet_for(metadata: MetadataDbPort, target: GovernedObject) -> ImpactPacke
         target,
         tuple(everything),
         evidence=dict(target.body.get("evidence") or {}),
+    )
+
+
+def _suspension_out(state: suspension.Suspension) -> SuspensionOut:
+    now = datetime.now(UTC)
+    return SuspensionOut(
+        feed_id=state.feed_id,
+        is_paused=state.is_active_at(now),
+        reason=state.reason,
+        paused_by=state.paused_by.subject if state.paused_by else None,
+        paused_ts=state.paused_ts,
+        resumes_after=state.resumes_after,
+        may_start_new_work=state.may_start_new_work(now),
+        affects_work_already_running=state.affects_work_already_running,
+        explanation=state.explain(now),
     )
 
 

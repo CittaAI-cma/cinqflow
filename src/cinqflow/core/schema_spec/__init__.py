@@ -875,6 +875,47 @@ PROFILING_SCHEMA = Schema(
 )
 
 
+OPS_SCHEMA = Schema(
+    name="ops",
+    description=(
+        "CF-V1-E3-04 — operational state that is NOT governance. A pause stops new work "
+        "and needs no approver to lift; a lifecycle state is approved configuration and "
+        "does. Keeping them in different schemas is what stops the two being confused."
+    ),
+    tables=(
+        Table(
+            name="feed_suspension",
+            comment=(
+                "One pause or resume. APPEND-ONLY: resuming writes a row rather than "
+                "deleting one, because a feed that was paused for six days and a feed "
+                "that was never paused must not look identical afterwards. The current "
+                "state is the newest row, so 'was this paused on the 3rd?' is answerable "
+                "from what is stored."
+            ),
+            columns=(
+                Column("suspension_id", TypeName.UUID, nullable=False),
+                _FEED,
+                Column("action", TypeName.STRING, nullable=False),
+                Column("reason", TypeName.STRING, nullable=False),
+                Column("actor_subject", TypeName.STRING, nullable=False),
+                Column("actor_name", TypeName.STRING),
+                Column("occurred_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                # A pause with an end lifts itself. The longest outage the
+                # incumbent platform had was a feed paused "for an hour" and
+                # unpaused eleven days later by somebody looking for something
+                # else.
+                Column("resumes_after", TypeName.TIMESTAMP_UTC),
+            ),
+            primary_key=("suspension_id",),
+            indexes=(("feed_id", "occurred_ts"),),
+            check_constraints=("action IN ('paused', 'resumed')",),
+            append_only=True,
+        ),
+    ),
+    append_only=True,
+)
+
+
 def all_schemas() -> tuple[Schema, ...]:
     """Every schema the installer provisions, in dependency order.
 
@@ -897,4 +938,5 @@ def all_schemas() -> tuple[Schema, ...]:
         PROPOSALS_SCHEMA,
         KNOWLEDGE_SCHEMA,
         PROFILING_SCHEMA,
+        OPS_SCHEMA,
     )

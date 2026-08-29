@@ -38,6 +38,12 @@ from cinqflow.core.model.governed import (
 from cinqflow.core.model.vocabulary import ActorType, RiskClass
 from cinqflow.core.profiling import FileProfile
 from cinqflow.core.proposals import Proposal, ProposalBody, ProposalState
+from cinqflow.core.registry.suspension import (
+    Suspension,
+    SuspensionAction,
+    SuspensionEvent,
+    current,
+)
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
     ConcurrentVersionError,
@@ -191,6 +197,17 @@ def _proposal(row: tuple[Any, ...]) -> Proposal:
         applied_object_id=applied_object_id,
         applied_version=applied_version,
         corrections=ProposalBody.corrections_from(document),
+    )
+
+
+def _suspension(row: tuple[Any, ...]) -> SuspensionEvent:
+    return SuspensionEvent(
+        feed_id=row[0],
+        action=SuspensionAction(row[1]),
+        reason=row[2],
+        actor=_actor(row[3], ActorType.HUMAN.value, row[4]),
+        occurred_ts=row[5],
+        resumes_after=row[6],
     )
 
 
@@ -629,3 +646,49 @@ class PostgresMetadataDb:
         statement += " ORDER BY created_ts DESC, proposal_id DESC LIMIT %s"
         parameters += (limit,)
         return tuple(_proposal(row) for row in self._db.fetch_all(statement, parameters))
+
+    # ── ops.feed_suspension · CF-V1-E3-04 — append-only, no update, no delete ──
+    def record_suspension(self, event: SuspensionEvent) -> SuspensionEvent:
+        """One INSERT, and there is no other statement against this table in
+        the whole file. Append-only is kept the same way the audit ledger's is:
+        by the absence of an UPDATE, not by a permission that could be
+        misconfigured."""
+        self._db.execute(
+            "INSERT INTO ops.feed_suspension (suspension_id, feed_id, action, reason, "
+            "actor_subject, actor_name, occurred_ts, resumes_after) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                str(uuid.uuid4()),
+                event.feed_id,
+                event.action.value,
+                event.reason,
+                event.actor.subject,
+                event.actor.display_name,
+                event.occurred_ts,
+                event.resumes_after,
+            ),
+        )
+        return event
+
+    def current_suspension(self, feed_id: str) -> Suspension:
+        """Folded from the NEWEST row rather than read from a stored flag.
+
+        The ledger is the truth; a second column saying `is_paused` would be a
+        second thing to keep in step with it.
+        """
+        return current(feed_id, tuple(self.list_suspensions(feed_id=feed_id, limit=1)))
+
+    def list_suspensions(
+        self, *, feed_id: str | None = None, limit: int = 50
+    ) -> Sequence[SuspensionEvent]:
+        statement = (
+            "SELECT feed_id, action, reason, actor_subject, actor_name, occurred_ts, "
+            "resumes_after FROM ops.feed_suspension WHERE 1=1"
+        )
+        parameters: tuple[Any, ...] = ()
+        if feed_id is not None:
+            statement += " AND feed_id = %s"
+            parameters += (feed_id,)
+        statement += " ORDER BY occurred_ts DESC, suspension_id DESC LIMIT %s"
+        parameters += (limit,)
+        return tuple(_suspension(row) for row in self._db.fetch_all(statement, parameters))

@@ -116,6 +116,19 @@ export interface Feed {
   readiness: Readiness | null;
 }
 
+/** CF-V1-E3-04. Whether a feed is paused, on the axis that is not the lifecycle. */
+export interface FeedSuspension {
+  feed_id: string;
+  is_paused: boolean;
+  reason: string;
+  paused_by: string | null;
+  paused_ts: string | null;
+  resumes_after: string | null;
+  may_start_new_work: boolean;
+  affects_work_already_running: boolean;
+  explanation: string;
+}
+
 export interface Source {
   source_id: string;
   name: string;

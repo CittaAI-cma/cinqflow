@@ -9,6 +9,7 @@ from typing import Any
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 from cinqflow.core.proposals import Proposal, ProposalState
+from cinqflow.core.registry.suspension import Suspension, SuspensionEvent, current
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
     ConcurrentVersionError,
@@ -32,6 +33,7 @@ class MemMetadataDb:
         self._agent_actions: list[AgentAction] = []
         self._profiles: dict[tuple[str, str], FileProfileRecord] = {}
         self._proposals: dict[str, Proposal] = {}
+        self._suspensions: list[SuspensionEvent] = []
 
     def save(self, obj: GovernedObject) -> GovernedObject:
         versions = self._objects.setdefault((obj.object_type, obj.object_id), [])
@@ -185,3 +187,19 @@ class MemMetadataDb:
         ]
         found.sort(key=lambda p: (p.created_ts, p.proposal_id), reverse=True)
         return tuple(found[:limit])
+
+    # ── ops.feed_suspension · CF-V1-E3-04 ────────────────────────────────────
+    def record_suspension(self, event: SuspensionEvent) -> SuspensionEvent:
+        """Append-only, enforced by there being no removal path here at all —
+        the same way the audit list is."""
+        self._suspensions.append(event)
+        return event
+
+    def current_suspension(self, feed_id: str) -> Suspension:
+        return current(feed_id, tuple(self._suspensions))
+
+    def list_suspensions(
+        self, *, feed_id: str | None = None, limit: int = 50
+    ) -> Sequence[SuspensionEvent]:
+        found = [e for e in self._suspensions if feed_id is None or e.feed_id == feed_id]
+        return tuple(sorted(found, key=lambda e: e.occurred_ts, reverse=True)[:limit])

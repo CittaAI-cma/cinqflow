@@ -278,6 +278,57 @@ class GovernedOut(BaseModel):
     body: dict[str, Any] = {}
 
 
+class PauseFeedIn(BaseModel):
+    """Stop new work on a feed. CF-V1-E3-04.
+
+    `reason` is required by the type: somebody will find this paused next week
+    and have to decide whether to lift it, and an unexplained pause is one
+    nobody dares touch.
+
+    `resumes_after` is optional and strongly preferred — a pause with an end
+    lifts itself, and a pause without one is lifted when somebody remembers.
+    """
+
+    reason: str = Field(min_length=1)
+    resumes_after: datetime | None = None
+
+
+class ResumeFeedIn(BaseModel):
+    """Start the feed again. No reason required, deliberately asymmetric with
+    pausing: an operator at 3am with a payer on the phone should be able to
+    turn the tap back on and explain afterwards. The row records who did it."""
+
+    reason: str = ""
+
+
+class SuspensionOut(BaseModel):
+    """Whether a feed is paused right now, and what that means."""
+
+    feed_id: str
+    is_paused: bool
+    reason: str = ""
+    paused_by: str | None = None
+    paused_ts: datetime | None = None
+    resumes_after: datetime | None = None
+    may_start_new_work: bool = True
+    #: Stated on the wire because it is the half of the acceptance criterion a
+    #: reader is most likely to assume the other way round.
+    affects_work_already_running: bool = False
+    explanation: str = ""
+
+
+class SuspensionEventOut(BaseModel):
+    """One pause or resume, from the append-only ledger."""
+
+    feed_id: str
+    action: str
+    reason: str
+    actor_subject: str
+    actor_name: str = ""
+    occurred_ts: datetime
+    resumes_after: datetime | None = None
+
+
 class SimilarFeedOut(BaseModel):
     """A feed worth cloning from, and WHY it ranked. CF-V1-E3-03.
 
@@ -325,6 +376,24 @@ class DifferenceOut(BaseModel):
     field_path: str
     original: Any = None
     clone: Any = None
+
+
+class VersionDiffOut(BaseModel):
+    """Two versions of one governed object, side by side. CF-V1-E3-04.
+
+    The same `Difference` shape the clone panel uses, so "how does this
+    differ" has ONE answer in the platform rather than one per screen.
+    """
+
+    object_type: str
+    object_id: str
+    from_version: int
+    to_version: int
+    from_state: str
+    to_state: str
+    from_author: str
+    to_author: str
+    differences: list[DifferenceOut]
 
 
 class CloneOut(BaseModel):

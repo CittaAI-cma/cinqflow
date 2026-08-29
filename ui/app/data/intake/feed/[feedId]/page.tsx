@@ -4,7 +4,7 @@ import { CitationChip } from "@/components/Cited";
 import { RefusalNotice } from "@/components/Refusal";
 import { Status } from "@/components/Status";
 import { attempt, isRefused } from "@/lib/api";
-import type { Feed } from "@/lib/types";
+import type { Feed, FeedSuspension } from "@/lib/types";
 
 /**
  * One feed. The destination a `feed:<id>@v<n>` citation opens.
@@ -25,6 +25,12 @@ export default async function FeedPage({
   const query = version ? `?version=${encodeURIComponent(version)}` : "";
   const feed = await attempt<Feed>(`/api/feeds/${encodeURIComponent(feedId)}${query}`);
   if (isRefused(feed)) return <RefusalNotice refusal={feed} />;
+
+  // CF-V1-E3-04. A SECOND AXIS, not a lifecycle state: a paused feed is still
+  // Published, which is why "which version was live in March" keeps answering.
+  const suspension = await attempt<FeedSuspension>(
+    `/api/feeds/${encodeURIComponent(feedId)}/suspension`,
+  );
 
   return (
     <>
@@ -55,6 +61,17 @@ export default async function FeedPage({
           <dd>{feed.lifecycle_state}</dd>
         </dl>
       </div>
+
+      {!isRefused(suspension) && suspension.is_paused ? (
+        <div className="card">
+          <strong>Paused — no new batch will start</strong>
+          <p className="note">{suspension.explanation}</p>
+          <p className="note">
+            This feed is still {feed.lifecycle_state}. Pausing is an operational decision on a
+            separate axis from the lifecycle, so lifting it needs no approver.
+          </p>
+        </div>
+      ) : null}
 
       {/* CF-V1-E3-02. The SAME computation the submit button enforces — so
           this list can never show green while activation returns 403. */}
@@ -153,6 +170,17 @@ export default async function FeedPage({
           </ul>
         </div>
       ) : null}
+
+      <div className="card">
+        <strong>History</strong>
+        <p className="note">
+          Every version is still here — &ldquo;which version was live in March?&rdquo; is one
+          click, and so is what changed between any two of them.
+        </p>
+        <Link className="cited" href={`/data/intake/feed/${feed.feed_id}/history`}>
+          Version history and comparison →
+        </Link>
+      </div>
 
       <div className="card">
         <strong>Start a new feed from this one</strong>

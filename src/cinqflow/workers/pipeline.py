@@ -29,6 +29,7 @@ from cinqflow.core.parsers import ParseError, parse
 from cinqflow.core.recon import error_id_hash
 from cinqflow.core.registry.contract import DqRule, SchemaContract, compare_to_contract
 from cinqflow.core.registry.feed import FeedRecord
+from cinqflow.core.registry.suspension import Suspension
 from cinqflow.ports.control_tables import (
     BatchControl,
     ControlTablesPort,
@@ -41,6 +42,17 @@ from cinqflow.ports.control_tables import (
     StageStatus,
 )
 from cinqflow.ports.storage import FileRef, StoragePort
+
+
+class FeedPausedError(RuntimeError):
+    """A run refused because the feed is paused. CF-V1-E3-04.
+
+    Raised rather than returned as an outcome, deliberately: a paused feed did
+    not produce a batch that failed, and reporting one would put a red row on
+    the operations screen for a decision somebody made on purpose. The caller
+    catches this and reports "paused", which is a different thing from
+    "broken".
+    """
 
 
 @dataclass(frozen=True)
@@ -88,8 +100,26 @@ class PipelineRunner:
         business_date: str,
         resume_from: Layer | None = None,
         batch_id: str | None = None,
+        suspension: Suspension | None = None,
     ) -> RunOutcome:
-        """Landing -> Bronze -> Silver Raw. Every outcome registers a file."""
+        """Landing -> Bronze -> Silver Raw. Every outcome registers a file.
+
+        CF-V1-E3-04: a PAUSED feed starts no new batch, and finishes any batch
+        already running. The check is here, at the seam where a batch is
+        opened, rather than in a scheduler — a second entry point that skipped
+        it would make the pause advisory.
+        """
+        # BEFORE anything is read, registered or moved. A paused feed's file
+        # is left exactly where it is, so resuming picks it up on the next run
+        # — moving it to `processed` and declining to load it would lose the
+        # delivery, which is the opposite of what a pause is for.
+        if (
+            resume_from is None
+            and suspension is not None
+            and not suspension.may_start_new_work(datetime.now(UTC))
+        ):
+            raise FeedPausedError(suspension.explain(datetime.now(UTC)))
+
         registered = self._storage.fingerprint(file.key) if file.fingerprint is None else file
         fingerprint = file.fingerprint or self._storage.fingerprint(file.key)
         file = FileRef(

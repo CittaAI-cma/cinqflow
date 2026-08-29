@@ -464,3 +464,187 @@ def test_every_cloned_object_leaves_an_audit_row(client: TestClient, store: MemM
     ledger = store.read_audit(object_id="centene-medicare-roster")
     assert any(e.action == "cloned" for e in ledger)
     assert any(MEDICAID["feed_id"] in e.detail for e in ledger)
+
+
+# ── lifecycle, pause and version history · CF-V1-E3-04 ───────────────────────
+
+STEWARD = "dev-steward@cinqcare.test"
+ENGINEER = "dev-engineer@cinqcare.test"
+
+
+def test_an_illegal_transition_is_refused_and_recorded(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    """Approving something nobody submitted. Refused by the STATE MACHINE, and
+    the attempt leaves a row — a guardrail nobody can see fire is a comment."""
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    refused = client.post(
+        f"/api/objects/feed/{FEED_ID}/approve",
+        json={"comment": "looks fine"},
+        headers=_as(PLATFORM),
+    )
+    assert refused.status_code == 403
+    assert "cannot go draft -> approved" in refused.json()["detail"]
+    assert any(e.action == "refused:approve" for e in store.read_audit(object_id=FEED_ID))
+
+
+def test_the_wrong_approver_is_refused_before_the_state_machine_is_consulted(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    """TWO INDEPENDENT REFUSALS, and this one is the router's.
+
+    ADR-0022 sends FEED objects through `platform_engineer`; a data steward
+    holds APPROVE and is still the wrong person for this object type. The
+    permission matrix says what a role may attempt — `APPROVAL_ROUTING` says
+    where — and a test that only exercised the state machine would leave the
+    second control unproven.
+    """
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    client.post(f"/api/objects/feed/{FEED_ID}/submit", json={}, headers=_as(BA))
+    refused = client.post(
+        f"/api/objects/feed/{FEED_ID}/approve",
+        json={"comment": "looks fine"},
+        headers=_as(STEWARD),
+    )
+    assert refused.status_code == 403
+    assert "review through platform_engineer" in refused.json()["detail"]
+    assert any(e.action == "refused:approve" for e in store.read_audit(object_id=FEED_ID))
+
+
+def test_pausing_a_feed_stops_new_work_and_says_who_and_why(client: TestClient) -> None:
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    paused = client.post(
+        f"/api/feeds/{FEED_ID}/pause",
+        json={"reason": "Fidelis are re-cutting the extract after a plan merge"},
+        headers=_as(ENGINEER),
+    )
+    assert paused.status_code == 200, paused.text
+    body = paused.json()
+
+    assert body["is_paused"] is True
+    assert body["may_start_new_work"] is False
+    assert body["affects_work_already_running"] is False
+    assert body["paused_by"] == ENGINEER
+    assert "plan merge" in body["explanation"]
+    assert "does not abandon work in progress" in body["explanation"]
+
+
+def test_pausing_needs_a_reason(client: TestClient) -> None:
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    refused = client.post(f"/api/feeds/{FEED_ID}/pause", json={"reason": ""}, headers=_as(ENGINEER))
+    assert refused.status_code == 422
+
+
+def test_a_pause_does_not_change_the_lifecycle_state(client: TestClient) -> None:
+    """THE DECISION, over HTTP. A paused feed is still whatever it was — so
+    "which version was live in March" does not answer "none" for every week
+    somebody paused something."""
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    before = client.get(f"/api/feeds/{FEED_ID}", headers=_as(BA)).json()["lifecycle_state"]
+    client.post(
+        f"/api/feeds/{FEED_ID}/pause", json={"reason": "payer migration"}, headers=_as(ENGINEER)
+    )
+    after = client.get(f"/api/feeds/{FEED_ID}", headers=_as(BA)).json()["lifecycle_state"]
+    assert before == after
+
+
+def test_resuming_needs_no_approver(client: TestClient) -> None:
+    """An operator at 3am with a payer on the phone turns the tap back on
+    without finding a steward."""
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    client.post(
+        f"/api/feeds/{FEED_ID}/pause", json={"reason": "payer migration"}, headers=_as(ENGINEER)
+    )
+    resumed = client.post(f"/api/feeds/{FEED_ID}/resume", json={}, headers=_as(ENGINEER))
+
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["is_paused"] is False
+    assert resumed.json()["may_start_new_work"] is True
+
+
+def test_the_pause_ledger_keeps_both_events(client: TestClient) -> None:
+    """Resuming writes a row rather than deleting one — a feed paused for six
+    days and a feed never paused must not look identical afterwards."""
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    client.post(
+        f"/api/feeds/{FEED_ID}/pause", json={"reason": "payer migration"}, headers=_as(ENGINEER)
+    )
+    client.post(f"/api/feeds/{FEED_ID}/resume", json={}, headers=_as(ENGINEER))
+
+    ledger = client.get(f"/api/feeds/{FEED_ID}/suspensions", headers=_as(BA)).json()
+    assert [row["action"] for row in ledger] == ["resumed", "paused"]
+    assert ledger[1]["reason"] == "payer migration"
+    assert ledger[1]["actor_subject"] == ENGINEER
+
+
+def test_a_read_only_user_may_not_pause_a_feed(client: TestClient) -> None:
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    refused = client.post(
+        f"/api/feeds/{FEED_ID}/pause", json={"reason": "because"}, headers=_as(READ_ONLY)
+    )
+    assert refused.status_code == 403
+
+
+def test_the_version_history_keeps_every_version(client: TestClient) -> None:
+    """ "Which version was live in March?" is one click, because every version
+    is still here."""
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    client.put(
+        f"/api/feeds/{FEED_ID}", json={**FULL_FEED, "schedule_cron": "0 7 * * 1"}, headers=_as(BA)
+    )
+    client.put(
+        f"/api/feeds/{FEED_ID}", json={**FULL_FEED, "schedule_cron": "0 8 * * 1"}, headers=_as(BA)
+    )
+
+    history = client.get(f"/api/objects/feed/{FEED_ID}/history", headers=_as(BA)).json()
+    assert [v["version"] for v in history] == [3, 2, 1]
+    assert history[2]["body"]["schedule_cron"] == "0 6 * * 1"
+
+
+def test_the_diff_defaults_to_the_change_somebody_actually_wants(
+    client: TestClient,
+) -> None:
+    """Previous against latest — the comparison wanted nine times in ten.
+    Asking for two version numbers to get it is a screen people stop using."""
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    client.put(
+        f"/api/feeds/{FEED_ID}", json={**FULL_FEED, "schedule_cron": "0 7 * * 1"}, headers=_as(BA)
+    )
+
+    diff = client.get(f"/api/objects/feed/{FEED_ID}/diff", headers=_as(BA)).json()
+    assert diff["from_version"] == 1 and diff["to_version"] == 2
+    assert [d["field_path"] for d in diff["differences"]] == ["schedule_cron"]
+    assert diff["differences"][0]["original"] == "0 6 * * 1"
+    assert diff["differences"][0]["clone"] == "0 7 * * 1"
+
+
+def test_any_two_versions_can_be_compared(client: TestClient) -> None:
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    client.put(
+        f"/api/feeds/{FEED_ID}", json={**FULL_FEED, "schedule_cron": "0 7 * * 1"}, headers=_as(BA)
+    )
+    client.put(
+        f"/api/feeds/{FEED_ID}",
+        json={**FULL_FEED, "schedule_cron": "0 8 * * 1", "domain": "eligibility"},
+        headers=_as(BA),
+    )
+
+    diff = client.get(
+        f"/api/objects/feed/{FEED_ID}/diff?from_version=1&to_version=3", headers=_as(BA)
+    ).json()
+    assert {d["field_path"] for d in diff["differences"]} == {"schedule_cron", "domain"}
+
+
+def test_a_feed_with_one_version_says_there_is_nothing_to_compare(
+    client: TestClient,
+) -> None:
+    client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
+    refused = client.get(f"/api/objects/feed/{FEED_ID}/diff", headers=_as(BA))
+    assert refused.status_code == 409
+    assert "nothing to compare" in refused.json()["detail"]
+
+
+def test_the_history_of_a_feed_that_does_not_exist_is_a_not_found(
+    client: TestClient,
+) -> None:
+    assert client.get("/api/objects/feed/nobody/history", headers=_as(BA)).status_code == 404

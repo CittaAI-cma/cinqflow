@@ -27,6 +27,7 @@ from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 from cinqflow.core.profiling import FileProfile
 from cinqflow.core.proposals import Proposal, ProposalState
+from cinqflow.core.registry.suspension import Suspension, SuspensionEvent
 
 
 @dataclass(frozen=True)
@@ -216,4 +217,39 @@ class MetadataDbPort(Protocol):
         limit: int = 50,
     ) -> Sequence[Proposal]:
         """Newest first. `state=PENDING_REVIEW` IS the agent review queue."""
+        ...
+
+    # ── ops.feed_suspension · CF-V1-E3-04 ────────────────────────────────────
+    #
+    # OPERATIONAL state, deliberately not governance. A pause stops new work
+    # and needs no approver to lift; a lifecycle state is approved
+    # configuration and does. They live in different schemas so the two cannot
+    # be confused, and the verbs are here because a suspension is the
+    # platform's own record of its own decisions — the same reason the profile
+    # and proposal verbs are.
+
+    def record_suspension(self, event: SuspensionEvent) -> SuspensionEvent:
+        """Append one pause or resume. There is deliberately no update verb.
+
+        Resuming writes a ROW rather than deleting one, so a feed that was
+        paused for six days and a feed that was never paused do not look
+        identical afterwards — and "was this paused on the 3rd?" is answerable
+        from what is stored.
+        """
+        ...
+
+    def current_suspension(self, feed_id: str) -> Suspension:
+        """Whether this feed is paused right now, folded from the ledger.
+
+        Never raises for an unknown feed: a feed that has never been paused is
+        an ordinary answer, not a missing one.
+        """
+        ...
+
+    def list_suspensions(
+        self, *, feed_id: str | None = None, limit: int = 50
+    ) -> Sequence[SuspensionEvent]:
+        """Newest first. The pause history a steward reads beside the version
+        history — the two together are what "which version was live in March,
+        and was it running?" needs."""
         ...
