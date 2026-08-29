@@ -161,6 +161,10 @@ def test_the_budget_binds_against_real_prices(gateway: LlmGateway) -> None:
         input_text="Say ok.",
     )
     spent = gateway.spent_today("lane3-smoke")
-    assert Decimal("0") < spent < Budget(
-        per_run_usd=Decimal("0.25"), per_agent_per_day_usd=Decimal("5")
-    ).per_agent_per_day_usd
+    assert (
+        Decimal("0")
+        < spent
+        < Budget(
+            per_run_usd=Decimal("0.25"), per_agent_per_day_usd=Decimal("5")
+        ).per_agent_per_day_usd
+    )

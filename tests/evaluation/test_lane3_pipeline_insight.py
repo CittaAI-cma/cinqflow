@@ -100,9 +100,7 @@ def test_explaining_the_plan_covers_every_step_and_invents_none(
 ) -> None:
     """The gate the golden set is generated for."""
     plan_rows = invoke(agent.tools, "get_compiled_plan", {"feed_id": FEED_ID})
-    answer, _ = _ask(
-        agent, f"what will the plan for {FEED_ID} do to my data?", run_id="eval-plan"
-    )
+    answer, _ = _ask(agent, f"what will the plan for {FEED_ID} do to my data?", run_id="eval-plan")
     fidelity = plan_fidelity(_plan_from(plan_rows), answer.as_text())
 
     assert fidelity.invented == (), f"invented steps must be EXACTLY 0 — {fidelity.explain()}"
@@ -113,9 +111,7 @@ def test_explaining_a_feed_is_fully_cited(agent: PipelineInsightAgent) -> None:
     answer, _ = _ask(agent, f"what does the {FEED_ID} feed do?", run_id="eval-feed")
     assert answer.claims, "an answer with no claims is not an explanation"
     assert answer.is_grounded, "zero uncited factual claims"
-    fidelity = citation_fidelity(
-        tuple(str(c) for claim in answer.claims for c in claim.citations)
-    )
+    fidelity = citation_fidelity(tuple(str(c) for claim in answer.claims for c in claim.citations))
     assert fidelity.passes, f"unresolvable: {fidelity.unresolvable}"
 
 
@@ -189,8 +185,7 @@ def _plan_from(result: Any) -> Any:
     class _Plan:
         terminal_layer = Layer.SILVER_RAW
         steps = tuple(
-            PlanStep(kind=StepKind(row["step"]), description=row["step"])
-            for row in result.rows
+            PlanStep(kind=StepKind(row["step"]), description=row["step"]) for row in result.rows
         )
 
     return _Plan()

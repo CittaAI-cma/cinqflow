@@ -72,8 +72,9 @@ def build_plane() -> tuple[MemMetadataDb, MemStoreControlTables]:
                 feed_id=FEED_ID,
                 version=1,
                 columns=(
-                    ContractColumn(name="source_member_id", type=TypeName.STRING, nullable=False,
-                                   is_phi=True),
+                    ContractColumn(
+                        name="source_member_id", type=TypeName.STRING, nullable=False, is_phi=True
+                    ),
                     ContractColumn(name="date_of_birth", type=TypeName.DATE, is_phi=True),
                     ContractColumn(name="plan_code", type=TypeName.STRING),
                 ),
@@ -101,51 +102,82 @@ def build_plane() -> tuple[MemMetadataDb, MemStoreControlTables]:
 
     control.open_batch(
         BatchControl(
-            batch_id=BATCH_ID, feed_id=FEED_ID, feed_version=1, business_date="2026-08-01",
-            state=BatchState.COMPLETED, started_ts=NOW, completed_ts=NOW,
+            batch_id=BATCH_ID,
+            feed_id=FEED_ID,
+            feed_version=1,
+            business_date="2026-08-01",
+            state=BatchState.COMPLETED,
+            started_ts=NOW,
+            completed_ts=NOW,
         )
     )
     control.record_stage(
         StageStatus(
-            batch_id=BATCH_ID, stage=Layer.SILVER_RAW, state=BatchState.COMPLETED,
-            started_ts=NOW, completed_ts=NOW, records_in=22_000, records_out=21_820,
-            quarantined=175, attributed_drops=5,
+            batch_id=BATCH_ID,
+            stage=Layer.SILVER_RAW,
+            state=BatchState.COMPLETED,
+            started_ts=NOW,
+            completed_ts=NOW,
+            records_in=22_000,
+            records_out=21_820,
+            quarantined=175,
+            attributed_drops=5,
         )
     )
     control.record_reconciliation(
         Reconciliation(
-            batch_id=BATCH_ID, stage=Layer.SILVER_RAW, records_in=22_000, records_out=21_820,
-            quarantined=175, attributed_drops=5,
+            batch_id=BATCH_ID,
+            stage=Layer.SILVER_RAW,
+            records_in=22_000,
+            records_out=21_820,
+            quarantined=175,
+            attributed_drops=5,
             drop_ledger=(
-                DropLedgerEntry(rule_id="DQ-002", reason="missing date_of_birth",
-                                record_count=175, financial_impact=Decimal("0")),
+                DropLedgerEntry(
+                    rule_id="DQ-002",
+                    reason="missing date_of_birth",
+                    record_count=175,
+                    financial_impact=Decimal("0"),
+                ),
                 DropLedgerEntry(rule_id="STRUCTURE-001", reason="short row", record_count=5),
             ),
         )
     )
     control.record_quarantine(
         QuarantineSummary(
-            batch_id=BATCH_ID, stage=Layer.SILVER_RAW, rule_id="DQ-002",
-            reason="missing date_of_birth", column_names=("date_of_birth",), record_count=175,
+            batch_id=BATCH_ID,
+            stage=Layer.SILVER_RAW,
+            rule_id="DQ-002",
+            reason="missing date_of_birth",
+            column_names=("date_of_birth",),
+            record_count=175,
         )
     )
     # The error message and the record key both carry the canary. If either
     # reaches a result, a member reached a model.
     control.record_error(
         ErrorRecord(
-            error_id_hash="a1b2c3d4", batch_id=BATCH_ID, stage=Layer.SILVER_RAW,
+            error_id_hash="a1b2c3d4",
+            batch_id=BATCH_ID,
+            stage=Layer.SILVER_RAW,
             category=ErrorCategory.VALIDATION,
-            message="row failed DQ-002", occurred_ts=NOW,
-            record_key=CANARY, rule_id="DQ-002",
+            message="row failed DQ-002",
+            occurred_ts=NOW,
+            record_key=CANARY,
+            rule_id="DQ-002",
         )
     )
     control.register_input_file(
         InputFile(
-            batch_id=BATCH_ID, feed_id=FEED_ID,
+            batch_id=BATCH_ID,
+            feed_id=FEED_ID,
             key=f"landing/fidelis/roster/incoming/{CANARY}.xlsx",
             filename="_CINQDOWNSTATE_Member_Roster_20260801.xlsx",
-            size_bytes=4_100_000, fingerprint="f00d", state=FileState.PROCESSED,
-            arrived_ts=NOW, record_count=22_000,
+            size_bytes=4_100_000,
+            fingerprint="f00d",
+            state=FileState.PROCESSED,
+            arrived_ts=NOW,
+            record_count=22_000,
         )
     )
     return store, control

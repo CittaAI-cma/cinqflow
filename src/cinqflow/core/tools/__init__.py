@@ -201,8 +201,7 @@ class ToolSpec:
                 value = str(value)
                 if parameter.choices and value not in parameter.choices:
                     raise ArgumentError(
-                        f"{self.name}.{name}={value!r} is not one of "
-                        f"{', '.join(parameter.choices)}"
+                        f"{self.name}.{name}={value!r} is not one of {', '.join(parameter.choices)}"
                     )
             else:
                 try:
@@ -384,8 +383,12 @@ CATALOGUE: dict[str, ToolSpec] = {
                 "by lexical match."
             ),
             parameters=(
-                _p("query", ArgType.STRING, "A term, a rule id, or words from either.",
-                   required=True),
+                _p(
+                    "query",
+                    ArgType.STRING,
+                    "A term, a rule id, or words from either.",
+                    required=True,
+                ),
                 _p("limit", ArgType.INTEGER, "How many matches to return.", default=5),
             ),
             reads=frozenset({"knowledge.reference"}),
@@ -416,8 +419,10 @@ class ToolSignatureSet:
         return [spec.json_schema() for spec in self.specs]
 
     def narrate(self) -> str:
-        return "\n".join(f"- {spec.name}({', '.join(p.name for p in spec.parameters)}): "
-                         f"{spec.answers}" for spec in self.specs)
+        return "\n".join(
+            f"- {spec.name}({', '.join(p.name for p in spec.parameters)}): {spec.answers}"
+            for spec in self.specs
+        )
 
 
 def signatures(names: frozenset[str] = READ_ONLY_WHITELIST) -> ToolSignatureSet:
@@ -432,6 +437,5 @@ def spec_for(name: str) -> ToolSpec:
         return CATALOGUE[name]
     except KeyError:
         raise UnknownToolError(
-            f"{name!r} is not a certified tool. The catalogue is: "
-            f"{', '.join(sorted(CATALOGUE))}."
+            f"{name!r} is not a certified tool. The catalogue is: {', '.join(sorted(CATALOGUE))}."
         ) from None

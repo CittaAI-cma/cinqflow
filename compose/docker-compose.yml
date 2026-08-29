@@ -1,0 +1,126 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Rung 1 — the local twin.
+#
+#   1: {socket: local_twin, cost: 0, proves: every_pin_energized_against_real_software}
+#   — docs/architecture/plates/05-socket-ladder.md
+#
+# The point of this rung is not "Docker". It is that EVERY PIN faces real
+# software rather than a stand-in, on a laptop, for nothing — so an integration
+# surprise is discovered here rather than in a client's tenant.
+#
+# Climbing to rung 3 changes ONLY profiles/client-dev.yaml: Postgres becomes
+# Azure Database for PostgreSQL, MinIO becomes ADLS Gen2, Keycloak becomes
+# Entra. Same code path, same conformance kit, different endpoints.
+# ─────────────────────────────────────────────────────────────────────────────
+name: cinqflow-twin
+
+services:
+  # metadata_db + control_tables + vector + queue. One engine, four pins —
+  # which is why the Postgres plane is the DEFAULT development socket.
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: cinqflow
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+      POSTGRES_DB: cinqflow
+    secrets: [pg_password]
+    ports: ["5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cinqflow"]
+      interval: 5s
+      retries: 20
+    volumes:
+      - twin-pg:/var/lib/postgresql/data
+
+  # authn. Keycloak at rung 1, Entra at rung 3 — same OIDC libraries, same code
+  # path, a different discovery URL in the profile.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_password
+    secrets: [keycloak_password]
+    ports: ["8081:8080"]
+
+  # storage. MinIO speaks s3://; ADLS Gen2 speaks abfs://. The storage adapter
+  # absorbs that difference, which is the whole reason "Azure Blob is not
+  # S3-compatible" is a solved problem here rather than a discovery.
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: cinqflow
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
+    secrets: [minio_password]
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - twin-minio:/data
+
+  # orchestration. Airflow OSS is what the client runs; the orchestration pin
+  # is scheduled/triggered/paused through it here so the rung-3 DAG pattern is
+  # exercised rather than assumed.
+  airflow:
+    image: apache/airflow:2.10.5
+    command: ["standalone"]
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    ports: ["8082:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  # observability. OTLP in, Grafana out — so "every model call is logged with
+  # prompt hash, model version, cost and caller" is visible rather than merely
+  # written.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.117.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel/config.yaml:ro
+    ports: ["4317:4317", "4318:4318"]
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    secrets: [grafana_password]
+    ports: ["3001:3000"]
+
+  # identity. A mock Verato: the crosswalk pin faces a real HTTP service, so
+  # the adapter is exercised against a live counterpart rather than a fake
+  # object. Wave 3 replaces the image, not the port.
+  mock-verato:
+    image: mockserver/mockserver:5.15.0
+    environment:
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/verato.json
+    volumes:
+      - ./mock-verato.json:/config/verato.json:ro
+    ports: ["1080:1080"]
+
+  # The payer source simulator, serving SFTP — so the connector is always
+  # tested against a live counterpart. The demo places no files by hand.
+  simulator:
+    image: atmoz/sftp:alpine
+    command: ["cinqflow::1001:::incoming"]
+    ports: ["2222:22"]
+    volumes:
+      - twin-sftp:/home/cinqflow/incoming
+
+# Secrets are FILES, never inline environment values — the same discipline the
+# connection profile enforces with `secret://name`. A password in this file is
+# a password in git.
+secrets:
+  pg_password:
+    file: ./secrets/pg_password
+  keycloak_password:
+    file: ./secrets/keycloak_password
+  minio_password:
+    file: ./secrets/minio_password
+  grafana_password:
+    file: ./secrets/grafana_password
+
+volumes:
+  twin-pg:
+  twin-minio:
+  twin-sftp:

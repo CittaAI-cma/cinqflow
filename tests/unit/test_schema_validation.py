@@ -1,7 +1,7 @@
 """Parse or reject — the subset, and what it refuses to pretend it understands.
 
-    "structured output: parse-or-reject -> one bounded retry -> manual path"
-    — docs/architecture/INVARIANTS.md, intelligence
+"structured output: parse-or-reject -> one bounded retry -> manual path"
+— docs/architecture/INVARIANTS.md, intelligence
 """
 
 from __future__ import annotations
@@ -36,14 +36,17 @@ ANSWER: dict[str, Any] = {
 
 
 def test_a_valid_answer_produces_no_errors() -> None:
-    assert validate(
-        ANSWER,
-        {
-            "claims": [{"text": "21,820 rows loaded", "citation_ids": ["recon:8842"]}],
-            "confidence": "high",
-            "unanswered": [],
-        },
-    ) == ()
+    assert (
+        validate(
+            ANSWER,
+            {
+                "claims": [{"text": "21,820 rows loaded", "citation_ids": ["recon:8842"]}],
+                "confidence": "high",
+                "unanswered": [],
+            },
+        )
+        == ()
+    )
 
 
 def test_every_violation_is_reported_not_just_the_first() -> None:

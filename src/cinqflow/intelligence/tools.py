@@ -143,8 +143,13 @@ def invoke(context: ToolContext, name: str, arguments: dict[str, Any] | None = N
     supplied = dict(arguments or {})
 
     if name not in context.whitelist:
-        _audit(context, name, supplied, ActionOutcome.REFUSED_NOT_WHITELISTED,
-               detail=f"{name} is not on this agent's whitelist")
+        _audit(
+            context,
+            name,
+            supplied,
+            ActionOutcome.REFUSED_NOT_WHITELISTED,
+            detail=f"{name} is not on this agent's whitelist",
+        )
         raise ToolNotWhitelistedError(
             f"{name!r} is not on {context.agent}'s whitelist. This agent runs at R0 — "
             "it observes and explains. No write tool is on its whitelist at any confidence."
@@ -339,12 +344,12 @@ def _get_compiled_plan(context: ToolContext, args: dict[str, Any]) -> ToolResult
     )
     citation = CitationId(CitationKind.PLAN, feed_obj.object_id, version=feed_obj.version)
     rows = tuple(
-            {
-                "position": position,
-                "step": step.kind.value,
-                "parameters": dict(step.parameters),
-                "citation_id": str(citation),
-            }
+        {
+            "position": position,
+            "step": step.kind.value,
+            "parameters": dict(step.parameters),
+            "citation_id": str(citation),
+        }
         for position, step in enumerate(plan.steps, start=1)
     )
     return ToolResult(
@@ -411,22 +416,20 @@ def _get_stage_status(context: ToolContext, args: dict[str, Any]) -> ToolResult:
     stages = context.control.get_stages(batch_id)
     citation = CitationId(CitationKind.BATCH, batch_id, fragment="stages")
     rows = tuple(
-            {
-                "stage": stage.stage.value,
-                "state": stage.state.value,
-                "status": stage.state.status_word.value,
-                "records_in": stage.records_in,
-                "records_out": stage.records_out,
-                "quarantined": stage.quarantined,
-                "attributed_drops": stage.attributed_drops,
-                "completed_ts": stage.completed_ts.isoformat() if stage.completed_ts else None,
-                "citation_id": str(citation),
-            }
+        {
+            "stage": stage.stage.value,
+            "state": stage.state.value,
+            "status": stage.state.status_word.value,
+            "records_in": stage.records_in,
+            "records_out": stage.records_out,
+            "quarantined": stage.quarantined,
+            "attributed_drops": stage.attributed_drops,
+            "completed_ts": stage.completed_ts.isoformat() if stage.completed_ts else None,
+            "citation_id": str(citation),
+        }
         for stage in stages
     )
-    return ToolResult(
-        tool="get_stage_status", rows=rows, citations=(citation,) if rows else ()
-    )
+    return ToolResult(tool="get_stage_status", rows=rows, citations=(citation,) if rows else ())
 
 
 def _get_reconciliation(context: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -434,16 +437,16 @@ def _get_reconciliation(context: ToolContext, args: dict[str, Any]) -> ToolResul
     recons = context.control.get_reconciliation(batch_id)
     citation = CitationId(CitationKind.RECON, batch_id)
     rows = tuple(
-            {
-                "stage": recon.stage.value,
-                "records_in": recon.records_in,
-                "records_out": recon.records_out,
-                "quarantined": recon.quarantined,
-                "attributed_drops": recon.attributed_drops,
-                "balances": recon.balances,
-                "unexplained": recon.unexplained,
-                "citation_id": str(citation),
-            }
+        {
+            "stage": recon.stage.value,
+            "records_in": recon.records_in,
+            "records_out": recon.records_out,
+            "quarantined": recon.quarantined,
+            "attributed_drops": recon.attributed_drops,
+            "balances": recon.balances,
+            "unexplained": recon.unexplained,
+            "citation_id": str(citation),
+        }
         for recon in recons
     )
     return ToolResult(
@@ -532,9 +535,7 @@ def _get_quarantine_summary(context: ToolContext, args: dict[str, Any]) -> ToolR
 def _get_input_registry(context: ToolContext, args: dict[str, Any]) -> ToolResult:
     since = _since(context, args)
     files = [
-        f
-        for f in context.control.get_input_registry(str(args["feed_id"]))
-        if f.arrived_ts >= since
+        f for f in context.control.get_input_registry(str(args["feed_id"])) if f.arrived_ts >= since
     ]
     citations = tuple(CitationId(CitationKind.FILE, f.fingerprint) for f in files)
     return ToolResult(

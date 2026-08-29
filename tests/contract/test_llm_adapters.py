@@ -116,7 +116,10 @@ def test_the_real_adapter_opens_no_socket_until_it_is_called() -> None:
 
 def test_a_cassette_is_keyed_by_prompt_hash_model_version_and_params() -> None:
     key = CassetteKey(
-        prompt_hash="abc", model="large-model", model_version="v1", max_tokens=100,
+        prompt_hash="abc",
+        model="large-model",
+        model_version="v1",
+        max_tokens=100,
         temperature=0.0,
     )
     assert key.as_id() == "abc.large-model.v1.100.0.0"
@@ -128,15 +131,23 @@ def test_a_recorded_exchange_replays_with_the_cost_that_was_really_paid(
     adapter = CassetteLlm(tmp_path, models=MODELS)
     prompt = "# identity\nYou explain pipelines."
     key = CassetteKey(
-        prompt_hash=hash_prompt(prompt), model="large-model", model_version="recorded",
-        max_tokens=2048, temperature=0.0,
+        prompt_hash=hash_prompt(prompt),
+        model="large-model",
+        model_version="recorded",
+        max_tokens=2048,
+        temperature=0.0,
     )
     adapter.record(
         key,
         Completion(
-            text='{"claims": []}', model="large-model", model_version="recorded",
-            prompt_hash=key.prompt_hash, prompt_tokens=120, completion_tokens=8,
-            cost_usd=Decimal("0.0038"), latency_ms=740,
+            text='{"claims": []}',
+            model="large-model",
+            model_version="recorded",
+            prompt_hash=key.prompt_hash,
+            prompt_tokens=120,
+            completion_tokens=8,
+            cost_usd=Decimal("0.0038"),
+            latency_ms=740,
         ),
     )
 
@@ -165,15 +176,23 @@ def test_cassettes_survive_a_prompt_change_by_missing_not_by_lying(tmp_path: Pat
     """A cassette keyed on the prompt hash cannot silently answer a new prompt."""
     adapter = CassetteLlm(tmp_path, models=MODELS)
     key = CassetteKey(
-        prompt_hash=hash_prompt("original"), model="large-model", model_version="recorded",
-        max_tokens=2048, temperature=0.0,
+        prompt_hash=hash_prompt("original"),
+        model="large-model",
+        model_version="recorded",
+        max_tokens=2048,
+        temperature=0.0,
     )
     adapter.record(
         key,
         Completion(
-            text="{}", model="large-model", model_version="recorded",
-            prompt_hash=key.prompt_hash, prompt_tokens=1, completion_tokens=1,
-            cost_usd=Decimal("0"), latency_ms=1,
+            text="{}",
+            model="large-model",
+            model_version="recorded",
+            prompt_hash=key.prompt_hash,
+            prompt_tokens=1,
+            completion_tokens=1,
+            cost_usd=Decimal("0"),
+            latency_ms=1,
         ),
     )
     with pytest.raises(CassetteMissError):
@@ -184,14 +203,23 @@ def test_recorded_cassettes_are_readable_json_a_human_can_diff(tmp_path: Path) -
     """The Wave-4 re-baseline diffs these to show what a hosting change did."""
     adapter = CassetteLlm(tmp_path, models=MODELS)
     key = CassetteKey(
-        prompt_hash="h", model="large-model", model_version="recorded", max_tokens=8,
+        prompt_hash="h",
+        model="large-model",
+        model_version="recorded",
+        max_tokens=8,
         temperature=0.0,
     )
     path = adapter.record(
         key,
         Completion(
-            text="hello", model="large-model", model_version="recorded", prompt_hash="h",
-            prompt_tokens=2, completion_tokens=1, cost_usd=Decimal("0.001"), latency_ms=10,
+            text="hello",
+            model="large-model",
+            model_version="recorded",
+            prompt_hash="h",
+            prompt_tokens=2,
+            completion_tokens=1,
+            cost_usd=Decimal("0.001"),
+            latency_ms=10,
         ),
     )
     body = json.loads(path.read_text())

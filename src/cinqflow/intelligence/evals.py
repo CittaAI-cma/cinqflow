@@ -39,9 +39,7 @@ _ALIASES: dict[str, frozenset[str]] = {
     StepKind.LAND_BRONZE.value: frozenset({"land_bronze", "land", "lands", "bronze"}),
     StepKind.CAST.value: frozenset({"cast", "casts", "casting", "types", "typed"}),
     StepKind.MAP.value: frozenset({"map", "maps", "mapping", "renames", "rename"}),
-    StepKind.EVALUATE_RULES.value: frozenset(
-        {"evaluate_rules", "rules", "rule", "dq", "quality"}
-    ),
+    StepKind.EVALUATE_RULES.value: frozenset({"evaluate_rules", "rules", "rule", "dq", "quality"}),
     StepKind.RESOLVE_IDENTITY.value: frozenset(
         {"resolve_identity", "identity", "resolves", "match", "matching"}
     ),
@@ -56,8 +54,19 @@ _ALIASES: dict[str, frozenset[str]] = {
 #: caught — an invention that escapes the gate by conjugating is still an
 #: invention. Named individually so the failure reports WHAT was fabricated.
 _PLAUSIBLE_INVENTIONS: tuple[str, ...] = (
-    "dedup", "enrich", "aggregat", "normali", "cleans", "standardi", "imput",
-    "partition", "encrypt", "anonymi", "backfill", "upsert", "pivot",
+    "dedup",
+    "enrich",
+    "aggregat",
+    "normali",
+    "cleans",
+    "standardi",
+    "imput",
+    "partition",
+    "encrypt",
+    "anonymi",
+    "backfill",
+    "upsert",
+    "pivot",
 )
 
 _WORD = re.compile(r"[a-z_]+")
@@ -98,12 +107,7 @@ def plan_fidelity(plan: LogicalPlan, explanation: str) -> PlanFidelity:
     missed = [name for name in expected if name not in covered]
 
     absent = KNOWN_STEPS - set(expected)
-    fabricated = {
-        word
-        for word in words
-        for stem in _PLAUSIBLE_INVENTIONS
-        if word.startswith(stem)
-    }
+    fabricated = {word for word in words for stem in _PLAUSIBLE_INVENTIONS if word.startswith(stem)}
     invented = sorted(
         {name for name in absent if words & _ALIASES.get(name, frozenset({name}))} | fabricated
     )

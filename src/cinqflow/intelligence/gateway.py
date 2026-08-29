@@ -202,8 +202,13 @@ class LlmGateway:
         # 5 · schema_validation — parse or reject, one bounded repair.
         stages.enter(CallStage.SCHEMA_VALIDATION)
         value, completion, repairs = self._parse_or_repair(
-            agent=agent, run_id=run_id, caller=caller, day=day, prompt=prompt,
-            completion=completion, now=now,
+            agent=agent,
+            run_id=run_id,
+            caller=caller,
+            day=day,
+            prompt=prompt,
+            completion=completion,
+            now=now,
         )
 
         # 6 · action_gateway — at R0 there is nothing to permit. The stage runs
@@ -212,8 +217,13 @@ class LlmGateway:
         stages.enter(CallStage.ACTION_GATEWAY)
 
         self._record(
-            agent=agent, run_id=run_id, caller=caller, prompt=prompt, completion=completion,
-            outcome=ActionOutcome.COMPLETED, now=now,
+            agent=agent,
+            run_id=run_id,
+            caller=caller,
+            prompt=prompt,
+            completion=completion,
+            outcome=ActionOutcome.COMPLETED,
+            now=now,
         )
         return GatewayResult(
             value=value,
@@ -228,8 +238,14 @@ class LlmGateway:
     # ── stage 4 ──────────────────────────────────────────────────────────────
 
     def _call(
-        self, *, agent: str, run_id: str, caller: Actor, day: str,
-        prompt: AssembledPrompt, now: datetime,
+        self,
+        *,
+        agent: str,
+        run_id: str,
+        caller: Actor,
+        day: str,
+        prompt: AssembledPrompt,
+        now: datetime,
     ) -> Completion:
         try:
             self._budget.check(
@@ -242,8 +258,14 @@ class LlmGateway:
             # Recorded before it is raised. A budget event Operations cannot
             # see is a surprise bill with extra steps.
             self._record(
-                agent=agent, run_id=run_id, caller=caller, prompt=prompt, completion=None,
-                outcome=ActionOutcome.REFUSED_BUDGET, now=now, detail=str(exhausted),
+                agent=agent,
+                run_id=run_id,
+                caller=caller,
+                prompt=prompt,
+                completion=None,
+                outcome=ActionOutcome.REFUSED_BUDGET,
+                now=now,
+                detail=str(exhausted),
             )
             self._obs.metric("llm.budget.refused", 1.0, agent=agent)
             raise
@@ -261,8 +283,15 @@ class LlmGateway:
     # ── stage 5 ──────────────────────────────────────────────────────────────
 
     def _parse_or_repair(
-        self, *, agent: str, run_id: str, caller: Actor, day: str, prompt: AssembledPrompt,
-        completion: Completion, now: datetime,
+        self,
+        *,
+        agent: str,
+        run_id: str,
+        caller: Actor,
+        day: str,
+        prompt: AssembledPrompt,
+        completion: Completion,
+        now: datetime,
     ) -> tuple[Any, Completion, int]:
         if prompt.response_schema is None:
             return completion.text, completion, 0
@@ -273,8 +302,14 @@ class LlmGateway:
                 return json.loads(completion.text), completion, attempt
 
             self._record(
-                agent=agent, run_id=run_id, caller=caller, prompt=prompt, completion=completion,
-                outcome=ActionOutcome.FAILED_SCHEMA, now=now, detail="; ".join(problems),
+                agent=agent,
+                run_id=run_id,
+                caller=caller,
+                prompt=prompt,
+                completion=completion,
+                outcome=ActionOutcome.FAILED_SCHEMA,
+                now=now,
+                detail="; ".join(problems),
             )
             if attempt == MAX_REPAIRS:
                 break
@@ -283,8 +318,9 @@ class LlmGateway:
             # second sample from the same distribution.
             completion = self._llm.complete(
                 prompt=f"{prompt.text}\n\n# repair\n"
-                f"The previous response was rejected:\n- " + "\n- ".join(problems) +
-                "\nReturn only the corrected JSON.",
+                f"The previous response was rejected:\n- "
+                + "\n- ".join(problems)
+                + "\nReturn only the corrected JSON.",
                 task_class=prompt.task_class,
                 response_schema=prompt.response_schema,
                 max_tokens=prompt.max_tokens,
@@ -293,8 +329,13 @@ class LlmGateway:
             self._spend.add(agent=agent, day=day, run_id=run_id, amount=completion.cost_usd)
 
         self._record(
-            agent=agent, run_id=run_id, caller=caller, prompt=prompt, completion=completion,
-            outcome=ActionOutcome.ESCALATED_TO_MANUAL, now=now,
+            agent=agent,
+            run_id=run_id,
+            caller=caller,
+            prompt=prompt,
+            completion=completion,
+            outcome=ActionOutcome.ESCALATED_TO_MANUAL,
+            now=now,
         )
         raise ManualPathRequiredError(
             f"{agent} could not produce a response matching {prompt.reference}'s schema after "
@@ -304,8 +345,16 @@ class LlmGateway:
     # ── the ledger ───────────────────────────────────────────────────────────
 
     def _record(
-        self, *, agent: str, run_id: str, caller: Actor, prompt: AssembledPrompt,
-        completion: Completion | None, outcome: ActionOutcome, now: datetime, detail: str = "",
+        self,
+        *,
+        agent: str,
+        run_id: str,
+        caller: Actor,
+        prompt: AssembledPrompt,
+        completion: Completion | None,
+        outcome: ActionOutcome,
+        now: datetime,
+        detail: str = "",
     ) -> None:
         self._store.append_agent_action(
             AgentAction(
@@ -317,9 +366,9 @@ class LlmGateway:
                 occurred_ts=now,
                 prompt_ref=prompt.reference,
                 prompt_hash=prompt.prompt_hash,
-                model=completion.model if completion else self._routing.model_for(
-                    prompt.task_class
-                ),
+                model=completion.model
+                if completion
+                else self._routing.model_for(prompt.task_class),
                 model_version=completion.model_version if completion else "",
                 prompt_tokens=completion.prompt_tokens if completion else 0,
                 completion_tokens=completion.completion_tokens if completion else 0,

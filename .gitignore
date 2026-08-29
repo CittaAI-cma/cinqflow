@@ -33,3 +33,8 @@ ui/.next/
 ui/test-results/
 ui/playwright-report/
 ui/next-env.d.ts
+
+# ── twin secrets ──────────────────────────────────────────────────────────────
+# Files, never inline values. See compose/secrets/README.md.
+compose/secrets/*
+!compose/secrets/README.md

@@ -69,8 +69,13 @@ def test_a_missing_step_fails_the_coverage_gate_and_names_it() -> None:
 
 @pytest.mark.parametrize(
     "fabrication",
-    ["deduplicates the roster", "enriches each member", "normalises the plan codes",
-     "anonymizes the file", "backfills last month"],
+    [
+        "deduplicates the roster",
+        "enriches each member",
+        "normalises the plan codes",
+        "anonymizes the file",
+        "backfills last month",
+    ],
 )
 def test_a_fabricated_step_is_a_hard_failure(fabrication: str) -> None:
     """Exactly zero — a percentage would make one invention in fifty a pass."""

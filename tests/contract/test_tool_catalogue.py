@@ -329,8 +329,7 @@ def test_quarantine_summary_returns_counts_reasons_rules_and_columns_only(
     seeded: tuple[MemMetadataDb, MemStoreControlTables],
 ) -> None:
     (row,) = invoke(_context(seeded), "get_quarantine_summary", {"batch_id": BATCH_ID}).rows
-    assert set(row) == {"stage", "rule_id", "reason", "column_names", "record_count",
-                        "citation_id"}
+    assert set(row) == {"stage", "rule_id", "reason", "column_names", "record_count", "citation_id"}
     assert row["record_count"] == 175
 
 
@@ -370,9 +369,14 @@ def test_an_unpublished_feed_is_not_explained(
     store, _ = seeded
     store.save(
         feed_registry.FeedRecord(
-            feed_id="draft-feed", domain="membership", source_system="x", file_format="csv",
-            landing_path="landing/x", file_pattern=r"^x_\d{8}\.csv$",
-            schedule_cron="0 6 * * 1", sample_filename="x_20260801.csv",
+            feed_id="draft-feed",
+            domain="membership",
+            source_system="x",
+            file_format="csv",
+            landing_path="landing/x",
+            file_pattern=r"^x_\d{8}\.csv$",
+            schedule_cron="0 6 * * 1",
+            sample_filename="x_20260801.csv",
         ).as_governed(author=AUTHOR)
     )
     assert invoke(_context(seeded), "get_feed", {"feed_id": "draft-feed"}).out_of_scope

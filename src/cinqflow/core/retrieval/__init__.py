@@ -104,10 +104,20 @@ def _slug(text: str) -> str:
     return cleaned or "term"
 
 
-def _entry(term: str, definition: str, *, kind: CitationKind = CitationKind.TERM,
-           aliases: tuple[str, ...] = (), source: str = "platform-vocabulary") -> ReferenceEntry:
+def _entry(
+    term: str,
+    definition: str,
+    *,
+    kind: CitationKind = CitationKind.TERM,
+    aliases: tuple[str, ...] = (),
+    source: str = "platform-vocabulary",
+) -> ReferenceEntry:
     return ReferenceEntry(
-        slug=_slug(term), term=term, definition=definition, kind=kind, aliases=aliases,
+        slug=_slug(term),
+        term=term,
+        definition=definition,
+        kind=kind,
+        aliases=aliases,
         source=source,
     )
 
@@ -189,8 +199,10 @@ def platform_glossary() -> tuple[ReferenceEntry, ...]:
         for lane in TestLane
     ]
 
-    entries += [_entry(term, definition, aliases=aliases)
-                for term, definition, aliases in _CONTROL_TABLES + _CHIP_TERMS]
+    entries += [
+        _entry(term, definition, aliases=aliases)
+        for term, definition, aliases in _CONTROL_TABLES + _CHIP_TERMS
+    ]
     return tuple(entries)
 
 
@@ -214,60 +226,122 @@ _LAYER_MEANING: dict[Layer, str] = {
 
 _RISK_MEANING: dict[RiskClass, str] = {
     RiskClass.R0: "Observe only. The agent reads and explains; no write tool is on its "
-                  "whitelist at any confidence.",
+    "whitelist at any confidence.",
     RiskClass.R1: "Suggests; a person accepts or ignores.",
     RiskClass.R2: "Proposes a change as a reviewable diff.",
     RiskClass.R3: "Acts within a bounded, reversible envelope.",
     RiskClass.R4: "Identity- or PHI-consequential. HUMAN ALWAYS — not configurable at any "
-                  "confidence, in any environment.",
+    "confidence, in any environment.",
 }
 
 _CONTROL_TABLES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("feed_sla_config", "Expected arrival windows per feed per cycle. What makes Missing "
-     "computable rather than noticed.", ("control table", "sla")),
-    ("input_registry", "Every file that ever arrived, with its content fingerprint. The same "
-     "fingerprint twice is skipped with an audit entry.", ("control table", "fingerprint")),
-    ("schema_registry", "The contract each feed version was loaded against.",
-     ("control table", "contract")),
-    ("schema_drift_log", "Observed structure against the contract, per batch.",
-     ("control table", "drift")),
-    ("batch_control", "One row per run: state, feed version, business date.",
-     ("control table", "batch")),
-    ("batch_stage_status", "Per-stage progress. What a restart resumes from.",
-     ("control table", "stage", "restart")),
-    ("error_log", "Errors keyed by a deterministic hash of batch, stage, record key, type and "
-     "rule — which makes replay idempotent at the error level.",
-     ("control table", "error", "replay")),
-    ("quarantine_records", "Rows held back by a rule, retained rather than dropped.",
-     ("control table", "quarantine")),
-    ("batch_reconciliation", "The balance equation per stage per batch: rows_in equals rows_out "
-     "plus quarantined plus attributed drops.", ("control table", "reconciliation", "balance")),
+    (
+        "feed_sla_config",
+        "Expected arrival windows per feed per cycle. What makes Missing "
+        "computable rather than noticed.",
+        ("control table", "sla"),
+    ),
+    (
+        "input_registry",
+        "Every file that ever arrived, with its content fingerprint. The same "
+        "fingerprint twice is skipped with an audit entry.",
+        ("control table", "fingerprint"),
+    ),
+    (
+        "schema_registry",
+        "The contract each feed version was loaded against.",
+        ("control table", "contract"),
+    ),
+    (
+        "schema_drift_log",
+        "Observed structure against the contract, per batch.",
+        ("control table", "drift"),
+    ),
+    (
+        "batch_control",
+        "One row per run: state, feed version, business date.",
+        ("control table", "batch"),
+    ),
+    (
+        "batch_stage_status",
+        "Per-stage progress. What a restart resumes from.",
+        ("control table", "stage", "restart"),
+    ),
+    (
+        "error_log",
+        "Errors keyed by a deterministic hash of batch, stage, record key, type and "
+        "rule — which makes replay idempotent at the error level.",
+        ("control table", "error", "replay"),
+    ),
+    (
+        "quarantine_records",
+        "Rows held back by a rule, retained rather than dropped.",
+        ("control table", "quarantine"),
+    ),
+    (
+        "batch_reconciliation",
+        "The balance equation per stage per batch: rows_in equals rows_out "
+        "plus quarantined plus attributed drops.",
+        ("control table", "reconciliation", "balance"),
+    ),
     ("sla_instance", "One expected arrival and what became of it.", ("control table", "sla")),
-    ("sla_alerts", "The Missing that somebody was actually told about.",
-     ("control table", "alert")),
+    (
+        "sla_alerts",
+        "The Missing that somebody was actually told about.",
+        ("control table", "alert"),
+    ),
 )
 
 _CHIP_TERMS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("core", "The platform's logic. Imports no vendor SDK, no URL, no path and no credential, "
-     "and performs no I/O.", ("chip", "law 1")),
-    ("port", "A pin. One protocol per external capability, with real, dev stand-in and mock "
-     "adapters sharing ONE contract suite.", ("chip", "pin", "law 2")),
+    (
+        "core",
+        "The platform's logic. Imports no vendor SDK, no URL, no path and no credential, "
+        "and performs no I/O.",
+        ("chip", "law 1"),
+    ),
+    (
+        "port",
+        "A pin. One protocol per external capability, with real, dev stand-in and mock "
+        "adapters sharing ONE contract suite.",
+        ("chip", "pin", "law 2"),
+    ),
     ("adapter", "Vendor code. The only place an SDK may be imported.", ("chip",)),
-    ("connection profile", "The one place environment difference lives. Climbing a socket rung "
-     "changes only the profile.", ("chip", "law 3", "socket")),
-    ("socket", "A rung on the ladder: 0 mock, 0.5 Postgres plane, 1 local twin, 2 Databricks "
-     "Free, 3 client dev, 4 client prod.", ("chip", "rung", "ladder")),
-    ("conformance kit", "One check per energized pin, each naming its pin, so plug-and-play "
-     "never regresses.", ("chip", "certification")),
-    ("citation_id", "The platform's address space. A citation parses to a UI route, so one "
-     "resolver serves the agent's citations, deep links, breadcrumbs and drawers.",
-     ("citation", "address", "route")),
-    ("balance equation", "rows_in equals rows_out plus quarantined plus attributed_drops, every "
-     "stage, every batch. No drop category 'other' or 'unknown' can exist.",
-     ("reconciliation", "invariant")),
-    ("compiled plan", "The intermediate representation the engine runs: read, validate, "
-     "land_bronze, cast, map, evaluate_rules, resolve_identity, load, reconcile. It is also "
-     "what the agent explains and what grades the agent.", ("plan", "ir", "compiler")),
+    (
+        "connection profile",
+        "The one place environment difference lives. Climbing a socket rung "
+        "changes only the profile.",
+        ("chip", "law 3", "socket"),
+    ),
+    (
+        "socket",
+        "A rung on the ladder: 0 mock, 0.5 Postgres plane, 1 local twin, 2 Databricks "
+        "Free, 3 client dev, 4 client prod.",
+        ("chip", "rung", "ladder"),
+    ),
+    (
+        "conformance kit",
+        "One check per energized pin, each naming its pin, so plug-and-play never regresses.",
+        ("chip", "certification"),
+    ),
+    (
+        "citation_id",
+        "The platform's address space. A citation parses to a UI route, so one "
+        "resolver serves the agent's citations, deep links, breadcrumbs and drawers.",
+        ("citation", "address", "route"),
+    ),
+    (
+        "balance equation",
+        "rows_in equals rows_out plus quarantined plus attributed_drops, every "
+        "stage, every batch. No drop category 'other' or 'unknown' can exist.",
+        ("reconciliation", "invariant"),
+    ),
+    (
+        "compiled plan",
+        "The intermediate representation the engine runs: read, validate, "
+        "land_bronze, cast, map, evaluate_rules, resolve_identity, load, reconcile. It is also "
+        "what the agent explains and what grades the agent.",
+        ("plan", "ir", "compiler"),
+    ),
 )
 
 

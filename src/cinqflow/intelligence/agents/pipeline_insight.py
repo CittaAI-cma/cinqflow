@@ -83,13 +83,11 @@ class Answer:
         if self.refused:
             return self.refusal
         if not self.claims:
-            return (
-                f"{NEEDS_YOUR_INPUT}: "
-                + ("; ".join(self.unanswered) or "there is nothing recorded to answer from")
+            return f"{NEEDS_YOUR_INPUT}: " + (
+                "; ".join(self.unanswered) or "there is nothing recorded to answer from"
             )
         return "\n".join(
-            f"{claim.text} [{', '.join(str(c) for c in claim.citations)}]"
-            for claim in self.claims
+            f"{claim.text} [{', '.join(str(c) for c in claim.citations)}]" for claim in self.claims
         )
 
 
@@ -163,8 +161,12 @@ class PipelineInsightAgent:
             reason = DECLINED_CAPABILITIES.get(
                 capability, "That is not something this agent can do in Wave 0."
             )
-            self._record(state, f"declined:{capability or 'unrouted'}",
-                         ActionOutcome.REFUSED_NOT_WHITELISTED, reason)
+            self._record(
+                state,
+                f"declined:{capability or 'unrouted'}",
+                ActionOutcome.REFUSED_NOT_WHITELISTED,
+                reason,
+            )
             return {
                 "intent": intent,
                 "declined": True,
@@ -206,8 +208,12 @@ class PipelineInsightAgent:
             # Narrowed to the INTENT's tools, not merely to the whitelist. A
             # question about a definition has no business reading the error log.
             if tool not in available:
-                self._record(state, f"tool:{tool}", ActionOutcome.REFUSED_NOT_WHITELISTED,
-                             f"{tool} is not available for intent {intent.value}")
+                self._record(
+                    state,
+                    f"tool:{tool}",
+                    ActionOutcome.REFUSED_NOT_WHITELISTED,
+                    f"{tool} is not available for intent {intent.value}",
+                )
                 continue
             arguments = {
                 key: value

@@ -1,0 +1,14 @@
+[
+  {
+    "httpRequest": { "method": "POST", "path": "/identity/resolve" },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": { "content-type": ["application/json"] },
+      "body": {
+        "match_status": "REVIEW",
+        "confidence": 0.71,
+        "note": "Deliberately REVIEW rather than MATCH. Identity is R4 — human always, not configurable at any confidence — so the twin's default answer must exercise the path that requires a person."
+      }
+    }
+  }
+]

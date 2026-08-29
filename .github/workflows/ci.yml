@@ -80,6 +80,79 @@ jobs:
       - name: layers 3-4 — each test in a rolled-back transaction
         run: pytest -m "pipeline or invariant" -q -n auto
 
+  conformance:
+    # Gate: "one check per energized pin, each naming its pin" — W0 — proves
+    # plug-and-play never regresses, and that fitting an adapter is a
+    # CERTIFICATION rather than a migration.
+    name: conformance · certify the socket, pin by pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
+      - name: 20 pins + the platform laws
+        run: python conformance/kit.py
+
+  ui:
+    # Gate: "twin-e2e — the script plus Playwright, asserted" — W0 — proves the
+    # demo cannot silently rot, and that the Read-Only denial holds in a browser.
+    name: ui · typecheck, build, and the workspace end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
+      - run: npm ci
+        working-directory: ui
+      - name: the OpenAPI document is the UI's contract
+        run: npx tsc --noEmit
+        working-directory: ui
+      - run: npx next build
+        working-directory: ui
+      - run: npx playwright install --with-deps chromium
+        working-directory: ui
+      - name: sign-in · denial · citations · the lexicon gate
+        run: npx playwright test
+        working-directory: ui
+        env:
+          CI: "true"
+
+  agent-evals:
+    # Gate: "Lane 3 — plan coverage · invented steps = 0 · citations · refusals
+    # · cost" — W0 — proves no AI capability degrades quietly.
+    #
+    # SKIPS with an explicit message until CINQFLOW_SECRET_LLM_* are set. No
+    # evaluation threshold may be claimed from Lane 1 (mock) or Lane 2 (replay),
+    # so a green tick here without those secrets means "not measured", never
+    # "measured and fine". The job prints which variables are unset.
+    name: agent-evals · Lane 3, the only lane that may make a quality claim
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
+      - name: Lane 3
+        env:
+          CINQFLOW_SECRET_LLM_ENDPOINT: ${{ secrets.CINQFLOW_SECRET_LLM_ENDPOINT }}
+          CINQFLOW_SECRET_LLM_KEY: ${{ secrets.CINQFLOW_SECRET_LLM_KEY }}
+          CINQFLOW_SECRET_LLM_MODEL_SMALL: ${{ secrets.CINQFLOW_SECRET_LLM_MODEL_SMALL }}
+          CINQFLOW_SECRET_LLM_MODEL_LARGE: ${{ secrets.CINQFLOW_SECRET_LLM_MODEL_LARGE }}
+        run: pytest -m evaluation -q -rs
+
   architecture-drift:
     # Gate: the atlas and its generated docs cannot diverge.
     name: architecture-drift · the atlas is the source

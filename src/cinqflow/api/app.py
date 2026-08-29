@@ -384,8 +384,11 @@ def create_app(
         a screen and a figure in an answer cannot disagree.
         """
         context = ToolContext(
-            principal=principal, control=control, metadata=metadata,
-            run_id=f"ui-{batch_id}", agent="ui",
+            principal=principal,
+            control=control,
+            metadata=metadata,
+            run_id=f"ui-{batch_id}",
+            agent="ui",
         )
         return _rows_out(invoke(context, _PANEL_TOOLS[panel], {"batch_id": batch_id}))
 
@@ -424,9 +427,13 @@ def create_app(
         factory: AgentFactory | None = app.state.agent_factory
         if factory is None:
             return AskOut(
-                claims=[], confidence="low",
+                claims=[],
+                confidence="low",
                 unanswered=["the llm pin is not fitted in this connection profile"],
-                intent="declined", tools_called=[], trace=[], cost_usd="0",
+                intent="declined",
+                tools_called=[],
+                trace=[],
+                cost_usd="0",
                 refused=True,
                 refusal=(
                     "No model endpoint is configured. Everything else on this platform "

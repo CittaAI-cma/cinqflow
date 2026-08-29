@@ -100,9 +100,9 @@ def test_retiring_a_referenced_entry_is_refused_and_names_the_referrers() -> Non
     )
     with pytest.raises(ReferencedEntryError) as raised:
         register.retire("control.batch_control")
-    assert "CF-V0-E8-01" in str(
-        raised.value
-    ), "a refusal that does not say WHO still needs the entry sends someone grepping"
+    assert "CF-V0-E8-01" in str(raised.value), (
+        "a refusal that does not say WHO still needs the entry sends someone grepping"
+    )
     assert "control.batch_control" in register.objects
 
 

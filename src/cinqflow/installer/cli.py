@@ -60,9 +60,7 @@ def install(
     from cinqflow.adapters.local.pg_ddl import PostgresDdlRenderer
 
     renderer = PostgresDdlRenderer()
-    manifest = InstallationManifest(
-        profile=loaded.source, rung=loaded.rung, socket=loaded.socket
-    )
+    manifest = InstallationManifest(profile=loaded.source, rung=loaded.rung, socket=loaded.socket)
 
     statements: list[str] = ["CREATE EXTENSION IF NOT EXISTS vector;"]
     manifest.record("extension", "vector")  # provisioned in W0, populated in W1
@@ -144,6 +142,59 @@ def doctor(profile: ProfileOption = Path("profiles/local.yaml")) -> None:
         for pin in pins:
             report.add_row(group, pin, loaded.adapter_for(pin), PORTS[pin].verb)
     console.print(report)
+
+
+@app.command()
+def conformance(profile: ProfileOption | None = None) -> None:
+    """Certify this socket — one check per energized pin, each naming its pin.
+
+    Fitting a new adapter is a CERTIFICATION, not a migration. This is the
+    command that makes that true: run it, read the pin names.
+    """
+    import sys
+    from pathlib import Path as _Path
+
+    sys.path.insert(0, str(_Path(__file__).resolve().parents[3] / "conformance"))
+    from conformance.kit import main as kit_main
+
+    raise SystemExit(kit_main(["--profile", str(profile)] if profile else []))
+
+
+@app.command()
+def ask(
+    question: str,
+    as_user: str = "dev-analyst@cinqcare.test",
+) -> None:
+    """Ask the Pipeline Insight Agent, from a terminal.
+
+    Runs on the mock socket, so it needs no database and no credential. Every
+    claim prints with its citation — and a refusal prints as a refusal, because
+    "I will not do that" is an answer.
+    """
+    from rich.markup import escape
+
+    from cinqflow.adapters.mock.authn import StaticAuthn
+    from cinqflow.intelligence.demo import agent_for, plane
+
+    store, control = plane()
+    agent = agent_for(StaticAuthn().verify(as_user), control, store)
+    answer = agent.ask(question, run_id="cli")
+
+    if answer.refused:
+        console.print(f"[yellow]REFUSED[/yellow] {escape(answer.refusal)}")
+        raise SystemExit(0)
+    for claim in answer.claims:
+        # Escaped: a citation contains square brackets and colons, and rich
+        # would eat `[batch:8842]` as markup — printing an answer with its
+        # evidence silently removed, which is the one thing this must not do.
+        cited = escape(" ".join(f"[{c}]" for c in claim.citations))
+        console.print(f"{escape(claim.text)} [cyan]{cited}[/cyan]")
+    for missing in answer.unanswered:
+        console.print(f"[dim]unanswered: {escape(missing)}[/dim]")
+    console.print(
+        f"[dim]tools: {', '.join(answer.tools_called) or 'none'} · "
+        f"confidence {answer.confidence} · ${answer.cost_usd}[/dim]"
+    )
 
 
 def _execute(loaded: profile_module.Profile, statements: list[str]) -> None:

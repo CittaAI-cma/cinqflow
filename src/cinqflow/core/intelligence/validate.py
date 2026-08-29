@@ -44,8 +44,7 @@ def validate(schema: dict[str, Any], value: Any, *, path: str = "$") -> tuple[st
         raise SchemaError(f"{path}: every schema node states a type")
     if declared not in _TYPES:
         raise SchemaError(
-            f"{path}: {declared!r} is outside the supported subset "
-            f"({', '.join(sorted(_TYPES))})"
+            f"{path}: {declared!r} is outside the supported subset ({', '.join(sorted(_TYPES))})"
         )
 
     expected = _TYPES[declared]

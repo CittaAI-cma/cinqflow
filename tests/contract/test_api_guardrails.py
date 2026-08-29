@@ -128,9 +128,9 @@ def test_read_only_crafting_an_edit_url_is_denied_at_the_server_and_recorded(
     trail = _audit(store)
     assert [e.action for e in trail] == ["denied:edit_feed"]
     assert trail[0].actor.subject == READ_ONLY
-    assert (
-        trail[0].actor_type is ActorType.HUMAN
-    ), "the audit entry states whether the actor was human, system or AI — never inferred"
+    assert trail[0].actor_type is ActorType.HUMAN, (
+        "the audit entry states whether the actor was human, system or AI — never inferred"
+    )
     assert trail[0].detail, "a denial with no reason is a row nobody can review"
 
 
@@ -264,9 +264,9 @@ def test_editing_creates_a_new_version_and_leaves_the_previous_one_intact(
 
     versions = list(store.history(ObjectType.FEED, FEED_ID))
     assert [v.version for v in versions] == [1, 2]
-    assert (
-        versions[0].body["schedule_cron"] == "0 6 * * 1"
-    ), "an edit is a new version; the previous one stays exactly as it was"
+    assert versions[0].body["schedule_cron"] == "0 6 * * 1", (
+        "an edit is a new version; the previous one stays exactly as it was"
+    )
 
 
 def test_an_edit_may_not_rename_the_thing_it_edits(client: TestClient) -> None:
@@ -393,15 +393,15 @@ def test_every_mutating_route_requires_a_permission_that_changes_things(
             continue
         actions = _permissions_on(route)
         assert actions, f"{route.path} mutates and states no permission"
-        assert all(
-            a.changes_things for a in actions
-        ), f"{route.path} mutates but only requires {sorted(a.value for a in actions)}"
+        assert all(a.changes_things for a in actions), (
+            f"{route.path} mutates but only requires {sorted(a.value for a in actions)}"
+        )
 
 
 def test_the_unpermissioned_routes_still_refuse_an_anonymous_caller(
     client: TestClient,
 ) -> None:
-    """"No permission required" is not "no identity required"."""
+    """ "No permission required" is not "no identity required"."""
     for path in sorted(UNPERMISSIONED):
         assert client.get(path).status_code == 401
 
@@ -416,9 +416,10 @@ def test_a_user_in_no_group_gets_an_empty_nav_not_a_broken_shell(
 
 def test_wave_one_destinations_are_absent_not_disabled(client: TestClient) -> None:
     """A greyed-out menu item is a promise the build cannot keep."""
-    keys = {d["key"] for d in client.get("/api/navigation", headers=_as(ENGINEER)).json()[
-        "destinations"
-    ]}
+    keys = {
+        d["key"]
+        for d in client.get("/api/navigation", headers=_as(ENGINEER)).json()["destinations"]
+    }
     assert {"mapping", "quality", "work-queue", "lineage"} & keys == set()
     assert "intake" in keys and "control" in keys
 
@@ -435,11 +436,12 @@ def test_persona_ranks_but_never_gates(client: TestClient) -> None:
 
 
 def test_only_an_administrator_sees_users_and_roles(client: TestClient) -> None:
-    admin = {d["key"] for d in client.get("/api/navigation", headers=_as(ADMIN)).json()[
-        "destinations"
-    ]}
-    engineer = {d["key"] for d in client.get("/api/navigation", headers=_as(ENGINEER)).json()[
-        "destinations"
-    ]}
+    admin = {
+        d["key"] for d in client.get("/api/navigation", headers=_as(ADMIN)).json()["destinations"]
+    }
+    engineer = {
+        d["key"]
+        for d in client.get("/api/navigation", headers=_as(ENGINEER)).json()["destinations"]
+    }
     assert "users" in admin
     assert "users" not in engineer
