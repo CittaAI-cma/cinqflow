@@ -37,6 +37,10 @@ NO_GROUP = "dev-nogroup@cinqcare.test"
 
 MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+#: Authenticated, but with no permission beyond being signed in. Both exist so
+#: a user in NO group reaches a clear answer instead of a broken application.
+UNPERMISSIONED = frozenset({"/api/me", "/api/navigation"})
+
 FEED_ID = "fidelis-downstate-roster"
 
 FEED_BODY: dict[str, Any] = {
@@ -345,25 +349,97 @@ def _api_routes(app: FastAPI) -> list[APIRoute]:
 def test_every_api_route_states_the_permission_it_requires(app: FastAPI) -> None:
     """Not "every route we remembered". Every route, asserted over the catalogue.
 
-    `/api/me` is the one deliberate exception: a user in no group must be able
-    to learn that they are in no group.
+    `/api/me` and `/api/navigation` are the deliberate exceptions: a user in no
+    group must be able to learn that they are in no group, and must get an
+    EMPTY nav rather than a broken shell. Both are authenticated — they just
+    have no permission to require beyond having signed in.
     """
     unguarded = [
         route.path
         for route in _api_routes(app)
-        if not _permissions_on(route) and route.path != "/api/me"
+        if not _permissions_on(route) and route.path not in UNPERMISSIONED
     ]
     assert unguarded == []
+
+
+#: Routes that use a mutating METHOD without being a mutation. `/api/ask` is a
+#: POST only because a question travels in a body — it runs an R0 agent whose
+#: whitelist contains read tools only, asserted in
+#: tests/contract/test_pipeline_insight_agent.py. Listed explicitly, and short:
+#: an exception nobody has to justify is a rule that erodes.
+READ_ONLY_POSTS = frozenset({"/api/ask"})
+
+
+def test_the_read_only_post_exceptions_stay_read_only(app: FastAPI) -> None:
+    """Each exception must require a permission that does NOT change things.
+
+    That is what keeps the list honest: adding a route here cannot smuggle in a
+    write, because the permission it requires would have to be a write
+    permission and this assertion would fail.
+    """
+    for route in _api_routes(app):
+        if route.path not in READ_ONLY_POSTS:
+            continue
+        actions = _permissions_on(route)
+        assert actions, f"{route.path} states no permission"
+        assert not any(a.changes_things for a in actions), route.path
 
 
 def test_every_mutating_route_requires_a_permission_that_changes_things(
     app: FastAPI,
 ) -> None:
     for route in _api_routes(app):
-        if not route.methods & MUTATING_METHODS:
+        if not route.methods & MUTATING_METHODS or route.path in READ_ONLY_POSTS:
             continue
         actions = _permissions_on(route)
         assert actions, f"{route.path} mutates and states no permission"
         assert all(
             a.changes_things for a in actions
         ), f"{route.path} mutates but only requires {sorted(a.value for a in actions)}"
+
+
+def test_the_unpermissioned_routes_still_refuse_an_anonymous_caller(
+    client: TestClient,
+) -> None:
+    """"No permission required" is not "no identity required"."""
+    for path in sorted(UNPERMISSIONED):
+        assert client.get(path).status_code == 401
+
+
+def test_a_user_in_no_group_gets_an_empty_nav_not_a_broken_shell(
+    client: TestClient,
+) -> None:
+    body = client.get("/api/navigation", headers=_as(NO_GROUP)).json()
+    assert body["destinations"] == []
+    assert body["active_wave"] == 0
+
+
+def test_wave_one_destinations_are_absent_not_disabled(client: TestClient) -> None:
+    """A greyed-out menu item is a promise the build cannot keep."""
+    keys = {d["key"] for d in client.get("/api/navigation", headers=_as(ENGINEER)).json()[
+        "destinations"
+    ]}
+    assert {"mapping", "quality", "work-queue", "lineage"} & keys == set()
+    assert "intake" in keys and "control" in keys
+
+
+def test_persona_ranks_but_never_gates(client: TestClient) -> None:
+    """Everyone with the permission sees the same destinations in the same words."""
+    engineer = client.get("/api/navigation", headers=_as(ENGINEER)).json()["destinations"]
+    read_only = client.get("/api/navigation", headers=_as(READ_ONLY)).json()["destinations"]
+
+    assert {d["key"] for d in engineer} == {d["key"] for d in read_only}
+    labels = {d["key"]: d["label"] for d in engineer}
+    assert all(labels[d["key"]] == d["label"] for d in read_only), "same words for everyone"
+    assert [d["key"] for d in engineer] != [d["key"] for d in read_only], "different ranking"
+
+
+def test_only_an_administrator_sees_users_and_roles(client: TestClient) -> None:
+    admin = {d["key"] for d in client.get("/api/navigation", headers=_as(ADMIN)).json()[
+        "destinations"
+    ]}
+    engineer = {d["key"] for d in client.get("/api/navigation", headers=_as(ENGINEER)).json()[
+        "destinations"
+    ]}
+    assert "users" in admin
+    assert "users" not in engineer

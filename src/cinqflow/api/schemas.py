@@ -12,6 +12,7 @@ convention the frontend is asked to remember.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -123,3 +124,140 @@ class ProblemOut(BaseModel):
     """
 
     detail: str
+
+
+# ── the intelligence plane, on the wire ──────────────────────────────────────
+
+
+class ClaimOut(BaseModel):
+    """One sentence, and the rows it came from.
+
+    `citation_ids` is never empty on a claim that reaches here — the agent
+    drops uncited claims before the API sees them, so the UI can render a
+    citation chip unconditionally rather than guarding for its absence.
+    """
+
+    text: str
+    citation_ids: list[str]
+    routes: list[str]
+
+
+class AskIn(BaseModel):
+    question: str
+
+
+class TraceStepOut(BaseModel):
+    """One node of the graph. This is the UI's HOW I GOT THERE panel."""
+
+    node: str
+    duration_ms: int
+
+
+class AskOut(BaseModel):
+    claims: list[ClaimOut]
+    confidence: str
+    unanswered: list[str]
+    intent: str
+    tools_called: list[str]
+    trace: list[TraceStepOut]
+    cost_usd: str
+    refused: bool
+    refusal: str
+    run_id: str
+
+
+class AgentActionOut(BaseModel):
+    """A row of audit.agent_action — including the refusals.
+
+    Refusals are the half people leave out, and they are what the LLM
+    Observability screen exists to show: a governed AI layer nobody can see is
+    an ungoverned AI layer with paperwork.
+    """
+
+    run_id: str
+    agent: str
+    action: str
+    outcome: str
+    is_refusal: bool
+    actor_subject: str
+    actor_type: ActorType
+    risk_class: str
+    prompt_ref: str
+    prompt_hash: str
+    model: str
+    model_version: str
+    prompt_tokens: int
+    completion_tokens: int
+    cost_usd: str
+    latency_ms: int
+    occurred_ts: datetime
+    detail: str
+
+
+class ToolOut(BaseModel):
+    name: str
+    answers: str
+    reads: list[str]
+    cites: list[str]
+    parameters: list[str]
+    note: str
+
+
+class BudgetOut(BaseModel):
+    agent: str
+    spent_today_usd: str
+    daily_cap_usd: str
+    per_run_cap_usd: str
+    runs_today: int
+    refusals_today: int
+    grounded_claims: int
+    uncited_claims_blocked: int
+
+
+class BatchOut(BaseModel):
+    batch_id: str
+    feed_id: str
+    business_date: str
+    state: str
+    status: StatusWord
+    started_ts: datetime | None = None
+    completed_ts: datetime | None = None
+    citation_id: str
+    route: str
+
+
+class RowsOut(BaseModel):
+    """A tool result, as the UI consumes it.
+
+    Deliberately the SAME shape the agent gets. One projection, so a figure on
+    a screen and a figure in an answer cannot disagree — and the drawer a
+    citation opens is rendered from the rows that citation cites.
+    """
+
+    tool: str
+    rows: list[dict[str, Any]]
+    citations: list[str]
+    row_count: int
+    out_of_scope: bool
+    marker: str
+    note: str
+
+
+class DestinationOut(BaseModel):
+    key: str
+    label: str
+    route: str
+    group: str
+    answers: str
+    prominent: bool
+
+
+class NavigationOut(BaseModel):
+    """The nav, generated from the wave-activation manifest.
+
+    Wave-1 destinations are ABSENT, not disabled. A greyed-out menu item is a
+    promise the build cannot keep.
+    """
+
+    active_wave: int
+    destinations: list[DestinationOut]

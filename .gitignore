@@ -26,3 +26,10 @@ ui/next-env.d.ts
 landing/
 .cinqflow/
 installation-manifest*.json
+
+# ── ui ────────────────────────────────────────────────────────────────────────
+ui/node_modules/
+ui/.next/
+ui/test-results/
+ui/playwright-report/
+ui/next-env.d.ts

@@ -22,6 +22,7 @@ from decimal import Decimal
 from enum import StrEnum, unique
 
 from cinqflow.core.model.governed import Actor
+from cinqflow.core.model.vocabulary import ActorType
 
 
 @unique
@@ -63,6 +64,12 @@ class AgentAction:
     cost_usd: Decimal = Decimal("0")
     latency_ms: int = 0
     detail: str = ""
+
+    @property
+    def actor_type(self) -> ActorType:
+        """Recorded, never inferred. An AI action that reads as human defeats
+        the entire trail."""
+        return self.actor.actor_type
 
     def __post_init__(self) -> None:
         if not self.run_id.strip():
