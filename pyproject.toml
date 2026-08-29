@@ -18,6 +18,9 @@ cinqflow = "cinqflow.installer.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+cinqflow = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "conformance"]
 pythonpath = ["src"]
