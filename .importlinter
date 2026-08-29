@@ -70,10 +70,12 @@ forbidden_modules =
     langgraph
 
 [importlinter:contract:layers]
-name = api/workers/installer/simulator -> adapters -> ports -> core
+name = api -> workers/installer/simulator -> intelligence -> adapters -> ports -> core
 type = layers
 layers =
-    cinqflow.api : cinqflow.workers : cinqflow.installer : cinqflow.simulator
+    cinqflow.api
+    cinqflow.workers : cinqflow.installer : cinqflow.simulator
+    cinqflow.intelligence
     cinqflow.adapters
     cinqflow.ports
     cinqflow.core

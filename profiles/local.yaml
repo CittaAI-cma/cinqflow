@@ -36,6 +36,14 @@ pins:
       per_run_usd: 0.25
       per_agent_per_day_usd: 5.00
     pin_versions: true                        # a floating model version is an unpinned experiment
+    # USD per 1M tokens, [prompt, completion]. Stated, never guessed: a model
+    # priced at zero makes every budget cap non-binding and every cost figure a
+    # lie, so the adapter refuses to construct without a price for each model.
+    # Keyed by the RESOLVED model name, so this is the one llm setting that is
+    # not a secret reference — a price is not a credential.
+    prices:
+      gpt-5-mini:  [0.25, 2.00]
+      gpt-5:       [1.25, 10.00]
   vector:         { adapter: pgvector, dimensions: 3072 }   # provisioned in W0, populated in W1
   phi_scrub:      { adapter: presidio, model: en_core_web_lg }
   notification:   { adapter: console }

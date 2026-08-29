@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
+from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 
 
@@ -86,3 +87,17 @@ class MetadataDbPort(Protocol):
     def read_audit(
         self, *, object_id: str | None = None, limit: int = 100
     ) -> Sequence[AuditEntry]: ...
+
+    def append_agent_action(self, action: AgentAction) -> None:
+        """Append one row to `audit.agent_action`. Append-only, like the rest.
+
+        A separate verb rather than a variant of `append_audit` because an
+        agent action carries what a governance entry does not — prompt hash,
+        model version, tokens, cost — and folding them into a free-text detail
+        field would make "what did the agent cost yesterday?" a grep.
+        """
+        ...
+
+    def read_agent_actions(
+        self, *, run_id: str | None = None, agent: str | None = None, limit: int = 100
+    ) -> Sequence[AgentAction]: ...

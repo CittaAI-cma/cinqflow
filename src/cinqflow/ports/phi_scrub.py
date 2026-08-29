@@ -17,33 +17,11 @@ review and dies to a refactor that reorders two lines.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from cinqflow.core.model.phi import Finding, ScrubResult
 
-@dataclass(frozen=True)
-class Finding:
-    """One detected entity. Positions, never the value.
-
-    Carrying the detected VALUE in a finding would put PHI into logs and error
-    messages — the two classic leak routes — via the very type built to
-    prevent it.
-    """
-
-    entity_type: str
-    start: int
-    end: int
-    score: float
-
-
-@dataclass(frozen=True)
-class ScrubResult:
-    text: str
-    findings: tuple[Finding, ...] = field(default_factory=tuple)
-
-    @property
-    def was_scrubbed(self) -> bool:
-        return bool(self.findings)
+__all__ = ["Finding", "PhiScrubPort", "ScrubResult"]
 
 
 @runtime_checkable

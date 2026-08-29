@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import ConcurrentVersionError, ObjectNotFoundError
@@ -22,6 +23,7 @@ class MemMetadataDb:
     def __init__(self) -> None:
         self._objects: dict[tuple[ObjectType, str], list[GovernedObject]] = {}
         self._audit: list[AuditEntry] = []
+        self._agent_actions: list[AgentAction] = []
 
     def save(self, obj: GovernedObject) -> GovernedObject:
         versions = self._objects.setdefault((obj.object_type, obj.object_id), [])
@@ -67,3 +69,18 @@ class MemMetadataDb:
     def read_audit(self, *, object_id: str | None = None, limit: int = 100) -> Sequence[AuditEntry]:
         found = [e for e in self._audit if object_id is None or e.object_id == object_id]
         return tuple(sorted(found, key=lambda e: e.occurred_ts, reverse=True)[:limit])
+
+    def append_agent_action(self, action: AgentAction) -> None:
+        self._agent_actions.append(action)
+
+    def read_agent_actions(
+        self, *, run_id: str | None = None, agent: str | None = None, limit: int = 100
+    ) -> Sequence[AgentAction]:
+        found = [
+            a
+            for a in self._agent_actions
+            if (run_id is None or a.run_id == run_id) and (agent is None or a.agent == agent)
+        ]
+        # Oldest first: an agent's actions are a NARRATIVE, and reading a
+        # trace backwards is how a reviewer misattributes a refusal.
+        return tuple(found[:limit])
