@@ -134,7 +134,7 @@ def test_an_approver_who_authored_it_is_refused_by_the_engine_itself(
     """
     assert client.post("/api/feeds", json=FEED_BODY, headers=_as(BOTH_HATS)).status_code == 201
     _act(client, "submit", BOTH_HATS)
-    refused = _act(client, "approve", BOTH_HATS)
+    refused = _act(client, "approve", BOTH_HATS, comment="looks fine to me")
     assert refused.status_code == 403
     assert "never approves it" in refused.json()["detail"]
     assert "refused:approve" in _refusals(store)
@@ -226,7 +226,7 @@ def test_the_business_approver_may_publish_what_an_engineer_approved(
     """Publication admits the business approver — E4-03's dual signature needs
     both pens to exist."""
     _act(drafted, "submit", BA)
-    _act(drafted, "approve", PLATFORM)
+    _act(drafted, "approve", PLATFORM, comment="checked")
     assert _act(drafted, "publish", APPROVER).status_code == 200
 
 
@@ -245,7 +245,7 @@ def test_request_changes_returns_it_to_draft_and_the_conversation_survives(
 
 def test_retiring_keeps_the_history(drafted: TestClient, store: MemMetadataDb) -> None:
     _act(drafted, "submit", BA)
-    _act(drafted, "approve", PLATFORM)
+    _act(drafted, "approve", PLATFORM, comment="checked")
     _act(drafted, "publish", PLATFORM)
     assert (
         _act(drafted, "retire", PLATFORM, comment="superseded by the 2027 roster").status_code
@@ -279,3 +279,105 @@ def test_a_steward_sees_nothing_of_a_feed_awaiting_engineering_review(
     _act(drafted, "submit", BA)
     queue = drafted.get("/api/work-queue", headers=_as(STEWARD)).json()
     assert queue["awaiting_my_review"] == []
+
+
+# ── CF-V1-E11-02 · the approval packet, over HTTP ────────────────────────────
+
+
+MAPPING_BODY: dict[str, Any] = {
+    "feed_id": FEED_ID,
+    "lines": 45,
+    "business_consumers": ["Acute Event Command"],
+}
+
+
+def _draft_mapping(client: TestClient, store: MemMetadataDb, **body: Any) -> None:
+    """Mappings have no create route yet (CF-V1-E6-03 brings one), so the
+    packet tests seed the registry directly — through the same governed shape
+    the route will produce."""
+    from datetime import UTC, datetime
+
+    from cinqflow.core.model.governed import Actor, GovernedObject
+    from cinqflow.core.model.vocabulary import ActorType
+
+    store.save(
+        GovernedObject(
+            object_type=ObjectType.MAPPING,
+            object_id="roster-mapping",
+            version=1,
+            lifecycle_state=LifecycleState.PENDING_REVIEW,
+            created_by=Actor(subject=BA, actor_type=ActorType.HUMAN, display_name="Meera"),
+            created_ts=datetime(2026, 8, 30, tzinfo=UTC),
+            body={**MAPPING_BODY, **body},
+        )
+    )
+
+
+def test_the_packet_shows_the_change_both_impacts_and_the_evidence(
+    drafted: TestClient, store: MemMetadataDb
+) -> None:
+    """One screen, every field computed. The BA's feed is referenced by the
+    mapping, so changing the feed reaches it — without the author saying so."""
+    _draft_mapping(drafted, store, business_consumers=[])
+    packet = drafted.get(f"/api/objects/feed/{FEED_ID}/packet", headers=_as(PLATFORM)).json()
+    assert packet["object_id"] == FEED_ID
+    assert "roster-mapping" in {t["object_id"] for t in packet["engineering_impact"]}
+    assert packet["blocks_production"] is False
+
+
+def test_a_packet_with_an_unresolvable_consumer_says_so_and_blocks(
+    drafted: TestClient, store: MemMetadataDb
+) -> None:
+    _draft_mapping(drafted, store)
+    packet = drafted.get("/api/objects/mapping/roster-mapping/packet", headers=_as(STEWARD)).json()
+    assert [u["name"] for u in packet["unknowns"]] == ["Acute Event Command"]
+    assert packet["blocks_production"] is True
+
+
+def test_approval_is_refused_while_impact_is_unknown__and_recorded(
+    drafted: TestClient, store: MemMetadataDb
+) -> None:
+    """Production approval is BLOCKED until someone resolves it — and the
+    attempt leaves a row, like every other refusal on this API."""
+    _draft_mapping(drafted, store)
+    refused = drafted.post(
+        "/api/objects/mapping/roster-mapping/approve",
+        json={"comment": "looks fine"},
+        headers=_as(STEWARD),
+    )
+    assert refused.status_code == 403
+    assert "needs manual check" in refused.json()["detail"]
+    assert "refused:approve" in [e.action for e in store.read_audit(object_id="roster-mapping")]
+    assert (
+        store.get(ObjectType.MAPPING, "roster-mapping").lifecycle_state
+        is LifecycleState.PENDING_REVIEW
+    )
+
+
+def test_an_approval_without_a_rationale_is_refused(
+    drafted: TestClient, store: MemMetadataDb
+) -> None:
+    """The rationale becomes part of the audit record — an approval nobody
+    explained is the rubber stamp this platform will not make available."""
+    _draft_mapping(drafted, store, business_consumers=[])
+    refused = drafted.post(
+        "/api/objects/mapping/roster-mapping/approve",
+        json={"comment": "  "},
+        headers=_as(STEWARD),
+    )
+    assert refused.status_code == 403
+    assert "rationale" in refused.json()["detail"]
+
+
+def test_resolving_the_unknown_lets_the_approval_through(
+    drafted: TestClient, store: MemMetadataDb
+) -> None:
+    """The resolution path: the author names a consumer the platform knows."""
+    _draft_mapping(drafted, store, business_consumers=[])
+    approved = drafted.post(
+        "/api/objects/mapping/roster-mapping/approve",
+        json={"comment": "dry run balanced; 8 quarantined by DQ-002 as expected"},
+        headers=_as(STEWARD),
+    )
+    assert approved.status_code == 200
+    assert approved.json()["approved_by_subject"] == STEWARD

@@ -45,18 +45,22 @@ from cinqflow.api.schemas import (
     FeedOut,
     GovernedOut,
     HomeSlotOut,
+    ImpactPacketOut,
     NavigationOut,
     PrincipalOut,
     RowsOut,
     ToolOut,
+    TouchedOut,
     TraceStepOut,
     TransitionIn,
+    UnknownImpactOut,
     UnknownOut,
     WorkQueueOut,
 )
 from cinqflow.core import lifecycle
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
 from cinqflow.core.citations import CitationId, CitationKind
+from cinqflow.core.impact import ImpactPacket, ImpactUnknownError, Touched, build_packet
 from cinqflow.core.intelligence import Budget
 from cinqflow.core.model.governed import (
     GovernedObject,
@@ -308,7 +312,7 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
         try:
             moved, entry = perform(current)
-        except LifecycleViolationError as refusal:
+        except (LifecycleViolationError, ImpactUnknownError) as refusal:
             # Refused AND logged — a guardrail nobody can see fire is a comment.
             audit.record(
                 object_type=object_type,
@@ -346,6 +350,43 @@ def create_app(
             lambda obj: lifecycle.submit(obj, actor=principal.as_actor(), comment=body.comment),
         )
 
+    def _packet_for(metadata: MetadataDbPort, target: GovernedObject) -> ImpactPacket:
+        """Impact from the WHOLE registry, every time. Computing it from a
+        cached subset is how an approver ends up signing yesterday's blast
+        radius."""
+        everything: list[GovernedObject] = []
+        for object_type in ObjectType:
+            for obj in metadata.list(object_type):
+                everything.extend(metadata.history(object_type, obj.object_id))
+        return build_packet(
+            target,
+            tuple(everything),
+            evidence=dict(target.body.get("evidence") or {}),
+        )
+
+    @app.get(
+        f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/packet",
+        response_model=ImpactPacketOut,
+        tags=["governance"],
+    )
+    def approval_packet(
+        object_type: ObjectType,
+        object_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> ImpactPacketOut:
+        """CF-V1-E11-02 — the change, its engineering impact, its business
+        impact and the evidence, on one screen. Computed from lineage: an
+        author who forgets to mention the four jobs their mapping feeds does
+        not thereby hide them."""
+        if object_type is ObjectType.FEED and not principal.scopes.covers_feed(object_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        try:
+            target = metadata.get(object_type, object_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        return _packet_out(_packet_for(metadata, target))
+
     @app.post(
         f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/approve",
         response_model=GovernedOut,
@@ -359,10 +400,11 @@ def create_app(
         audit: Audit,
         principal: Annotated[Principal, Depends(require(Action.APPROVE))],
     ) -> GovernedOut:
-        """THE negative-first route. The author approving their own change and
-        the wrong role approving this type are both refused by layers below
-        this one — and both leave a row. Tests made those attempts before this
-        handler existed."""
+        """THE negative-first route. Four things refuse here, all from layers
+        below: the wrong lane, a packet with unknown impact, a missing
+        rationale, and the author approving their own change. Every one of
+        them leaves a row, and each had a test that made the attempt before
+        this handler existed."""
         return _governance_act(
             "approve",
             object_type,
@@ -375,6 +417,7 @@ def create_app(
                 actor=principal.as_actor(),
                 roles=frozenset(principal.roles),
                 comment=body.comment,
+                packet=_packet_for(metadata, obj),
             ),
         )
 
@@ -824,6 +867,33 @@ def _feed_out(obj: GovernedObject) -> FeedOut:
         status=obj.lifecycle_state.status_word,
         citation_id=str(citation),
         route=citation.route,
+    )
+
+
+def _touched_out(touched: Touched) -> TouchedOut:
+    return TouchedOut(
+        object_type=touched.object_type.value,
+        object_id=touched.object_id,
+        version=touched.version,
+        lifecycle_state=touched.lifecycle_state.value,
+        via=touched.via,
+    )
+
+
+def _packet_out(packet: ImpactPacket) -> ImpactPacketOut:
+    return ImpactPacketOut(
+        object_type=packet.object_type.value,
+        object_id=packet.object_id,
+        version=packet.version,
+        lifecycle_state=packet.lifecycle_state.value,
+        author_subject=packet.author_subject,
+        diff=list(packet.diff),
+        engineering_impact=[_touched_out(t) for t in packet.engineering_impact],
+        business_impact=[_touched_out(t) for t in packet.business_impact],
+        unknowns=[UnknownImpactOut(name=u.name, reason=u.reason) for u in packet.unknowns],
+        evidence=packet.evidence,
+        blocks_production=packet.blocks_production,
+        is_empty=packet.is_empty,
     )
 
 

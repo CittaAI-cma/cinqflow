@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from cinqflow.core.impact import ImpactPacket, refuse_if_unknown
 from cinqflow.core.model.governed import (
     Actor,
     AuditEntry,
@@ -143,14 +144,36 @@ def approve(
     actor: Actor,
     roles: frozenset[Role],
     comment: str = "",
+    packet: ImpactPacket | None = None,
     now: datetime | None = None,
 ) -> tuple[GovernedObject, AuditEntry]:
-    """In Review -> Approved. Routing first, then the core's two universal
-    negatives (author never approves own; approver is a named human) — which
-    live in `transition_to` and are NOT re-checked here, because a second copy
-    of a guarantee is where the first one goes to drift."""
+    """In Review -> Approved. Four gates, and the ORDER is chosen for the
+    message the approver gets, since every one of them refuses without
+    persisting anything:
+
+    1. routing — is this the caller's lane at all;
+    2. the core's two universal negatives (author never approves own; approver
+       is a named human), which live in `transition_to` and are NOT re-checked
+       here, because a second copy of a guarantee is where the first drifts.
+       They come before the softer gates deliberately: "supply a rationale" is
+       the wrong thing to tell someone whose real problem is that they wrote
+       the change themselves;
+    3. the packet — CF-V1-E11-02: a hole in the impact blocks the signature;
+    4. the rationale — required, and it becomes part of the audit record.
+
+    `packet` is optional in the signature and supplied by every real caller —
+    a test may approve a bare object, but the API route always builds one.
+    """
     _routed(obj, roles, publishing=False)
     moved, entry = obj.transition_to(LifecycleState.APPROVED, actor=actor, now=now)
+    if packet is not None:
+        refuse_if_unknown(packet)
+    if not comment.strip():
+        raise LifecycleViolationError(
+            "an approval must state its rationale — it becomes part of the audit record, "
+            "and an approval nobody explained is the rubber stamp this platform refuses "
+            "to make available"
+        )
     return moved, _with_comment(entry, comment)
 
 

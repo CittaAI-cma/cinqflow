@@ -76,7 +76,9 @@ def test_the_author_of_a_change_never_approves_it() -> None:
     property of the core rather than of the permission table."""
     mapping = _object(author=BA)
     with pytest.raises(SelfApprovalError):
-        lifecycle.approve(mapping, actor=BA, roles=frozenset({Role.DATA_STEWARD}))
+        lifecycle.approve(
+            mapping, actor=BA, roles=frozenset({Role.DATA_STEWARD}), comment="mine, but fine"
+        )
 
 
 def test_nothing_reaches_published_without_a_named_approver() -> None:
@@ -98,7 +100,7 @@ def test_nothing_reaches_published_without_a_named_approver() -> None:
 def test_an_agent_can_never_be_the_approver() -> None:
     """ "Agents propose; humans dispose" — as a raise, at any confidence."""
     with pytest.raises(UnnamedApproverError):
-        lifecycle.approve(_object(), actor=AGENT, roles=STEWARD_ROLES)
+        lifecycle.approve(_object(), actor=AGENT, roles=STEWARD_ROLES, comment="high confidence")
 
 
 # ── the routing refusals ─────────────────────────────────────────────────────
@@ -108,12 +110,16 @@ def test_a_steward_may_not_approve_an_engineered_type() -> None:
     """The permission matrix says what a role may attempt; the router says
     where. A steward holding APPROVE still cannot approve a schema contract."""
     with pytest.raises(ApprovalRoutingError, match="platform_engineer"):
-        lifecycle.approve(_object(ObjectType.CONTRACT), actor=STEWARD, roles=STEWARD_ROLES)
+        lifecycle.approve(
+            _object(ObjectType.CONTRACT), actor=STEWARD, roles=STEWARD_ROLES, comment="ok"
+        )
 
 
 def test_a_platform_engineer_may_not_approve_a_stewarded_type() -> None:
     with pytest.raises(ApprovalRoutingError, match="data_steward"):
-        lifecycle.approve(_object(ObjectType.MAPPING), actor=PLATFORM, roles=PLATFORM_ROLES)
+        lifecycle.approve(
+            _object(ObjectType.MAPPING), actor=PLATFORM, roles=PLATFORM_ROLES, comment="ok"
+        )
 
 
 def test_every_object_type_is_routed() -> None:

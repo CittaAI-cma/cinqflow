@@ -158,6 +158,45 @@ class TransitionIn(BaseModel):
     comment: str = ""
 
 
+class TouchedOut(BaseModel):
+    """One object a change would reach, and the reference path that found it —
+    so an approver can check the reasoning rather than trust the count."""
+
+    object_type: str
+    object_id: str
+    version: int
+    lifecycle_state: str
+    via: str
+
+
+class UnknownImpactOut(BaseModel):
+    """A declared consumer lineage could not resolve. Shown explicitly, and it
+    blocks production approval — a blank where a downstream item should be is
+    how rubber-stamping hides."""
+
+    name: str
+    reason: str
+
+
+class ImpactPacketOut(BaseModel):
+    """CF-V1-E11-02 on one screen: the change, both sides of its impact, and
+    the evidence. Every field is COMPUTED — nothing here is the author's
+    recollection of what their change touches."""
+
+    object_type: str
+    object_id: str
+    version: int
+    lifecycle_state: str
+    author_subject: str
+    diff: list[str]
+    engineering_impact: list[TouchedOut]
+    business_impact: list[TouchedOut]
+    unknowns: list[UnknownImpactOut]
+    evidence: dict[str, Any] = {}
+    blocks_production: bool
+    is_empty: bool
+
+
 class WorkQueueOut(BaseModel):
     """Everything awaiting one person, across every object type — the proof
     there is ONE lifecycle. `awaiting_my_review` never contains the caller's

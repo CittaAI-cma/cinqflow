@@ -72,7 +72,9 @@ def test_a_mapping_travels_the_whole_lifecycle_on_postgres(store: PostgresMetada
         is LifecycleState.PENDING_REVIEW
     )
 
-    approved, entry = lifecycle.approve(submitted, actor=STEWARD, roles=STEWARD_ROLES)
+    approved, entry = lifecycle.approve(
+        submitted, actor=STEWARD, roles=STEWARD_ROLES, comment="precedents check out"
+    )
     store.record_transition(approved, entry)
     stored = store.get(ObjectType.MAPPING, "fidelis-roster-mapping")
     assert stored.approved_by is not None
@@ -140,7 +142,7 @@ def test_the_author_cannot_approve_their_own_mapping_on_the_real_plane(
     submitted, entry = lifecycle.submit(_mapping(), actor=BA)
     store.record_transition(submitted, entry)
     with pytest.raises(SelfApprovalError):
-        lifecycle.approve(submitted, actor=BA, roles=STEWARD_ROLES)
+        lifecycle.approve(submitted, actor=BA, roles=STEWARD_ROLES, comment="mine, but fine")
     assert (
         store.get(ObjectType.MAPPING, "fidelis-roster-mapping").lifecycle_state
         is LifecycleState.PENDING_REVIEW
