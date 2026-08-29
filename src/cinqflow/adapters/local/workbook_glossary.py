@@ -5,7 +5,7 @@
      tests measures nothing."
     — memory/05-ground-truth/03-golden-sets.md
 
-The source is `thiers/Uploads/2-Design/Data lake data model.xlsx`: 171 business
+The source is `clientdata/Uploads/2-Design/Data lake data model.xlsx`: 171 business
 glossary rows and 110 data-quality rules, written by the client's own analysts
 before this platform existed. They serve twice (ADR-0007) — as the exam for the
 PHI-detection and NL-rule gates, and as K2 grounding once E16-04 embeds them.

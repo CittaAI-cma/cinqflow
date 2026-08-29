@@ -5,7 +5,7 @@ platform growing per-screen dialects, which is the failure the seven status
 words exist to prevent:
 
     "Avoid 'Perfect' and avoid creating different terms on every screen."
-    — thiers/CINQFlow_Final_Navigation_and_Screen_Blueprint
+    — clientdata/CINQFlow_Final_Navigation_and_Screen_Blueprint
 
 These tests pin every closed set the architecture names. A set that grows
 without a plate changing is a drift bug, and it fails here first.

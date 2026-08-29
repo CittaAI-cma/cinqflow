@@ -26,6 +26,7 @@ from typing import Any, Protocol, runtime_checkable
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 from cinqflow.core.profiling import FileProfile
+from cinqflow.core.proposals import Proposal, ProposalState
 
 
 @dataclass(frozen=True)
@@ -181,4 +182,38 @@ class MetadataDbPort(Protocol):
         and a citation that cannot be resolved from what it carries is a dead
         end wearing an address.
         """
+        ...
+
+    # ── the HITL object · CF-V1-E5-02 and every later R2 agent ───────────────
+    #
+    # `proposals.proposal` is the ONLY table an agent writes to that a human
+    # reads (plus knowledge.*, ops.*, forecasts.* and audit.agent_action).
+    # These verbs are on this pin rather than a new one for the same reason
+    # the profile verbs are: it is the platform's own record of its own work,
+    # in the same Postgres as the registry the proposals become entries in.
+
+    def record_proposal(self, proposal: Proposal) -> Proposal:
+        """Insert or update one proposal.
+
+        An UPDATE is permitted here — unlike a governed object, which is
+        versioned rather than edited — because a proposal's whole life is a
+        state machine over one row: draft, reviewed, decided, applied. What may
+        NEVER change is `payload`, and the statement leaves that column out of
+        the UPDATE for the same reason `record_transition` leaves out `body`.
+        """
+        ...
+
+    def get_proposal(self, proposal_id: str) -> Proposal:
+        """Raises ObjectNotFoundError, for the reasons named on that class."""
+        ...
+
+    def list_proposals(
+        self,
+        *,
+        feed_id: str | None = None,
+        agent: str | None = None,
+        state: ProposalState | None = None,
+        limit: int = 50,
+    ) -> Sequence[Proposal]:
+        """Newest first. `state=PENDING_REVIEW` IS the agent review queue."""
         ...

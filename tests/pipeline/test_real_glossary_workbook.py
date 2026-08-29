@@ -1,6 +1,6 @@
 """The client's ACTUAL glossary and rule sheets, loaded and counted.
 
-    "All of these already exist in `thiers/`. That is the point — the exam was
+    "All of these already exist in `clientdata/`. That is the point — the exam was
      free."
     — memory/05-ground-truth/03-golden-sets.md
 
@@ -10,7 +10,7 @@ rather than letting a seeded glossary quietly shrink — which would weaken the
 100%-recall PHI gate by exactly the number of terms nobody noticed were gone.
 
 SKIPS rather than fails when the corpus is not on disk: the repository is
-useful without `thiers/`, and a suite that hard-failed there would train people
+useful without `clientdata/`, and a suite that hard-failed there would train people
 to ignore it.
 """
 
@@ -33,7 +33,7 @@ pytestmark = pytest.mark.pipeline
 
 WORKBOOK = (
     Path(__file__).resolve().parents[3]
-    / "thiers"
+    / "clientdata"
     / "Uploads"
     / "2-Design"
     / "Data lake data model.xlsx"

@@ -537,3 +537,126 @@ class ProfileIn(BaseModel):
     file_format: str = "csv"
     encoding: str = "utf-8"
     delimiter: str | None = None
+
+
+# ── CF-V1-E5-02 · AI schema inference ────────────────────────────────────────
+class ProposedColumnOut(BaseModel):
+    """One proposed contract column, and where each part of it came from.
+
+    `settled_by` is on the wire because a BA reviewing forty columns needs to
+    know which five a model touched — and because an eval number that did not
+    separate them would read as a claim about the model that it has not earned.
+    """
+
+    source_name: str
+    position: int
+    name: str | None
+    type: str | None
+    nullable: bool
+    is_phi: bool
+    glossary_id: str | None
+    date_format: str | None
+    precision: int | None
+    scale: int | None
+    confidence: float
+    settled_by: str
+    needs_input: bool
+    rationale: str
+    citations: list[str]
+
+
+class CorrectionOut(BaseModel):
+    field_path: str
+    proposed: Any = None
+    accepted: Any = None
+    is_addition: bool
+
+
+class ProposalOut(BaseModel):
+    """One agent proposal, as the review screen renders it.
+
+    Note what is NOT here: any way to make this executable. A proposal becomes
+    real only by a human approving it, and approval creates a DRAFT governed
+    object authored by that human — which then travels the ordinary lifecycle.
+    """
+
+    proposal_id: str
+    agent: str
+    capability: str
+    risk_class: str
+    state: str
+    feed_id: str | None
+    run_id: str
+    confidence: float | None
+    prompt_hash: str
+    created_by: str
+    created_ts: datetime
+    decided_by: str | None
+    decision_comment: str
+    decided_ts: datetime | None
+    applied_object_type: str | None
+    applied_object_id: str | None
+    applied_version: int | None
+    grounding_citations: list[str]
+    columns: list[ProposedColumnOut]
+    needs_input: list[str]
+    refusals: list[str]
+    corrections: list[CorrectionOut]
+    model_called: bool = True
+
+
+class InferSchemaIn(BaseModel):
+    """Ask the agent to read a profile and propose a contract.
+
+    Takes a profile id rather than a file: the facts are computed once, stored,
+    and cited — so two inference runs over one sample are grounded in provably
+    the same evidence.
+    """
+
+    profile_id: str
+
+
+class ColumnDecisionIn(BaseModel):
+    """What the human decided about one column. Absent fields keep the
+    proposal's value, so a reviewer changing one type does not have to restate
+    the other forty."""
+
+    source_name: str
+    name: str | None = None
+    type: str | None = None
+    nullable: bool | None = None
+    is_phi: bool | None = None
+    date_format: str | None = None
+
+
+class ApproveProposalIn(BaseModel):
+    """Approve, with any corrections. Both travel together deliberately: an
+    approval recorded now and its corrections recorded later is an eval set
+    that under-counts every crash in between."""
+
+    comment: str = ""
+    columns: list[ColumnDecisionIn] = Field(default_factory=list)
+    key_columns: list[str] = Field(default_factory=list)
+
+
+class RejectProposalIn(BaseModel):
+    """A reason is required — it is the most informative thing an agent's
+    output can produce."""
+
+    comment: str
+
+
+class AcceptanceOut(BaseModel):
+    """The eval arithmetic, with the model's share separated out."""
+
+    total: int
+    accepted: int
+    corrected: int
+    rate: float
+    deterministic_total: int
+    deterministic_corrected: int
+    inferred_total: int
+    inferred_corrected: int
+    inferred_rate: float
+    additions: int
+    report: str

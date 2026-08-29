@@ -26,6 +26,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from cinqflow.adapters.local.pg_control import Connection
+from cinqflow.core.citations import parse as parse_citation
 from cinqflow.core.model.agent_action import ActionOutcome, AgentAction
 from cinqflow.core.model.governed import (
     Actor,
@@ -34,8 +35,9 @@ from cinqflow.core.model.governed import (
     LifecycleState,
     ObjectType,
 )
-from cinqflow.core.model.vocabulary import ActorType
+from cinqflow.core.model.vocabulary import ActorType, RiskClass
 from cinqflow.core.profiling import FileProfile
+from cinqflow.core.proposals import Proposal, ProposalBody, ProposalState
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
     ConcurrentVersionError,
@@ -122,6 +124,73 @@ def _profile_record(row: tuple[Any, ...]) -> FileProfileRecord:
         profile=FileProfile.from_dict(facts if isinstance(facts, dict) else json.loads(facts)),
         profiled_by=profiled_by,
         profiled_ts=profiled_ts,
+    )
+
+
+# The proposal statements below spell their column list out LITERALLY in every
+# statement rather than sharing a constant. The duplication is deliberate: a
+# query assembled from a variable is a query the SQL-injection lint cannot
+# check and a reviewer has to run to read, and this file's whole safety
+# argument is that every statement is legible where it sits.
+
+
+def _proposal(row: tuple[Any, ...]) -> Proposal:
+    """Rebuild one proposal from its row.
+
+    `payload` and `corrections` both live in the JSONB `payload` column:
+    keeping the agent's output and the human's changes in one document is what
+    makes the eval set recoverable with a single read rather than a join
+    somebody has to remember to write.
+    """
+    (
+        proposal_id,
+        agent,
+        capability,
+        risk_class,
+        feed_id,
+        run_id,
+        state,
+        payload,
+        confidence,
+        grounding_citations,
+        prompt_hash,
+        created_by_subject,
+        created_by_type,
+        created_ts,
+        decided_by_subject,
+        decision_comment,
+        decided_ts,
+        applied_object_type,
+        applied_object_id,
+        applied_version,
+    ) = row
+    document = payload if isinstance(payload, dict) else json.loads(payload)
+    citations = grounding_citations or []
+    if isinstance(citations, str):
+        citations = json.loads(citations)
+    return Proposal(
+        proposal_id=str(proposal_id),
+        agent=agent,
+        capability=capability,
+        risk_class=RiskClass[risk_class],
+        run_id=run_id,
+        feed_id=feed_id,
+        state=ProposalState(state),
+        payload=document.get("payload", {}),
+        confidence=float(confidence) if confidence is not None else None,
+        grounding_citations=tuple(parse_citation(c) for c in citations),
+        prompt_hash=prompt_hash or "",
+        created_by=_actor(created_by_subject, created_by_type, None),
+        created_ts=created_ts,
+        decided_by=(
+            _actor(decided_by_subject, ActorType.HUMAN.value, None) if decided_by_subject else None
+        ),
+        decision_comment=decision_comment or "",
+        decided_ts=decided_ts,
+        applied_object_type=ObjectType(applied_object_type) if applied_object_type else None,
+        applied_object_id=applied_object_id,
+        applied_version=applied_version,
+        corrections=ProposalBody.corrections_from(document),
     )
 
 
@@ -457,3 +526,106 @@ class PostgresMetadataDb:
         statement += " ORDER BY profiled_ts DESC, profile_id DESC LIMIT %s"
         parameters += (limit,)
         return tuple(_profile_record(row) for row in self._db.fetch_all(statement, parameters))
+
+    # ── proposals.proposal · CF-V1-E5-02 and every later R2 agent ────────────
+    def record_proposal(self, proposal: Proposal) -> Proposal:
+        """Upsert the state machine's row, PAYLOAD PINNED TO THE FIRST WRITE.
+
+        The UPDATE clause concatenates only the `corrections` key back onto the
+        stored document, so `payload` — the agent's own output — survives every
+        later decision untouched. Same reason `record_transition` leaves `body`
+        out of its UPDATE: the correction set is measured against what the
+        agent said, and a decision able to rewrite that erases the evidence it
+        is evidence of.
+        """
+        document = ProposalBody.to_dict(proposal)
+        self._db.execute(
+            "INSERT INTO proposals.proposal ("
+            "proposal_id, agent, capability, risk_class, feed_id, run_id, state, "
+            "payload, confidence, grounding_citations, prompt_hash, "
+            "created_by_subject, created_by_type, created_ts, decided_by_subject, "
+            "decision_comment, decided_ts, applied_object_type, applied_object_id, "
+            "applied_version "
+            ") "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (proposal_id) DO UPDATE SET "
+            "  state = EXCLUDED.state,"
+            "  confidence = EXCLUDED.confidence,"
+            "  decided_by_subject = EXCLUDED.decided_by_subject,"
+            "  decision_comment = EXCLUDED.decision_comment,"
+            "  decided_ts = EXCLUDED.decided_ts,"
+            "  applied_object_type = EXCLUDED.applied_object_type,"
+            "  applied_object_id = EXCLUDED.applied_object_id,"
+            "  applied_version = EXCLUDED.applied_version,"
+            "  payload = proposals.proposal.payload || "
+            "            jsonb_build_object('corrections', EXCLUDED.payload -> 'corrections')",
+            (
+                proposal.proposal_id,
+                proposal.agent,
+                proposal.capability,
+                proposal.risk_class.name,
+                proposal.feed_id,
+                proposal.run_id,
+                proposal.state.value,
+                json.dumps(document, sort_keys=True, default=str),
+                proposal.confidence,
+                json.dumps([str(c) for c in proposal.grounding_citations]),
+                proposal.prompt_hash or None,
+                proposal.created_by.subject,
+                proposal.created_by.actor_type.value,
+                proposal.created_ts,
+                proposal.decided_by.subject if proposal.decided_by else None,
+                proposal.decision_comment or None,
+                proposal.decided_ts,
+                proposal.applied_object_type.value if proposal.applied_object_type else None,
+                proposal.applied_object_id,
+                proposal.applied_version,
+            ),
+        )
+        return self.get_proposal(proposal.proposal_id)
+
+    def get_proposal(self, proposal_id: str) -> Proposal:
+        row = self._db.fetch_one(
+            "SELECT "
+            "proposal_id, agent, capability, risk_class, feed_id, run_id, state, "
+            "payload, confidence, grounding_citations, prompt_hash, "
+            "created_by_subject, created_by_type, created_ts, decided_by_subject, "
+            "decision_comment, decided_ts, applied_object_type, applied_object_id, "
+            "applied_version "
+            "FROM proposals.proposal WHERE proposal_id = %s",
+            (proposal_id,),
+        )
+        if row is None:
+            raise ObjectNotFoundError(f"no proposal {proposal_id!r}")
+        return _proposal(row)
+
+    def list_proposals(
+        self,
+        *,
+        feed_id: str | None = None,
+        agent: str | None = None,
+        state: ProposalState | None = None,
+        limit: int = 50,
+    ) -> Sequence[Proposal]:
+        statement = (
+            "SELECT "
+            "proposal_id, agent, capability, risk_class, feed_id, run_id, state, "
+            "payload, confidence, grounding_citations, prompt_hash, "
+            "created_by_subject, created_by_type, created_ts, decided_by_subject, "
+            "decision_comment, decided_ts, applied_object_type, applied_object_id, "
+            "applied_version "
+            "FROM proposals.proposal WHERE 1=1"
+        )
+        parameters: tuple[Any, ...] = ()
+        if feed_id is not None:
+            statement += " AND feed_id = %s"
+            parameters += (feed_id,)
+        if agent is not None:
+            statement += " AND agent = %s"
+            parameters += (agent,)
+        if state is not None:
+            statement += " AND state = %s"
+            parameters += (state.value,)
+        statement += " ORDER BY created_ts DESC, proposal_id DESC LIMIT %s"
+        parameters += (limit,)
+        return tuple(_proposal(row) for row in self._db.fetch_all(statement, parameters))

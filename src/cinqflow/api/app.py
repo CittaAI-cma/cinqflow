@@ -32,7 +32,9 @@ from cinqflow.adapters.mock.control_tables import MemStoreControlTables
 from cinqflow.api.audit import AuditLog
 from cinqflow.api.deps import NOT_FOUND, CurrentPrincipal, Wiring, require
 from cinqflow.api.schemas import (
+    AcceptanceOut,
     AgentActionOut,
+    ApproveProposalIn,
     AskIn,
     AskOut,
     AuditOut,
@@ -41,6 +43,7 @@ from cinqflow.api.schemas import (
     ClaimOut,
     ColumnProfileOut,
     ContractOut,
+    CorrectionOut,
     DateFormatOut,
     DestinationOut,
     FeedIn,
@@ -52,12 +55,16 @@ from cinqflow.api.schemas import (
     GovernedOut,
     HomeSlotOut,
     ImpactPacketOut,
+    InferSchemaIn,
     KeyCandidateOut,
     KeySearchOut,
     NavigationOut,
     PrincipalOut,
     ProfileIn,
+    ProposalOut,
+    ProposedColumnOut,
     RefusalOut,
+    RejectProposalIn,
     RowsOut,
     ToolOut,
     TouchedOut,
@@ -68,7 +75,7 @@ from cinqflow.api.schemas import (
     UnknownOut,
     WorkQueueOut,
 )
-from cinqflow.core import lifecycle
+from cinqflow.core import lifecycle, proposals
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.impact import ImpactPacket, ImpactUnknownError, Touched, build_packet
@@ -81,6 +88,7 @@ from cinqflow.core.model.governed import (
 from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
 from cinqflow.core.persona import home_for
 from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
+from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry import feed as feed_registry
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
@@ -88,6 +96,7 @@ from cinqflow.core.registry.wave0 import wave_0_register
 from cinqflow.core.security import Action, may
 from cinqflow.core.tools import CATALOGUE, ToolError
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
+from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.tools import ToolContext, ToolResult, all_dq_rule_entries, invoke
 from cinqflow.ports.authn import AuthnPort, Principal
 from cinqflow.ports.control_tables import BatchControl, ControlTablesPort
@@ -97,9 +106,19 @@ from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
 
 API_PREFIX = "/api"
 
+#: CF-V1-E5-02's gate. Declared here because the acceptance route reports
+#: against it, and a threshold that lives only in a test is a threshold the
+#: people it is about never see.
+SCHEMA_ACCEPTANCE_GATE = 0.90
+
 #: Build an agent for ONE caller. Never a shared agent — a shared agent is a
 #: shared scope, and the tool context is where the caller's RBAC lives.
 AgentFactory = Callable[[Principal, "ControlTablesPort", MetadataDbPort], PipelineInsightAgent]
+
+#: Built per REQUEST rather than per app: the agent writes a proposal through
+#: whichever metadata pin the request is served by, which on the real plane is
+#: a per-request transaction.
+SchemaInferenceFactory = Callable[[MetadataDbPort], SchemaInferenceAgent]
 
 
 @unique
@@ -173,6 +192,7 @@ def create_app(
     control_tables: ControlTablesPort | None = None,
     storage: StoragePort | None = None,
     agent_factory: AgentFactory | None = None,
+    schema_inference_factory: SchemaInferenceFactory | None = None,
     budget: Budget | None = None,
 ) -> FastAPI:
     """Build the app from PINS.
@@ -197,6 +217,10 @@ def create_app(
     # answer "file not found" for every real sample.
     app.state.storage = storage
     app.state.agent_factory = agent_factory
+    # None leaves the inference route answering "not configured" rather than
+    # 500ing — the deterministic profile and the manual editor still work,
+    # which is exactly what a deployment with no model endpoint should offer.
+    app.state.schema_inference_factory = schema_inference_factory
     # The cap the observability screen reports against. A screen showing spend
     # with no cap beside it is a number, not a control.
     app.state.llm_budget = budget or Budget(
@@ -500,6 +524,231 @@ def create_app(
         if not found:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"no profile {profile_id!r}")
         return _profile_out(found[0], principal)
+
+    # ── AI schema inference · CF-V1-E5-02 ────────────────────────────────────
+    #
+    # R2 · config_proposal. These routes create and decide PROPOSALS. There is
+    # deliberately no route that turns a proposal into a published contract:
+    # approval creates a DRAFT authored by the approver, which then travels
+    # E11-01's lifecycle — so the approver of the proposal cannot approve the
+    # object, and the agent's output enters the world at the same door a
+    # hand-typed draft does.
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/infer-schema",
+        response_model=ProposalOut,
+        tags=["intelligence"],
+    )
+    def infer_schema(
+        feed_id: str,
+        body: InferSchemaIn,
+        request: Request,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        audit: Audit,
+    ) -> ProposalOut:
+        """Read a stored profile, propose a contract, leave one proposal row.
+
+        503 rather than a stub when no LLM pin is fitted — but note that a feed
+        whose columns the profiler and glossary both settled produces a full
+        proposal with NO model call at all, so this route is useful on a
+        deployment with no model endpoint whenever the payer names things
+        sensibly.
+        """
+        agent_factory = request.app.state.schema_inference_factory
+        if agent_factory is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no LLM pin is fitted on this deployment, so schema inference is not "
+                "available. The deterministic profile is still on the feed's profile page, "
+                "and the manual contract editor still works.",
+            )
+        try:
+            record = metadata.get_profile(body.profile_id, feed_id)
+        except ObjectNotFoundError:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"no profile {body.profile_id!r} for feed {feed_id!r} — profile the sample first",
+            ) from None
+
+        result = agent_factory(metadata).propose(
+            record.profile,
+            feed_id=feed_id,
+            glossary=_glossary_of(metadata),
+            caller=principal.as_actor(),
+        )
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=feed_id,
+            action="propose_schema",
+            actor=principal.as_actor(),
+            detail=(
+                f"{result.proposal.proposal_id} · {len(result.columns)} columns, "
+                f"{len(result.needs_input)} needing input, "
+                f"model_called={result.model_called}"
+            ),
+        )
+        return _proposal_out(result.proposal, model_called=result.model_called)
+
+    @app.get(f"{API_PREFIX}/proposals", response_model=list[ProposalOut], tags=["intelligence"])
+    def list_proposals(
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        feed_id: str | None = None,
+        agent: str | None = None,
+        state: str | None = None,
+        limit: int = 50,
+    ) -> list[ProposalOut]:
+        """The agent review queue. `state=pending_review` is the working view."""
+        return [
+            _proposal_out(p)
+            for p in metadata.list_proposals(
+                feed_id=feed_id,
+                agent=agent,
+                state=ProposalState(state) if state else None,
+                limit=limit,
+            )
+        ]
+
+    @app.get(
+        f"{API_PREFIX}/proposals/{{proposal_id}}",
+        response_model=ProposalOut,
+        tags=["intelligence"],
+    )
+    def get_proposal(
+        proposal_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> ProposalOut:
+        try:
+            return _proposal_out(metadata.get_proposal(proposal_id))
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no proposal {proposal_id!r}") from None
+
+    @app.post(
+        f"{API_PREFIX}/proposals/{{proposal_id}}/approve",
+        response_model=ProposalOut,
+        tags=["intelligence"],
+    )
+    def approve_proposal(
+        proposal_id: str,
+        body: ApproveProposalIn,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        audit: Audit,
+    ) -> ProposalOut:
+        """Accept the suggestion, with whatever the reviewer changed.
+
+        EDIT_FEED, not APPROVE. Accepting an agent's draft is authoring — the
+        reviewer becomes the contract's author and therefore cannot approve the
+        contract itself. Requiring the APPROVE permission here would hand the
+        same person both halves of the segregation the platform exists to keep.
+        """
+        try:
+            proposal = metadata.get_proposal(proposal_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no proposal {proposal_id!r}") from None
+
+        accepted = _apply_decisions(proposal.payload, body)
+        corrections = proposals.diff_fields(
+            proposal.payload,
+            accepted,
+            key="source_name",
+            fields=("name", "type", "nullable", "is_phi", "date_format"),
+        )
+        try:
+            decided = proposals.approve(
+                proposal,
+                approver=principal.as_actor(),
+                comment=body.comment,
+                corrections=corrections,
+            )
+            applied, draft = proposals.apply(
+                decided,
+                object_type=ObjectType.CONTRACT,
+                object_id=proposal.feed_id or "",
+                body=_contract_body(accepted, key_columns=tuple(body.key_columns)),
+                version=_next_contract_version(metadata, proposal.feed_id or ""),
+            )
+        except proposals.ProposalError as refused:
+            audit.record(
+                object_type=ObjectType.CONTRACT,
+                object_id=proposal.feed_id or proposal_id,
+                action="refused:approve_proposal",
+                actor=principal.as_actor(),
+                detail=str(refused),
+            )
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(refused)) from None
+
+        metadata.save(draft)
+        stored = metadata.record_proposal(applied)
+        audit.record(
+            object_type=ObjectType.CONTRACT,
+            object_id=draft.object_id,
+            version=draft.version,
+            action="applied_proposal",
+            actor=principal.as_actor(),
+            detail=f"{proposal_id} · {len(corrections)} correction(s)",
+        )
+        return _proposal_out(stored)
+
+    @app.post(
+        f"{API_PREFIX}/proposals/{{proposal_id}}/reject",
+        response_model=ProposalOut,
+        tags=["intelligence"],
+    )
+    def reject_proposal(
+        proposal_id: str,
+        body: RejectProposalIn,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        audit: Audit,
+    ) -> ProposalOut:
+        try:
+            proposal = metadata.get_proposal(proposal_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no proposal {proposal_id!r}") from None
+        try:
+            decided = proposals.reject(
+                proposal, approver=principal.as_actor(), comment=body.comment
+            )
+        except proposals.ProposalError as refused:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(refused)) from None
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=proposal.feed_id or proposal_id,
+            action="rejected_proposal",
+            actor=principal.as_actor(),
+            detail=body.comment,
+        )
+        return _proposal_out(metadata.record_proposal(decided))
+
+    @app.get(
+        f"{API_PREFIX}/proposals/{{proposal_id}}/acceptance",
+        response_model=AcceptanceOut,
+        tags=["intelligence"],
+    )
+    def proposal_acceptance(
+        proposal_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> AcceptanceOut:
+        """The eval arithmetic for one decided proposal.
+
+        Exposed rather than kept in the test suite because the acceptance rate
+        per agent per week is THE health metric — and a metric only CI can see
+        is a metric nobody acts on.
+        """
+        try:
+            proposal = metadata.get_proposal(proposal_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no proposal {proposal_id!r}") from None
+        deterministic = frozenset(
+            str(r.get("source_name"))
+            for r in proposal.payload.get("records", ())
+            if r.get("settled_by") == "computation"
+        )
+        return _acceptance_out(proposals.measure(proposal, deterministic_keys=deterministic))
 
     # ── governance · CF-V1-E11-01 — the one lifecycle, exposed ───────────────
     #
@@ -1261,6 +1510,146 @@ def _finding_out(finding: Finding) -> FindingOut:
         first_lines=list(finding.first_lines),
         columns=list(finding.columns),
         blocks_ingestion=finding.blocks_ingestion,
+    )
+
+
+def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalOut:
+    records = proposal.payload.get("records", ())
+    return ProposalOut(
+        proposal_id=proposal.proposal_id,
+        agent=proposal.agent,
+        capability=proposal.capability,
+        risk_class=proposal.risk_class.name,
+        state=proposal.state.value,
+        feed_id=proposal.feed_id,
+        run_id=proposal.run_id,
+        confidence=proposal.confidence,
+        prompt_hash=proposal.prompt_hash,
+        created_by=proposal.created_by.subject,
+        created_ts=proposal.created_ts,
+        decided_by=proposal.decided_by.subject if proposal.decided_by else None,
+        decision_comment=proposal.decision_comment,
+        decided_ts=proposal.decided_ts,
+        applied_object_type=(
+            proposal.applied_object_type.value if proposal.applied_object_type else None
+        ),
+        applied_object_id=proposal.applied_object_id,
+        applied_version=proposal.applied_version,
+        grounding_citations=[str(c) for c in proposal.grounding_citations],
+        columns=[ProposedColumnOut(**_column_fields(r)) for r in records],
+        needs_input=list(proposal.payload.get("needs_input", ())),
+        refusals=list(proposal.payload.get("refusals", ())),
+        corrections=[
+            CorrectionOut(
+                field_path=c.field_path,
+                proposed=c.proposed,
+                accepted=c.accepted,
+                is_addition=c.is_addition,
+            )
+            for c in proposal.corrections
+        ],
+        model_called=model_called,
+    )
+
+
+def _column_fields(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_name": str(record.get("source_name", "")),
+        "position": int(record.get("position", 0)),
+        "name": record.get("name"),
+        "type": record.get("type"),
+        "nullable": bool(record.get("nullable", True)),
+        "is_phi": bool(record.get("is_phi", False)),
+        "glossary_id": record.get("glossary_id"),
+        "date_format": record.get("date_format"),
+        "precision": record.get("precision"),
+        "scale": record.get("scale"),
+        "confidence": float(record.get("confidence", 0.0)),
+        "settled_by": str(record.get("settled_by", "inference")),
+        "needs_input": bool(record.get("needs_input", False)),
+        "rationale": str(record.get("rationale", "")),
+        "citations": list(record.get("citations", ())),
+    }
+
+
+def _apply_decisions(payload: dict[str, Any], body: ApproveProposalIn) -> dict[str, Any]:
+    """The reviewer's version of the records.
+
+    Absent fields keep the proposal's value, so changing one column's type does
+    not require restating the other forty — and a reviewer who changed nothing
+    produces zero corrections, which is exactly what the gate counts.
+    """
+    decided = {d.source_name: d for d in body.columns}
+    records: list[dict[str, Any]] = []
+    for record in payload.get("records", ()):
+        accepted = dict(record)
+        decision = decided.get(str(record.get("source_name")))
+        if decision is not None:
+            for attribute in ("name", "type", "nullable", "is_phi", "date_format"):
+                value = getattr(decision, attribute)
+                if value is not None:
+                    accepted[attribute] = value
+            # A column the human has now settled is no longer awaiting them.
+            if accepted.get("name") and accepted.get("type"):
+                accepted["needs_input"] = False
+        records.append(accepted)
+    return {**payload, "records": records}
+
+
+def _contract_body(accepted: dict[str, Any], *, key_columns: tuple[str, ...]) -> dict[str, Any]:
+    """The DRAFT contract's body — machine-enforceable, in `SchemaContract`'s shape.
+
+    Columns still marked `needs_input` are DROPPED rather than typed as string.
+    A contract must be enforceable, and a field nobody could type is not a
+    field the engine can validate — it belongs on the "still to decide" list,
+    which is where the wizard's readiness checklist will find it.
+    """
+    return {
+        "key_columns": list(key_columns),
+        "columns": [
+            {
+                "name": record.get("name"),
+                "type": record.get("type"),
+                # The key columns the approver declared are the ONLY NOT NULL
+                # ones. A sample cannot establish that constraint, and a
+                # guessed one quarantines real members — so it arrives with
+                # the human's key declaration and nowhere else.
+                "nullable": record.get("name") not in key_columns,
+                "source_name": record.get("source_name"),
+                "is_phi": bool(record.get("is_phi", False)),
+                "precision": record.get("precision"),
+                "scale": record.get("scale"),
+                "date_formats": [record["date_format"]] if record.get("date_format") else [],
+            }
+            for record in accepted.get("records", ())
+            if not record.get("needs_input") and record.get("name") and record.get("type")
+        ],
+        "undecided": [
+            record.get("source_name")
+            for record in accepted.get("records", ())
+            if record.get("needs_input") or not (record.get("name") and record.get("type"))
+        ],
+    }
+
+
+def _next_contract_version(metadata: MetadataDbPort, feed_id: str) -> int:
+    history = metadata.history(ObjectType.CONTRACT, feed_id)
+    return (max((o.version for o in history), default=0)) + 1
+
+
+def _acceptance_out(acceptance: proposals.Acceptance) -> AcceptanceOut:
+    return AcceptanceOut(
+        total=acceptance.total,
+        accepted=acceptance.accepted,
+        corrected=acceptance.corrected,
+        rate=acceptance.rate,
+        deterministic_total=acceptance.deterministic_total,
+        deterministic_corrected=acceptance.deterministic_corrected,
+        inferred_total=acceptance.inferred_total,
+        inferred_corrected=acceptance.inferred_corrected,
+        inferred_rate=acceptance.inferred_rate,
+        additions=acceptance.additions,
+        report=acceptance.report(SCHEMA_ACCEPTANCE_GATE),
     )
 
 

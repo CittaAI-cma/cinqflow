@@ -15,7 +15,7 @@ from typing import Any
 
 from cinqflow.adapters.mock.authn import StaticAuthn
 from cinqflow.api import create_app
-from cinqflow.intelligence.demo import BUDGET, agent_for, plane
+from cinqflow.intelligence.demo import BUDGET, agent_for, plane, schema_inference_for
 
 
 def build() -> Any:
@@ -25,6 +25,7 @@ def build() -> Any:
         metadata_db=store,
         control_tables=control,
         agent_factory=agent_for,
+        schema_inference_factory=schema_inference_for,
         budget=BUDGET,
     )
 

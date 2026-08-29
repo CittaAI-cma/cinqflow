@@ -94,7 +94,7 @@ decision is what should be revisited.
 ## Sources
 
 `memory/06-product/01-screens-and-ux.md` (both concepts, marked CANON) ·
-`ours/CINQFLOW_User_Stories_Final.docx` `CF-V0-E16-09`, `CF-V0-E16-10` ·
+`platformdata/CINQFLOW_User_Stories_Final.docx` `CF-V0-E16-09`, `CF-V0-E16-10` ·
 `docs/architecture/INVARIANTS.md` (intelligence, governance) ·
 [ADR-0017](../../../memory/02-decisions/ADR-0017-final-story-set-is-the-single-source.md) ·
 [ADR-0019](../../../memory/02-decisions/ADR-0019-wave-0-ships-a-control-plane-explainer.md)

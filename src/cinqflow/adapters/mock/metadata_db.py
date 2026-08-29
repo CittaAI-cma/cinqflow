@@ -8,6 +8,7 @@ from typing import Any
 
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
+from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
     ConcurrentVersionError,
@@ -30,6 +31,7 @@ class MemMetadataDb:
         self._audit: list[AuditEntry] = []
         self._agent_actions: list[AgentAction] = []
         self._profiles: dict[tuple[str, str], FileProfileRecord] = {}
+        self._proposals: dict[str, Proposal] = {}
 
     def save(self, obj: GovernedObject) -> GovernedObject:
         versions = self._objects.setdefault((obj.object_type, obj.object_id), [])
@@ -144,4 +146,42 @@ class MemMetadataDb:
             )
         ]
         found.sort(key=lambda r: (r.profiled_ts, r.profile_id), reverse=True)
+        return tuple(found[:limit])
+
+    # ── the HITL object · CF-V1-E5-02 ────────────────────────────────────────
+    def record_proposal(self, proposal: Proposal) -> Proposal:
+        """Insert or replace by id, with the PAYLOAD pinned to the first write.
+
+        The Postgres adapter leaves `payload` out of its UPDATE; keeping the
+        original here too means a test that accidentally rewrote a payload
+        fails at the mock rather than passing everywhere except production.
+        """
+        existing = self._proposals.get(proposal.proposal_id)
+        if existing is not None and proposal.payload != existing.payload:
+            proposal = replace(proposal, payload=existing.payload)
+        self._proposals[proposal.proposal_id] = proposal
+        return proposal
+
+    def get_proposal(self, proposal_id: str) -> Proposal:
+        found = self._proposals.get(proposal_id)
+        if found is None:
+            raise ObjectNotFoundError(f"no proposal {proposal_id!r}")
+        return found
+
+    def list_proposals(
+        self,
+        *,
+        feed_id: str | None = None,
+        agent: str | None = None,
+        state: ProposalState | None = None,
+        limit: int = 50,
+    ) -> Sequence[Proposal]:
+        found = [
+            p
+            for p in self._proposals.values()
+            if (feed_id is None or p.feed_id == feed_id)
+            and (agent is None or p.agent == agent)
+            and (state is None or p.state is state)
+        ]
+        found.sort(key=lambda p: (p.created_ts, p.proposal_id), reverse=True)
         return tuple(found[:limit])

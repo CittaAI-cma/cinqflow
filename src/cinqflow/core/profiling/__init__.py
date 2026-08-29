@@ -835,8 +835,19 @@ class FileProfile:
 # idea of a date is wider than the caster's tells the BA their file is fine and
 # the pipeline that it is not.
 
-_INT = re.compile(r"^[+-]?\d+$")
-_DECIMAL = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)$")
+#: A SIGNIFICANT LEADING ZERO MEANS IT IS NOT A NUMBER.
+#:
+#: `01` is a subscriber relationship code, `02134` is a Boston ZIP, `007` is a
+#: plan code — and every one of them becomes a different, wrong value the
+#: moment it is cast to an integer. This is one of the classic ways a
+#: healthcare load corrupts data silently: nothing errors, the rows all load,
+#: and a member's ZIP is now 2134.
+#:
+#: So the recognisers below refuse an integer part that is longer than one
+#: digit and starts with a zero. `0`, `0.50` and `-0.75` are still numbers;
+#: `01` and `02134` are codes, and the profiler says STRING.
+_INT = re.compile(r"^[+-]?(?:0|[1-9]\d*)$")
+_DECIMAL = re.compile(r"^[+-]?(?:(?:0|[1-9]\d*)(?:\.\d*)?|\.\d+)$")
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
 _INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1

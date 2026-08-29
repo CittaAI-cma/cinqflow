@@ -199,7 +199,7 @@ def seed_glossary(
     workbook: Annotated[
         Path,
         typer.Option("--workbook", help="The client's `Data lake data model.xlsx`."),
-    ] = Path("../thiers/Uploads/2-Design/Data lake data model.xlsx"),
+    ] = Path("../clientdata/Uploads/2-Design/Data lake data model.xlsx"),
     profile: ProfileOption = Path("profiles/local.yaml"),
     author: Annotated[
         str, typer.Option("--as", help="Who is loading them. Seeded terms arrive as DRAFTS.")

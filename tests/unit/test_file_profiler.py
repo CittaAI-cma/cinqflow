@@ -490,3 +490,36 @@ def test_the_profiler_reads_the_bytes_it_is_given_and_nothing_else() -> None:
     before = bytes(content)
     profile_bytes(bytes(content), file_format="csv")
     assert bytes(content) == before
+
+
+def test_a_leading_zero_means_the_value_is_a_code_not_a_number() -> None:
+    """`02134` is a Boston ZIP; as an integer it is 2134, and the member now
+    lives somewhere else.
+
+    This is one of the classic ways a healthcare load corrupts data in silence
+    — nothing errors, every row loads, and a code set stops matching. So the
+    profiler refuses to call these numeric, and the contract that follows types
+    them as strings.
+    """
+    profile = profile_bytes(
+        b"rel_code,zip,plan,amount,qty\n01,02134,007,0.50,7\n02,10001,012,12.50,8\n",
+        file_format="csv",
+    )
+    for coded in ("rel_code", "zip", "plan"):
+        column = profile.column(coded)
+        assert column is not None, coded
+        assert column.narrowest_type is TypeName.STRING, coded
+        assert TypeName.INT64 not in column.total_match_types, coded
+
+    # ...and ordinary numbers are untouched.
+    assert profile.column("amount").narrowest_type is TypeName.DECIMAL  # type: ignore[union-attr]
+    assert profile.column("qty").narrowest_type is TypeName.INT64  # type: ignore[union-attr]
+
+
+def test_a_bare_zero_and_a_leading_zero_decimal_are_still_numbers() -> None:
+    """The rule is about SIGNIFICANT leading zeros. `0` and `0.50` are numbers
+    written normally, and refusing them would make every money column a
+    string."""
+    profile = profile_bytes(b"n,m\n0,0.50\n5,-0.75\n", file_format="csv")
+    assert profile.column("n").narrowest_type is TypeName.INT64  # type: ignore[union-attr]
+    assert profile.column("m").narrowest_type is TypeName.DECIMAL  # type: ignore[union-attr]

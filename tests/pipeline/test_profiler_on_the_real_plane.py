@@ -396,13 +396,13 @@ def test_the_client_s_own_workbook_profiles_without_special_handling(
     written by the client's analysts, profiled as an ordinary spreadsheet.
 
     Skips when the corpus is absent, like every other test that reads it: the
-    repository is useful without `thiers/`.
+    repository is useful without `clientdata/`.
     """
     from pathlib import Path
 
     workbook = (
         Path(__file__).resolve().parents[3]
-        / "thiers"
+        / "clientdata"
         / "Uploads"
         / "2-Design"
         / "Data lake data model.xlsx"

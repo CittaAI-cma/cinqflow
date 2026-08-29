@@ -27,6 +27,7 @@ from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
 from cinqflow.core.agents.pipeline_insight.prompts import TEMPLATES
+from cinqflow.core.agents.schema_inference.prompts import TEMPLATES as SCHEMA_TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState
 from cinqflow.core.model.identity import Principal
@@ -36,6 +37,7 @@ from cinqflow.core.registry.contract import ContractColumn, DqRule, SchemaContra
 from cinqflow.core.registry.feed import FeedRecord
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
+from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.gateway import LlmGateway
 from cinqflow.intelligence.tools import ToolContext
 from cinqflow.ports.control_tables import (
@@ -138,7 +140,7 @@ def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
             )
         )
     )
-    for template in TEMPLATES:
+    for template in (*TEMPLATES, *SCHEMA_TEMPLATES):
         store.save(_published(template.as_governed(author=AUTHOR)))
 
     started = now - timedelta(hours=9)
@@ -241,6 +243,27 @@ def agent_for(
         ),
         tools=ToolContext(principal=principal, control=control, metadata=metadata),
         runtime=InProcAgentRuntime(),
+    )
+
+
+def schema_inference_for(metadata: MetadataDbPort) -> SchemaInferenceAgent:
+    """CF-V1-E5-02 on the dev server, with the same scripted stand-in.
+
+    Worth wiring even against a mock: the DETERMINISTIC half is real, so a
+    demo file whose columns the glossary names produces a genuine proposal
+    with no model involved at all — which is the story's own argument,
+    demonstrable without a credential.
+    """
+    return SchemaInferenceAgent(
+        llm=LlmGateway(
+            llm=ScriptedLlm(responder=scripted),
+            phi_scrub=PatternPhiScrub(),
+            metadata_db=metadata,
+            observability=NoopObservability(),
+            budget=BUDGET,
+            routing=Routing(small="mock-small", large="mock-large"),
+        ),
+        metadata=metadata,
     )
 
 
