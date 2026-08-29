@@ -53,7 +53,7 @@ def install(
     """Provision a complete plane from nothing. Idempotent."""
     loaded = profile_module.load(profile)
     console.print(
-        f"[bold]cinqflow install[/bold]  profile={loaded.path.name}  "
+        f"[bold]cinqflow install[/bold]  profile={loaded.name}  "
         f"rung={loaded.rung}  socket={loaded.socket}  mode={loaded.mode.value}"
     )
 
@@ -61,7 +61,7 @@ def install(
 
     renderer = PostgresDdlRenderer()
     manifest = InstallationManifest(
-        profile=str(loaded.path), rung=loaded.rung, socket=loaded.socket
+        profile=loaded.source, rung=loaded.rung, socket=loaded.socket
     )
 
     statements: list[str] = ["CREATE EXTENSION IF NOT EXISTS vector;"]
@@ -135,7 +135,7 @@ def doctor(profile: ProfileOption = Path("profiles/local.yaml")) -> None:
     from cinqflow.ports import PIN_GROUPS, PORTS
 
     loaded = profile_module.load(profile)
-    report = RichTable(title=f"{loaded.path.name} · rung {loaded.rung} · {loaded.mode.value}")
+    report = RichTable(title=f"{loaded.name} · rung {loaded.rung} · {loaded.mode.value}")
     report.add_column("group")
     report.add_column("pin")
     report.add_column("adapter")

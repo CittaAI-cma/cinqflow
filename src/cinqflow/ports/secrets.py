@@ -14,10 +14,17 @@ lines instead of a migration.
 
 from __future__ import annotations
 
-import re
 from typing import Protocol, runtime_checkable
 
-SECRET_REFERENCE = re.compile(r"^secret://(?P<name>[A-Za-z0-9._-]+)$")
+from cinqflow.core.model.secrets import SECRET_REFERENCE, is_reference, reference_name
+
+__all__ = [
+    "SECRET_REFERENCE",
+    "SecretNotFoundError",
+    "SecretsPort",
+    "is_reference",
+    "reference_name",
+]
 
 
 class SecretNotFoundError(KeyError):
@@ -27,19 +34,6 @@ class SecretNotFoundError(KeyError):
     an empty string — turns a misconfigured environment into a runtime mystery,
     and for a credential it turns it into a silent security change.
     """
-
-
-def is_reference(value: str) -> bool:
-    """True for `secret://name`. Naming a secret is not holding one, which is
-    why the core-purity lint exempts exactly this form."""
-    return bool(SECRET_REFERENCE.match(value.strip()))
-
-
-def reference_name(value: str) -> str:
-    match = SECRET_REFERENCE.match(value.strip())
-    if not match:
-        raise ValueError(f"not a secret reference: {value!r} (expected `secret://name`)")
-    return match["name"]
 
 
 @runtime_checkable

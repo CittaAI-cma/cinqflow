@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum, unique
 
-from cinqflow.ports.authn import Principal, Role
+from cinqflow.core.model.identity import Principal, Role
 
 
 @unique
@@ -89,6 +89,14 @@ class Decision:
 
     allowed: bool
     reason: str = ""
+    scope_miss: bool = False
+    """True when the caller has the permission but not the reach.
+
+    Carried on the decision rather than sniffed from the reason string, because
+    the API must answer a scope miss with a NOT-FOUND shape: a 403 saying
+    "out of scope" tells the caller the feed exists, which is the leak the
+    scope check was there to prevent.
+    """
 
     def __bool__(self) -> bool:
         return self.allowed
@@ -116,7 +124,7 @@ def may(principal: Principal, action: Action, *, feed_id: str | None = None) -> 
         # Deliberately the same shape as "not found". An out-of-scope feed must
         # never be distinguishable from a non-existent one — otherwise the
         # denial tells the caller the feed exists.
-        return Decision(False, "out of scope")
+        return Decision(False, "out of scope", scope_miss=True)
 
     return Decision(True)
 

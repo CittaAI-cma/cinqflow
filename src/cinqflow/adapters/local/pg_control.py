@@ -22,7 +22,7 @@ from typing import Any
 
 import psycopg
 
-from cinqflow.installer.profile import Profile
+from cinqflow.core.model.profile import Profile
 from cinqflow.ports.secrets import is_reference, reference_name
 
 
@@ -63,7 +63,7 @@ def resolve_dsn(profile: Profile) -> str:
     """
     dsn = profile.dsn
     if not dsn:
-        raise ValueError(f"{profile.path}: metadata_db has no dsn")
+        raise ValueError(f"{profile.source}: metadata_db has no dsn")
     if not is_reference(dsn):
         return dsn
     name = reference_name(dsn)

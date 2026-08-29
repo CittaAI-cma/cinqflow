@@ -83,7 +83,7 @@ def test_a_missing_required_column_blocks_the_batch() -> None:
     """The mapping cannot run without it, so the batch stops HERE rather than
     loading a roster with no member ids."""
     findings = compare_to_contract(("First_Name", "DOB", "EffDate"), CONTRACT)
-    (removed,) = [f for f in findings if f.kind is DriftKind.REMOVED]
+    (removed,) = (f for f in findings if f.kind is DriftKind.REMOVED)
     assert removed.column == "MemberID"
     assert removed.blocks_batch is True
     assert "not nullable" in removed.detail
@@ -93,7 +93,7 @@ def test_a_missing_optional_column_does_not_block() -> None:
     """Failing on this would make every payer's optional-field change an
     incident, and operations would learn to ignore the alert."""
     findings = compare_to_contract(("MemberID", "DOB", "EffDate"), CONTRACT)
-    (removed,) = [f for f in findings if f.kind is DriftKind.REMOVED]
+    (removed,) = (f for f in findings if f.kind is DriftKind.REMOVED)
     assert removed.column == "First_Name"
     assert removed.blocks_batch is False
 

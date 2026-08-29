@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from cinqflow.ports import port
 from cinqflow.ports.authn import AuthenticationError, Principal, Role, Scopes
 
@@ -32,6 +34,12 @@ class StaticAuthn:
 
     def discovery_url(self) -> str:
         return "static://dev-users"
+
+    def directory(self) -> Sequence[Principal]:
+        """The dev user table, including the person in no group — because the
+        Users & Roles screen has to be able to show them to the administrator
+        who is supposed to fix it."""
+        return tuple(sorted(self._users.values(), key=lambda p: p.subject))
 
 
 def _principal(subject: str, name: str, *roles: Role) -> Principal:
