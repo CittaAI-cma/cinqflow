@@ -278,6 +278,60 @@ class GovernedOut(BaseModel):
     body: dict[str, Any] = {}
 
 
+class CanonicalFieldOut(BaseModel):
+    """One field of the canonical model, with its definition inline. CF-V1-E6-01.
+
+    `definition_missing` is a first-class boolean rather than something a
+    client infers from an empty string: "we have no business definition for
+    this column" is a finding a steward acts on, and the wire should say it.
+    """
+
+    name: str
+    entity: str
+    domains: list[str]
+    definition: str
+    definition_missing: bool
+    glossary_id: str | None = None
+    term: str = ""
+    synonyms: list[str] = Field(default_factory=list)
+    is_phi: bool = False
+    type: str | None = None
+    nullable: bool | None = None
+    deployed: bool = False
+
+
+class CanonicalEntityOut(BaseModel):
+    """One entity, and whether it exists yet.
+
+    `deployed` distinguishes "this is in the database" from "the client has
+    designed this". Both belong in the browser; conflating them is how a
+    mapping gets written against a table nobody has created.
+    """
+
+    name: str
+    domains: list[str]
+    schema_name: str = ""
+    deployed: bool = False
+    comment: str = ""
+    field_count: int = 0
+    defined_count: int = 0
+    phi_count: int = 0
+    fields: list[CanonicalFieldOut] = Field(default_factory=list)
+
+
+class CanonicalModelOut(BaseModel):
+    """Domains → entities → fields, generated from the deployed spec and the
+    client's own glossary. There is no third list to drift from."""
+
+    domains: list[str]
+    entities: list[CanonicalEntityOut]
+    deployed_entities: int
+    designed_not_deployed: list[str]
+    defined_fields: int
+    total_fields: int
+    unclaimed_tables: list[str] = Field(default_factory=list)
+
+
 class PauseFeedIn(BaseModel):
     """Stop new work on a feed. CF-V1-E3-04.
 

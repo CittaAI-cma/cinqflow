@@ -41,6 +41,9 @@ from cinqflow.api.schemas import (
     AuditOut,
     BatchOut,
     BudgetOut,
+    CanonicalEntityOut,
+    CanonicalFieldOut,
+    CanonicalModelOut,
     ChecklistItemOut,
     ClaimOut,
     CloneFeedIn,
@@ -115,9 +118,9 @@ from cinqflow.core.persona import home_for
 from cinqflow.core.phi import Basis, ColumnClassification, PhiDowngradeRefusedError, reclassify
 from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
 from cinqflow.core.proposals import Proposal, ProposalState
+from cinqflow.core.registry import canonical, operations, suspension
 from cinqflow.core.registry import clone as registry_clone
 from cinqflow.core.registry import feed as feed_registry
-from cinqflow.core.registry import operations, suspension
 from cinqflow.core.registry import search as registry_search
 from cinqflow.core.registry import source as source_registry
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
@@ -861,6 +864,68 @@ def create_app(
             actor=principal.as_actor(),
         )
         return _source_out(saved, _feeds_of_source(metadata, source_id))
+
+    # ── the canonical model browser · CF-V1-E6-01 ────────────────────────────
+    #
+    # "You cannot map to a model you cannot see." Both halves are GENERATED —
+    # the deployed one from the DDL spec the conformance kit checks the
+    # database against, the designed one from the client's own glossary — so
+    # there is no third list to drift from.
+
+    @app.get(f"{API_PREFIX}/canonical", response_model=CanonicalModelOut, tags=["glossary"])
+    def canonical_model(
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        domain: str = "",
+    ) -> CanonicalModelOut:
+        """Domains, entities and their field counts. Fields on request."""
+        model = _canonical_of(metadata)
+        entities = model.in_domain(domain) if domain else model.entities
+        return CanonicalModelOut(
+            domains=list(model.domains),
+            entities=[_canonical_entity_out(e, with_fields=False) for e in entities],
+            deployed_entities=len(model.deployed),
+            designed_not_deployed=[e.name for e in model.gap],
+            defined_fields=model.coverage[0],
+            total_fields=model.coverage[1],
+            unclaimed_tables=list(model.unclaimed_tables),
+        )
+
+    @app.get(
+        f"{API_PREFIX}/canonical/search",
+        response_model=list[CanonicalFieldOut],
+        tags=["glossary"],
+    )
+    def canonical_search(
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        q: str = "",
+        limit: int = 50,
+    ) -> list[CanonicalFieldOut]:
+        """Business term OR column name. `date of birth` finds
+        `Member_Date_Of_Birth`, and so does `DOB` — the payer's spelling and
+        the canonical one are the same question asked by two people."""
+        return [_canonical_field_out(f) for f in _canonical_of(metadata).search(q)[:limit]]
+
+    @app.get(
+        f"{API_PREFIX}/canonical/{{entity}}",
+        response_model=CanonicalEntityOut,
+        tags=["glossary"],
+    )
+    def canonical_entity(
+        entity: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> CanonicalEntityOut:
+        found = _canonical_of(metadata).entity(entity)
+        if found is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"the canonical model has no entity {entity!r}. It is generated from the "
+                "deployed schemas and the business glossary — if this should exist, it "
+                "belongs in one of those.",
+            )
+        return _canonical_entity_out(found, with_fields=True)
 
     # ── the business glossary · CF-V1-E14-01 ─────────────────────────────────
 
@@ -2192,6 +2257,50 @@ def _packet_for(metadata: MetadataDbPort, target: GovernedObject) -> ImpactPacke
         target,
         tuple(everything),
         evidence=dict(target.body.get("evidence") or {}),
+    )
+
+
+def _canonical_of(metadata: MetadataDbPort) -> canonical.CanonicalModel:
+    """Built per request from the spec and the CURRENT glossary.
+
+    Not cached. The glossary is a governed object that a steward edits, and a
+    canonical browser serving yesterday's vocabulary is the stale data
+    dictionary this screen exists to replace.
+    """
+    return canonical.build(canonical.canonical_schemas(), _glossary_of(metadata))
+
+
+def _canonical_field_out(field: canonical.CanonicalField) -> CanonicalFieldOut:
+    return CanonicalFieldOut(
+        name=field.name,
+        entity=field.entity,
+        domains=list(field.domains),
+        definition=field.shown_definition,
+        definition_missing=not field.is_defined,
+        glossary_id=field.glossary_id,
+        term=field.term,
+        synonyms=list(field.synonyms),
+        is_phi=field.is_phi,
+        type=field.type.value if field.type else None,
+        nullable=field.nullable,
+        deployed=field.deployed,
+    )
+
+
+def _canonical_entity_out(
+    entity: canonical.CanonicalEntity, *, with_fields: bool
+) -> CanonicalEntityOut:
+    defined, total = entity.coverage
+    return CanonicalEntityOut(
+        name=entity.name,
+        domains=list(entity.domains),
+        schema_name=entity.schema,
+        deployed=entity.deployed,
+        comment=entity.comment,
+        field_count=total,
+        defined_count=defined,
+        phi_count=len(entity.phi_fields),
+        fields=[_canonical_field_out(f) for f in entity.fields] if with_fields else [],
     )
 
 

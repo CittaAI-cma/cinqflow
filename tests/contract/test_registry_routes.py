@@ -648,3 +648,128 @@ def test_the_history_of_a_feed_that_does_not_exist_is_a_not_found(
     client: TestClient,
 ) -> None:
     assert client.get("/api/objects/feed/nobody/history", headers=_as(BA)).status_code == 404
+
+
+# ── the canonical model browser · CF-V1-E6-01 ────────────────────────────────
+
+
+def _seed_glossary(store: MemMetadataDb) -> None:
+    """Two terms, saved as the governed objects they are.
+
+    Seeded through the store rather than a route because the glossary arrives
+    by `cinqflow seed-glossary` from the client's workbook — there is no
+    create-a-term endpoint, and inventing one for a test would be testing
+    something the platform does not have.
+    """
+    from datetime import UTC, datetime
+
+    from cinqflow.core.model.governed import Actor
+    from cinqflow.core.model.vocabulary import ActorType
+    from cinqflow.core.registry.glossary import GlossaryTerm
+
+    author = Actor(subject=BA, actor_type=ActorType.HUMAN, display_name="Meera Rao")
+    now = datetime(2026, 8, 30, tzinfo=UTC)
+    for term in (
+        GlossaryTerm(
+            glossary_id="BG-004",
+            term="Member Date of Birth",
+            definition="Date of birth of the member.",
+            mapped_domains=("Enrollment",),
+            mapped_tables=("Members",),
+            mapped_columns_original=("DOB",),
+            mapped_columns_corrected=("Date_Of_Birth",),
+            is_phi=True,
+        ),
+        GlossaryTerm(
+            glossary_id="BG-090",
+            term="Claim Paid Amount",
+            definition="What the plan paid on the claim.",
+            mapped_domains=("Claims",),
+            mapped_tables=("Claim_IPHeader",),
+            mapped_columns_corrected=("Paid_Amount",),
+        ),
+    ):
+        store.save(term.as_governed(author=author, now=now))
+
+
+def test_the_browser_shows_domains_entities_and_the_gap(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    _seed_glossary(store)
+    body = client.get("/api/canonical", headers=_as(BA)).json()
+
+    assert set(body["domains"]) >= {"Enrollment", "Claims"}
+    assert body["deployed_entities"] >= 1
+    assert "Claim_IPHeader" in body["designed_not_deployed"]
+    assert body["total_fields"] > body["defined_fields"], (
+        "some deployed columns have no business definition, and that must be visible"
+    )
+
+
+def test_the_browser_filters_by_domain(client: TestClient, store: MemMetadataDb) -> None:
+    _seed_glossary(store)
+    claims = client.get("/api/canonical?domain=Claims", headers=_as(BA)).json()
+    assert [e["name"] for e in claims["entities"]] == ["Claim_IPHeader"]
+
+
+def test_an_entity_lists_its_fields_with_definitions_inline(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    _seed_glossary(store)
+    body = client.get("/api/canonical/Members", headers=_as(BA)).json()
+
+    by_name = {f["name"]: f for f in body["fields"]}
+    assert by_name["Date_Of_Birth"]["definition"] == "Date of birth of the member."
+    assert by_name["Date_Of_Birth"]["definition_missing"] is False
+    assert by_name["Date_Of_Birth"]["is_phi"] is True
+    assert by_name["Date_Of_Birth"]["glossary_id"] == "BG-004"
+
+
+def test_definition_missing_is_a_first_class_answer(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    """Not a blank cell a client has to interpret. "We have no business
+    definition for this column" is a finding a steward acts on."""
+    _seed_glossary(store)
+    body = client.get("/api/canonical/Members", headers=_as(BA)).json()
+    orphan = next(f for f in body["fields"] if f["name"] == "record_hash")
+    assert orphan["definition_missing"] is True
+    assert orphan["definition"] == "definition missing"
+
+
+def test_a_designed_entity_says_it_is_not_deployed(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    _seed_glossary(store)
+    body = client.get("/api/canonical/Claim_IPHeader", headers=_as(BA)).json()
+    assert body["deployed"] is False
+    assert body["schema_name"] == ""
+    assert body["fields"][0]["type"] is None, "nothing is provisioned, so nothing has a type"
+
+
+def test_the_search_answers_both_halves_of_the_question(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    """A BA types the business term; an engineer types what is in the payer's
+    file header. Both must reach the canonical field."""
+    _seed_glossary(store)
+    by_term = client.get("/api/canonical/search?q=date of birth", headers=_as(BA)).json()
+    by_spelling = client.get("/api/canonical/search?q=DOB", headers=_as(BA)).json()
+
+    assert {f["name"] for f in by_term} == {"Date_Of_Birth"}
+    assert {f["name"] for f in by_spelling} == {"Date_Of_Birth"}
+
+
+def test_an_entity_that_is_neither_deployed_nor_declared_is_a_not_found(
+    client: TestClient,
+) -> None:
+    refused = client.get("/api/canonical/Nonexistent", headers=_as(BA))
+    assert refused.status_code == 404
+    assert "generated from the deployed schemas" in refused.json()["detail"]
+
+
+def test_a_read_only_user_may_browse_the_canonical_model(client: TestClient) -> None:
+    """Read-Only users get full visibility and no buttons that change
+    anything — and a model you cannot see is a model you cannot map to."""
+    assert client.get("/api/canonical", headers=_as(READ_ONLY)).status_code == 200
+    assert client.get("/api/canonical/search?q=member", headers=_as(READ_ONLY)).status_code == 200
