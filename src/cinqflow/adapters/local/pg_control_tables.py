@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Sequence
+from datetime import date, datetime
 from typing import Any
 
 from cinqflow.adapters.local.pg_control import Connection
@@ -24,12 +25,16 @@ from cinqflow.ports import port
 from cinqflow.ports.control_tables import (
     BatchControl,
     BatchNotFoundError,
+    ControlTableError,
     DropLedgerEntry,
     ErrorRecord,
+    FeedSlaConfig,
     InputFile,
     QuarantineSummary,
     Reconciliation,
     SchemaDrift,
+    SlaAlert,
+    SlaCycle,
     StageStatus,
 )
 
@@ -198,6 +203,122 @@ class PostgresControlTables:
             ),
         )
 
+    # ── the SLA clock — CF-V2-E12-01/05, the missing writer ──────────────────
+    def upsert_feed_sla_config(self, config: FeedSlaConfig) -> None:
+        self._db.execute(
+            "INSERT INTO control.feed_sla_config (feed_id, feed_version, domain, "
+            "source_system, file_format, landing_path, file_pattern, schedule_cron, "
+            "expected_file_count, min_size_bytes, max_size_bytes, grace_period_minutes, "
+            "created_ts) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (feed_id, feed_version) DO UPDATE SET "
+            "domain = EXCLUDED.domain, source_system = EXCLUDED.source_system, "
+            "file_format = EXCLUDED.file_format, landing_path = EXCLUDED.landing_path, "
+            "file_pattern = EXCLUDED.file_pattern, schedule_cron = EXCLUDED.schedule_cron, "
+            "expected_file_count = EXCLUDED.expected_file_count, "
+            "min_size_bytes = EXCLUDED.min_size_bytes, max_size_bytes = EXCLUDED.max_size_bytes, "
+            "grace_period_minutes = EXCLUDED.grace_period_minutes",
+            (
+                config.feed_id,
+                config.feed_version,
+                config.domain,
+                config.source_system,
+                config.file_format,
+                config.landing_path,
+                config.file_pattern,
+                config.schedule_cron,
+                config.expected_file_count,
+                config.min_size_bytes,
+                config.max_size_bytes,
+                config.grace_period_minutes,
+                config.created_ts,
+            ),
+        )
+
+    def upsert_sla_instance(self, cycle: SlaCycle) -> None:
+        # NEVER OVERWRITE actual_ts on conflict — arrival is the pipeline's
+        # fact, written through `record_sla_arrival`, never re-derived here.
+        # A worker replaying today's materialisation must not blank an
+        # arrival ten minutes old, which is exactly what `DO UPDATE SET
+        # actual_ts = EXCLUDED.actual_ts` would do on every re-run.
+        self._db.execute(
+            "INSERT INTO control.sla_instance (sla_instance_id, feed_id, batch_id, "
+            "cycle_date, expected_ts, actual_ts, sla_status) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (feed_id, cycle_date) DO UPDATE SET "
+            "expected_ts = EXCLUDED.expected_ts",
+            (
+                str(uuid.uuid4()),
+                cycle.feed_id,
+                cycle.batch_id,
+                cycle.cycle_date,
+                cycle.expected_ts,
+                cycle.actual_ts,
+                cycle.sla_status,
+            ),
+        )
+
+    def record_sla_arrival(
+        self,
+        *,
+        feed_id: str,
+        cycle_date: date,
+        actual_ts: datetime,
+        status: str,
+        batch_id: str | None = None,
+    ) -> None:
+        result = self._db.fetch_one(
+            "UPDATE control.sla_instance SET actual_ts = %s, batch_id = %s, sla_status = %s "
+            "WHERE feed_id = %s AND cycle_date = %s RETURNING sla_instance_id",
+            (actual_ts, batch_id, status, feed_id, cycle_date),
+        )
+        if result is None:
+            raise ControlTableError(
+                f"{feed_id}: no cycle materialised for {cycle_date} — the clock must run "
+                "before an arrival can be recorded against it"
+            )
+
+    def record_sla_alert(self, alert: SlaAlert) -> None:
+        # The table's foreign key is `sla_instance_id`; the caller thinks in
+        # (feed_id, cycle_date). Resolving it here means every caller asks the
+        # same question the same way, instead of each repeating a lookup that
+        # is easy to get subtly wrong.
+        instance = self._db.fetch_one(
+            "SELECT sla_instance_id FROM control.sla_instance WHERE feed_id = %s "
+            "AND cycle_date = %s",
+            (alert.feed_id, alert.cycle_date),
+        )
+        if instance is None:
+            raise ControlTableError(
+                f"{alert.feed_id}: no cycle materialised for {alert.cycle_date} — an alert "
+                "about a cycle that does not exist is a bug, not a row worth writing"
+            )
+        self._db.execute(
+            "INSERT INTO control.sla_alerts (alert_id, batch_id, sla_instance_id, severity, "
+            "summary, citations, dispatched_ts, acknowledged_by, acknowledged_ts, raised_ts) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                alert.alert_id,
+                alert.batch_id,
+                instance[0],
+                alert.severity,
+                alert.summary,
+                json.dumps(list(alert.citations)),
+                alert.dispatched_ts,
+                alert.acknowledged_by or None,
+                alert.acknowledged_ts,
+                alert.raised_ts,
+            ),
+        )
+
+    def acknowledge_alert(self, alert_id: str, *, by: str, at: datetime) -> None:
+        result = self._db.fetch_one(
+            "UPDATE control.sla_alerts SET acknowledged_by = %s, acknowledged_ts = %s "
+            "WHERE alert_id = %s RETURNING alert_id",
+            (by, at, alert_id),
+        )
+        if result is None:
+            raise ControlTableError(f"no such alert: {alert_id!r}")
+
     # ── reads ────────────────────────────────────────────────────────────────
     def get_batch(self, batch_id: str) -> BatchControl:
         row = self._db.fetch_one(
@@ -348,6 +469,61 @@ class PostgresControlTables:
         )
         return tuple(_input(row) for row in rows)
 
+    def feed_sla_configs(self, *, feed_ids: Sequence[str] = ()) -> Sequence[FeedSlaConfig]:
+        # The filter is always PRESENT in the SQL and always a placeholder —
+        # never a clause assembled from a string, which is how a query stops
+        # being reviewable as one literal. An empty `feed_ids` matches every
+        # row via `cardinality(...) = 0`, not via a fragment that toggles.
+        rows = self._db.fetch_all(
+            "SELECT feed_id, feed_version, domain, source_system, file_format, landing_path, "
+            "file_pattern, schedule_cron, expected_file_count, min_size_bytes, max_size_bytes, "
+            "grace_period_minutes, created_ts FROM control.feed_sla_config "
+            "WHERE cardinality(%s::text[]) = 0 OR feed_id = ANY(%s::text[]) "
+            "ORDER BY feed_id, feed_version",
+            (list(feed_ids), list(feed_ids)),
+        )
+        return tuple(_sla_config(row) for row in rows)
+
+    def sla_instances(
+        self, *, cycle_date: date, feed_ids: Sequence[str] = ()
+    ) -> Sequence[SlaCycle]:
+        rows = self._db.fetch_all(
+            "SELECT sla_instance_id, feed_id, batch_id, cycle_date, expected_ts, actual_ts, "
+            "sla_status FROM control.sla_instance "
+            "WHERE cycle_date = %s AND (cardinality(%s::text[]) = 0 OR feed_id = ANY(%s::text[])) "
+            "ORDER BY feed_id",
+            (cycle_date, list(feed_ids), list(feed_ids)),
+        )
+        return tuple(_sla_cycle(row) for row in rows)
+
+    def sla_history(self, feed_id: str, *, days: int = 90) -> Sequence[SlaCycle]:
+        rows = self._db.fetch_all(
+            "SELECT sla_instance_id, feed_id, batch_id, cycle_date, expected_ts, actual_ts, "
+            "sla_status FROM control.sla_instance WHERE feed_id = %s "
+            "ORDER BY cycle_date DESC LIMIT %s",
+            (feed_id, days),
+        )
+        return tuple(_sla_cycle(row) for row in rows)
+
+    def sla_alerts(
+        self, *, cycle_date: date | None = None, feed_ids: Sequence[str] = ()
+    ) -> Sequence[SlaAlert]:
+        # `sla_alerts` carries no `feed_id` or `cycle_date` of its own — it is
+        # reached through the cycle it was raised for, which is why this is a
+        # join rather than two denormalised columns that could disagree with
+        # the instance they describe.
+        rows = self._db.fetch_all(
+            "SELECT a.alert_id, i.feed_id, i.cycle_date, a.batch_id, a.severity, "
+            "a.summary, a.citations, a.dispatched_ts, a.acknowledged_by, a.acknowledged_ts, "
+            "a.raised_ts FROM control.sla_alerts a "
+            "JOIN control.sla_instance i ON i.sla_instance_id = a.sla_instance_id "
+            "WHERE (%s::date IS NULL OR i.cycle_date = %s) "
+            "AND (cardinality(%s::text[]) = 0 OR i.feed_id = ANY(%s::text[])) "
+            "ORDER BY a.raised_ts",
+            (cycle_date, cycle_date, list(feed_ids), list(feed_ids)),
+        )
+        return tuple(_sla_alert(row) for row in rows)
+
 
 def _batch(row: tuple[Any, ...]) -> BatchControl:
     return BatchControl(
@@ -388,4 +564,50 @@ def _error(row: tuple[Any, ...]) -> ErrorRecord:
         record_key=row[5],
         rule_id=row[6],
         occurred_ts=row[7],
+    )
+
+
+def _sla_config(row: tuple[Any, ...]) -> FeedSlaConfig:
+    return FeedSlaConfig(
+        feed_id=row[0],
+        feed_version=row[1],
+        domain=row[2],
+        source_system=row[3],
+        file_format=row[4],
+        landing_path=row[5],
+        file_pattern=row[6],
+        schedule_cron=row[7],
+        expected_file_count=row[8],
+        min_size_bytes=row[9],
+        max_size_bytes=row[10],
+        grace_period_minutes=row[11],
+        created_ts=row[12],
+    )
+
+
+def _sla_cycle(row: tuple[Any, ...]) -> SlaCycle:
+    return SlaCycle(
+        sla_instance_id=str(row[0]),
+        feed_id=row[1],
+        batch_id=row[2],
+        cycle_date=row[3],
+        expected_ts=row[4],
+        actual_ts=row[5],
+        sla_status=row[6],
+    )
+
+
+def _sla_alert(row: tuple[Any, ...]) -> SlaAlert:
+    return SlaAlert(
+        alert_id=str(row[0]),
+        feed_id=row[1],
+        cycle_date=row[2],
+        batch_id=row[3],
+        severity=row[4],
+        summary=row[5],
+        citations=tuple(row[6]) if row[6] else (),
+        dispatched_ts=row[7],
+        acknowledged_by=row[8] or "",
+        acknowledged_ts=row[9],
+        raised_ts=row[10],
     )

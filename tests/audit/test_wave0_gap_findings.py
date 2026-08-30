@@ -32,8 +32,6 @@ pytestmark = [pytest.mark.contract, pytest.mark.lane1]
 REPO = Path(__file__).parent.parent.parent
 UI_APP = REPO / "ui" / "app"
 
-wave0_gap = pytest.mark.xfail(strict=True, reason="confirmed Wave-0 gap — remove when fixed")
-
 
 # ── FIXED · the numeric-fidelity eval gate now sees a dropped zero ──────────
 #
@@ -221,15 +219,20 @@ def test_ddl_provisions_the_registry_and_governance_tables() -> None:
 
 # ── GAP 7 · declared control tables that no code reads or writes ─────────────
 #
-# The control plane is declared as 11 tables; several exist only in DDL.
-# Every drift finding — blocking or not — is now recorded to schema_drift_log
-# (workers/pipeline.py, ControlTablesPort.record_schema_drift). Still
-# unwritten: feed_sla_config, sla_instance, sla_alerts, and landing_event —
-# these need real SLA-window computation, not merely a write call.
-_WRITE_ORPHANS = ("sla_instance", "sla_alerts", "feed_sla_config")
+# The control plane is declared as 11 tables; several existed only in DDL.
+# Every drift finding — blocking or not — is recorded to schema_drift_log
+# (workers/pipeline.py, ControlTablesPort.record_schema_drift). `feed_sla_config`,
+# `sla_instance` and `sla_alerts` were the last three, and CF-V2-E12-01/05
+# (W2-14, `ports.control_tables.upsert_sla_instance` and friends, in both the
+# mock and pg-control adapters) is what closes this GAP — this test is now a
+# PERMANENT REGRESSION GUARD rather than a documented deficiency.
+#
+# Still declared and unwritten: `landing_ctl.landing_event`. Wave 2's clock
+# does not touch it; it is not this gap's concern.
+_CONTROL_TABLE_WRITERS_MUST_EXIST = ("sla_instance", "sla_alerts", "feed_sla_config")
 
 
-@pytest.mark.parametrize("table", [pytest.param(t, marks=wave0_gap) for t in _WRITE_ORPHANS])
+@pytest.mark.parametrize("table", _CONTROL_TABLE_WRITERS_MUST_EXIST)
 def test_every_declared_control_table_is_used_by_some_code(table: str) -> None:
     # The name may appear in declaration lists and tool descriptions; what
     # matters is the layer that executes SQL: adapters and workers.

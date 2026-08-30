@@ -4,17 +4,22 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import date, datetime
 
 from cinqflow.core.model.vocabulary import BatchState, ErrorCategory
 from cinqflow.ports import port
 from cinqflow.ports.control_tables import (
     BatchControl,
     BatchNotFoundError,
+    ControlTableError,
     ErrorRecord,
+    FeedSlaConfig,
     InputFile,
     QuarantineSummary,
     Reconciliation,
     SchemaDrift,
+    SlaAlert,
+    SlaCycle,
     StageStatus,
 )
 
@@ -40,6 +45,9 @@ class MemStoreControlTables:
         self._quarantine: dict[str, list[QuarantineSummary]] = {}
         self._recon: dict[str, list[Reconciliation]] = {}
         self._drift: dict[str, list[SchemaDrift]] = {}
+        self._sla_configs: dict[tuple[str, int], FeedSlaConfig] = {}
+        self._cycles: dict[tuple[str, date], SlaCycle] = {}
+        self._alerts: dict[str, SlaAlert] = {}
 
     # ── writes ───────────────────────────────────────────────────────────────
     def open_batch(self, batch: BatchControl) -> None:
@@ -79,6 +87,60 @@ class MemStoreControlTables:
 
     def record_schema_drift(self, drift: SchemaDrift) -> None:
         self._drift.setdefault(drift.batch_id, []).append(drift)
+
+    # ── the SLA clock ────────────────────────────────────────────────────────
+    def upsert_feed_sla_config(self, config: FeedSlaConfig) -> None:
+        self._sla_configs[(config.feed_id, config.feed_version)] = config
+
+    def upsert_sla_instance(self, cycle: SlaCycle) -> None:
+        key = (cycle.feed_id, cycle.cycle_date)
+        existing = self._cycles.get(key)
+        if existing is not None:
+            # NEVER OVERWRITE actual_ts — arrival is the pipeline's fact, not
+            # the clock's. A worker replaying today's materialisation must
+            # not blank an arrival ten minutes old.
+            cycle = replace(
+                cycle,
+                actual_ts=existing.actual_ts,
+                batch_id=existing.batch_id,
+                sla_status=existing.sla_status if existing.actual_ts else cycle.sla_status,
+                sla_instance_id=existing.sla_instance_id,
+            )
+        self._cycles[key] = cycle
+
+    def record_sla_arrival(
+        self,
+        *,
+        feed_id: str,
+        cycle_date: date,
+        actual_ts: datetime,
+        status: str,
+        batch_id: str | None = None,
+    ) -> None:
+        key = (feed_id, cycle_date)
+        existing = self._cycles.get(key)
+        if existing is None:
+            raise ControlTableError(
+                f"{feed_id}: no cycle materialised for {cycle_date} — the clock must run "
+                "before an arrival can be recorded against it"
+            )
+        self._cycles[key] = replace(
+            existing, actual_ts=actual_ts, batch_id=batch_id, sla_status=status
+        )
+
+    def record_sla_alert(self, alert: SlaAlert) -> None:
+        if (alert.feed_id, alert.cycle_date) not in self._cycles:
+            raise ControlTableError(
+                f"{alert.feed_id}: no cycle materialised for {alert.cycle_date} — an alert "
+                "about a cycle that does not exist is a bug, not a row worth writing"
+            )
+        self._alerts[alert.alert_id] = alert
+
+    def acknowledge_alert(self, alert_id: str, *, by: str, at: datetime) -> None:
+        existing = self._alerts.get(alert_id)
+        if existing is None:
+            raise ControlTableError(f"no such alert: {alert_id!r}")
+        self._alerts[alert_id] = replace(existing, acknowledged_by=by, acknowledged_ts=at)
 
     # ── reads ────────────────────────────────────────────────────────────────
     def get_batch(self, batch_id: str) -> BatchControl:
@@ -120,3 +182,31 @@ class MemStoreControlTables:
     def get_input_registry(self, feed_id: str, limit: int = 50) -> Sequence[InputFile]:
         found = [f for f in self._inputs.values() if f.feed_id == feed_id]
         return tuple(sorted(found, key=lambda f: f.arrived_ts, reverse=True)[:limit])
+
+    def feed_sla_configs(self, *, feed_ids: Sequence[str] = ()) -> Sequence[FeedSlaConfig]:
+        found = list(self._sla_configs.values())
+        if feed_ids:
+            found = [c for c in found if c.feed_id in feed_ids]
+        return tuple(sorted(found, key=lambda c: (c.feed_id, c.feed_version)))
+
+    def sla_instances(
+        self, *, cycle_date: date, feed_ids: Sequence[str] = ()
+    ) -> Sequence[SlaCycle]:
+        found = [c for c in self._cycles.values() if c.cycle_date == cycle_date]
+        if feed_ids:
+            found = [c for c in found if c.feed_id in feed_ids]
+        return tuple(sorted(found, key=lambda c: c.feed_id))
+
+    def sla_history(self, feed_id: str, *, days: int = 90) -> Sequence[SlaCycle]:
+        found = [c for c in self._cycles.values() if c.feed_id == feed_id]
+        return tuple(sorted(found, key=lambda c: c.cycle_date, reverse=True)[:days])
+
+    def sla_alerts(
+        self, *, cycle_date: date | None = None, feed_ids: Sequence[str] = ()
+    ) -> Sequence[SlaAlert]:
+        found = list(self._alerts.values())
+        if cycle_date is not None:
+            found = [a for a in found if a.cycle_date == cycle_date]
+        if feed_ids:
+            found = [a for a in found if a.feed_id in feed_ids]
+        return tuple(sorted(found, key=lambda a: a.raised_ts))

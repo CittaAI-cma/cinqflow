@@ -13,8 +13,9 @@ writes are specified first and the reads are specified in terms of them.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -24,13 +25,17 @@ from cinqflow.ports.control_tables import (
     CONTROL_TABLES,
     BatchControl,
     BatchNotFoundError,
+    ControlTableError,
     ControlTablesPort,
     DropLedgerEntry,
     ErrorRecord,
+    FeedSlaConfig,
     InputFile,
     QuarantineSummary,
     Reconciliation,
     SchemaDrift,
+    SlaAlert,
+    SlaCycle,
     StageStatus,
 )
 
@@ -325,3 +330,227 @@ def test_the_port_offers_no_generic_sql_escape_hatch(control: ControlTablesPort)
     core is the one place engine SQL is forbidden."""
     for escape in ("execute", "raw", "sql", "cursor", "connection"):
         assert not hasattr(control, escape), f"control_tables exposes {escape}"
+
+
+# ── the SLA clock's three tables ─────────────────────────────────────────────
+#
+# CF-V2-E12-01. Wave 0 declared eleven control tables and wrote eight; these
+# verbs write the other three. Every assertion below is a property `workers/sla`
+# depends on, and the whole point of putting them in the ONE contract suite is
+# that `mock` and `pg-control` must answer identically — a clock that is
+# idempotent in memory and not on Postgres is a clock nobody can trust.
+
+CYCLE_DAY = date(2026, 8, 1)
+
+
+def sla_config(**overrides: Any) -> FeedSlaConfig:
+    base: dict[str, Any] = {
+        "feed_id": FEED,
+        "feed_version": 1,
+        "domain": "enrollment",
+        "source_system": "fidelis",
+        "file_format": "xlsx",
+        "landing_path": "enrollment/fidelis_downstate/",
+        "file_pattern": r"_CINQDOWNSTATE_Member_Roster_.*\.xlsx",
+        "schedule_cron": "0 6 * * *",
+        "expected_file_count": 1,
+        "grace_period_minutes": 30,
+        "created_ts": NOW,
+    }
+    base.update(overrides)
+    return FeedSlaConfig(**base)
+
+
+def cycle(**overrides: Any) -> SlaCycle:
+    base: dict[str, Any] = {
+        "feed_id": FEED,
+        "cycle_date": CYCLE_DAY,
+        "expected_ts": datetime(2026, 8, 1, 6, tzinfo=UTC),
+        "sla_status": "Delayed",
+    }
+    base.update(overrides)
+    return SlaCycle(**base)
+
+
+def test_a_feeds_delivery_contract_round_trips(control: ControlTablesPort) -> None:
+    control.upsert_feed_sla_config(sla_config())
+    found = control.feed_sla_configs(feed_ids=[FEED])
+    assert [c.feed_id for c in found] == [FEED]
+    assert found[0].schedule_cron == "0 6 * * *"
+    assert found[0].grace_period_minutes == 30
+
+
+def test_re_publishing_a_feed_updates_its_contract_rather_than_duplicating_it(
+    control: ControlTablesPort,
+) -> None:
+    """Primary key is (feed_id, feed_version). A payer moving their delivery
+    from 06:00 to 05:00 amends the row; it does not grow a second one."""
+    control.upsert_feed_sla_config(sla_config())
+    control.upsert_feed_sla_config(sla_config(schedule_cron="0 5 * * *"))
+
+    found = control.feed_sla_configs(feed_ids=[FEED])
+    assert len(found) == 1
+    assert found[0].schedule_cron == "0 5 * * *"
+
+
+def test_a_new_version_of_a_feed_is_a_second_contract(control: ControlTablesPort) -> None:
+    """Version 2 does not overwrite version 1: a batch that ran under the old
+    schedule must still be judged against the window it was actually owed.
+
+    The new version names a DIFFERENT file pattern — "no two active feeds
+    claim the same landing path and pattern" is a documented CF-V0-E3-01
+    don't, enforced as a database constraint that does not exempt two
+    versions of the same feed. A version bump that changes nothing about
+    what arrives is not a version bump; it is the same contract republished.
+    """
+    control.upsert_feed_sla_config(sla_config())
+    control.upsert_feed_sla_config(
+        sla_config(feed_version=2, file_pattern=r"_CINQDOWNSTATE_Member_Roster_v2_.*\.xlsx")
+    )
+    assert len(control.feed_sla_configs(feed_ids=[FEED])) == 2
+
+
+def test_a_materialised_cycle_is_readable_for_its_day(control: ControlTablesPort) -> None:
+    control.upsert_sla_instance(cycle())
+    found = control.sla_instances(cycle_date=CYCLE_DAY)
+    assert [c.feed_id for c in found] == [FEED]
+    assert found[0].expected_ts == datetime(2026, 8, 1, 6, tzinfo=UTC)
+
+
+def test_materialising_the_same_cycle_twice_writes_one_row(control: ControlTablesPort) -> None:
+    """UNIQUE (feed_id, cycle_date) is the worker's idempotency guarantee: it
+    can run on any cadence, restart mid-run, or be replayed by a chaos test
+    without producing a second expectation."""
+    control.upsert_sla_instance(cycle())
+    control.upsert_sla_instance(cycle())
+    assert len(control.sla_instances(cycle_date=CYCLE_DAY)) == 1
+
+
+def test_the_clock_never_erases_an_arrival(control: ControlTablesPort) -> None:
+    """ARRIVAL IS RECORDED BY THE PIPELINE, NOT BY THE CLOCK.
+
+    The sharpest property in this suite. A worker re-materialising today's
+    cycles must not blank the `actual_ts` a file landing wrote ten minutes ago
+    — that would make a delivered feed look missing, on the busiest screen in
+    the product.
+    """
+    control.upsert_sla_instance(cycle())
+    landed = datetime(2026, 8, 1, 6, 12, tzinfo=UTC)
+    control.record_sla_arrival(
+        feed_id=FEED, cycle_date=CYCLE_DAY, actual_ts=landed, batch_id=BATCH, status="On-Time"
+    )
+
+    control.upsert_sla_instance(cycle())
+
+    found = control.sla_instances(cycle_date=CYCLE_DAY)
+    assert found[0].actual_ts == landed
+    assert found[0].batch_id == BATCH
+    assert found[0].sla_status == "On-Time"
+
+
+def test_cycles_can_be_narrowed_to_the_feeds_a_person_may_see(
+    control: ControlTablesPort,
+) -> None:
+    """Scope filtering happens in the QUERY. A board that fetched everything
+    and filtered afterwards would put out-of-scope feed names in a response
+    body before anybody checked."""
+    control.upsert_sla_instance(cycle())
+    control.upsert_sla_instance(cycle(feed_id="uhc-md-daily"))
+
+    assert len(control.sla_instances(cycle_date=CYCLE_DAY)) == 2
+    narrowed = control.sla_instances(cycle_date=CYCLE_DAY, feed_ids=[FEED])
+    assert [c.feed_id for c in narrowed] == [FEED]
+
+
+def test_a_feeds_arrival_history_is_newest_first_and_bounded(
+    control: ControlTablesPort,
+) -> None:
+    """The reliability trend reads this. Newest first because "how has it been
+    lately" is the question, and bounded because ninety days of a 15-minute ADT
+    feed is 8,640 rows nobody asked for."""
+    for offset in range(5):
+        control.upsert_sla_instance(
+            cycle(
+                cycle_date=CYCLE_DAY - timedelta(days=offset),
+                expected_ts=datetime(2026, 8, 1, 6, tzinfo=UTC) - timedelta(days=offset),
+            )
+        )
+    history = control.sla_history(FEED, days=3)
+    assert [c.cycle_date for c in history] == [
+        CYCLE_DAY,
+        CYCLE_DAY - timedelta(days=1),
+        CYCLE_DAY - timedelta(days=2),
+    ]
+
+
+def test_history_for_a_feed_that_never_ran_is_empty_not_an_error(
+    control: ControlTablesPort,
+) -> None:
+    assert control.sla_history("a-feed-nobody-onboarded", days=30) == ()
+
+
+def test_an_alert_is_recorded_with_its_citations(control: ControlTablesPort) -> None:
+    """An alert whose facts cannot be opened is the context-free alert
+    CF-V2-E12-05 exists to abolish."""
+    control.upsert_sla_instance(cycle())
+    control.record_sla_alert(
+        SlaAlert(
+            alert_id=str(uuid.uuid4()),
+            feed_id=FEED,
+            cycle_date=CYCLE_DAY,
+            severity="critical",
+            summary="fidelis-downstate-roster: expected 6:00 AM — not received",
+            citations=("feed:fidelis-downstate-roster",),
+            raised_ts=NOW,
+        )
+    )
+    alerts = control.sla_alerts(cycle_date=CYCLE_DAY)
+    assert len(alerts) == 1
+    assert alerts[0].citations == ("feed:fidelis-downstate-roster",)
+    assert alerts[0].acknowledged_by == ""
+
+
+def test_an_alert_about_a_cycle_that_was_never_materialised_is_refused(
+    control: ControlTablesPort,
+) -> None:
+    """An alert about a cycle that does not exist is a bug in the caller, not
+    a row worth writing."""
+    with pytest.raises(ControlTableError):
+        control.record_sla_alert(
+            SlaAlert(
+                alert_id="al-orphan",
+                feed_id="no-such-feed",
+                cycle_date=CYCLE_DAY,
+                severity="critical",
+                summary="not received",
+                raised_ts=NOW,
+            )
+        )
+
+
+def test_acknowledging_an_alert_names_the_person_and_the_moment(
+    control: ControlTablesPort,
+) -> None:
+    control.upsert_sla_instance(cycle())
+    alert_id = str(uuid.uuid4())
+    control.record_sla_alert(
+        SlaAlert(
+            alert_id=alert_id,
+            feed_id=FEED,
+            cycle_date=CYCLE_DAY,
+            severity="critical",
+            summary="not received",
+            raised_ts=NOW,
+        )
+    )
+    seen_at = NOW + timedelta(minutes=4)
+    control.acknowledge_alert(alert_id, by="sam@cinqcare.test", at=seen_at)
+
+    alerts = control.sla_alerts(cycle_date=CYCLE_DAY)
+    assert alerts[0].acknowledged_by == "sam@cinqcare.test"
+    assert alerts[0].acknowledged_ts == seen_at
+
+
+def test_acknowledging_an_alert_nobody_raised_is_refused(control: ControlTablesPort) -> None:
+    with pytest.raises(ControlTableError):
+        control.acknowledge_alert(str(uuid.uuid4()), by="sam@cinqcare.test", at=NOW)

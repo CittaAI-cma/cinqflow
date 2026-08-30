@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol, runtime_checkable
 
@@ -215,6 +215,82 @@ class DropLedgerEntry:
     financial_impact: Decimal | None = None
 
 
+@dataclass(frozen=True)
+class FeedSlaConfig:
+    """A row of `control.feed_sla_config` — a feed's delivery contract.
+
+    CF-V2-E12-01/05. PRIMARY KEY IS `(feed_id, feed_version)`, deliberately:
+    version 2 of a feed's schedule does not overwrite version 1, because a
+    batch that ran under the old cadence must still be judged against the
+    window it was actually owed. Re-publishing the SAME version amends the
+    row — a payer moving their delivery from 06:00 to 05:00 does not grow a
+    second contract for the version they are still on.
+    """
+
+    feed_id: str
+    feed_version: int
+    domain: str
+    source_system: str
+    file_format: str
+    landing_path: str
+    file_pattern: str
+    schedule_cron: str
+    created_ts: datetime
+    expected_file_count: int | None = None
+    min_size_bytes: int | None = None
+    max_size_bytes: int | None = None
+    grace_period_minutes: int | None = None
+
+
+@dataclass(frozen=True)
+class SlaCycle:
+    """A row of `control.sla_instance` — one delivery the platform is owed.
+
+    `sla_status` is the CHECK constraint's own three words — `On-Time`,
+    `Delayed`, `Breached` — computed by `core.sla` and passed in rather than
+    derived here, because the port stores facts and `core/` decides what they
+    mean.
+    """
+
+    feed_id: str
+    cycle_date: date
+    expected_ts: datetime
+    sla_status: str
+    batch_id: str | None = None
+    actual_ts: datetime | None = None
+    sla_instance_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SlaAlert:
+    """A row of `control.sla_alerts` — an alert, before it is acknowledged.
+
+    KEYED ON `(feed_id, cycle_date)`, matching `core.sla.SlaAlert` exactly —
+    not on `sla_instance_id`. The table's own foreign key IS the instance id,
+    but the instance a caller means is always "the cycle for this feed on
+    this day", and making callers resolve a UUID themselves before they can
+    raise an alert is a lookup this port should do once rather than a lookup
+    every caller repeats slightly differently. The adapter resolves the FK;
+    a cycle that has not been materialised yet is a bug, and both adapters
+    refuse it the same way `record_sla_arrival` does.
+
+    `citations` is not decoration: an alert whose facts cannot be opened is
+    the context-free alert CF-V2-E12-05 exists to abolish.
+    """
+
+    alert_id: str
+    feed_id: str
+    cycle_date: date
+    severity: str
+    summary: str
+    raised_ts: datetime
+    batch_id: str | None = None
+    citations: tuple[str, ...] = ()
+    dispatched_ts: datetime | None = None
+    acknowledged_by: str = ""
+    acknowledged_ts: datetime | None = None
+
+
 class ControlTableError(RuntimeError):
     """A control-plane write that could not be honoured."""
 
@@ -253,6 +329,49 @@ class ControlTablesPort(Protocol):
     def record_reconciliation(self, recon: Reconciliation) -> None: ...
     def record_schema_drift(self, drift: SchemaDrift) -> None: ...
 
+    # ── the SLA clock — CF-V2-E12-01/05, the missing writer ──────────────────
+    def upsert_feed_sla_config(self, config: FeedSlaConfig) -> None:
+        """Idempotent on `(feed_id, feed_version)` — publishing the same
+        version twice amends it rather than duplicating it."""
+        ...
+
+    def upsert_sla_instance(self, cycle: SlaCycle) -> None:
+        """Idempotent on `(feed_id, cycle_date)`. NEVER OVERWRITES `actual_ts`
+        — arrival is recorded by the pipeline, through `record_sla_arrival`,
+        not by the clock. That is the whole of the worker's idempotency
+        guarantee: it can run on any cadence, restart mid-run, or be replayed
+        by a chaos test, and the second pass is a no-op."""
+        ...
+
+    def record_sla_arrival(
+        self,
+        *,
+        feed_id: str,
+        cycle_date: date,
+        actual_ts: datetime,
+        status: str,
+        batch_id: str | None = None,
+    ) -> None:
+        """THE ONE PLACE `actual_ts` IS EVER WRITTEN. Called by the pipeline
+        when a file registers for a cycle the clock already materialised —
+        never by `upsert_sla_instance`, which is why the two are separate
+        verbs rather than one with an optional argument nobody would
+        remember to omit."""
+        ...
+
+    def record_sla_alert(self, alert: SlaAlert) -> None:
+        """Refuses (`ControlTableError`) when `(alert.feed_id,
+        alert.cycle_date)` names no materialised cycle — an alert about a
+        cycle that does not exist is a bug in the caller, not a row worth
+        writing."""
+        ...
+
+    def acknowledge_alert(self, alert_id: str, *, by: str, at: datetime) -> None:
+        """Refuses (`ControlTableError`) for an alert id that was never
+        raised — an acknowledgement of nothing is a lie in the audit trail,
+        not a no-op."""
+        ...
+
     # ── reads: what every screen and every certified query tool sees ─────────
     def get_batch(self, batch_id: str) -> BatchControl: ...
     def list_batches(self, feed_id: str, limit: int = 50) -> Sequence[BatchControl]: ...
@@ -278,3 +397,23 @@ class ControlTablesPort(Protocol):
         ...
 
     def get_input_registry(self, feed_id: str, limit: int = 50) -> Sequence[InputFile]: ...
+
+    # ── the SLA clock — reads ─────────────────────────────────────────────────
+    def feed_sla_configs(self, *, feed_ids: Sequence[str] = ()) -> Sequence[FeedSlaConfig]:
+        """Every version on file, unfiltered by default. `feed_ids` narrows to
+        what a scoped caller may see — filtering here, in the query, is what
+        keeps an out-of-scope feed's contract out of a response body before
+        anybody checks a permission."""
+        ...
+
+    def sla_instances(
+        self, *, cycle_date: date, feed_ids: Sequence[str] = ()
+    ) -> Sequence[SlaCycle]: ...
+    def sla_history(self, feed_id: str, *, days: int = 90) -> Sequence[SlaCycle]:
+        """Newest first, bounded. The reliability trend reads this, and ninety
+        days of a 15-minute ADT feed is 8,640 rows nobody asked for."""
+        ...
+
+    def sla_alerts(
+        self, *, cycle_date: date | None = None, feed_ids: Sequence[str] = ()
+    ) -> Sequence[SlaAlert]: ...
