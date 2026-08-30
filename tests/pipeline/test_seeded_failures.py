@@ -278,6 +278,75 @@ def test_a_failed_batch_leaves_an_incident_row_in_the_same_transaction(plane) ->
     assert len(metadata.list_incident_events(batch_id=outcome.batch_id)) == 1
 
 
+# ── CF-V2-E12-03 · requested -> engine -> verified, on the real plane ────────
+def test_a_completed_engine_run_verifies_the_requested_action(plane) -> None:
+    """The exit demo's step 6, as a test: REQUESTED -> (engine) -> VERIFIED.
+    The phase moves only because the run happened and the verifier re-read
+    the control tables — sweeping before the run moves nothing."""
+    from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+    from cinqflow.adapters.mock.storage import MemFsStorage
+    from cinqflow.core.model.governed import Actor
+    from cinqflow.core.model.vocabulary import ActorType
+    from cinqflow.core.operations.actions import (
+        ActionPhase,
+        ActionRequest,
+        OpsAction,
+        request_action,
+    )
+    from cinqflow.ports.metadata_db import ActionRecordRow
+    from cinqflow.workers.ops import OpsVerifier
+
+    storage = MemFsStorage()
+    control = PostgresControlTables(plane)
+    metadata = PostgresMetadataDb(plane)
+    runner = PipelineRunner(
+        storage=storage,
+        control=control,
+        compute=PostgresCompute(plane),
+        source_system="fidelis",
+    )
+    verifier = OpsVerifier(control=control, metadata=metadata)
+    operator = Actor(subject="dev-operations@cinqcare.test", actor_type=ActorType.HUMAN)
+
+    # The operator asks BEFORE the engine has run: honest answer is "not yet".
+    delivery = PayerSimulator().deliver(business_date=AUGUST)
+    storage.place(delivery.key, delivery.content)
+    requested = request_action(
+        ActionRequest(
+            action=OpsAction.REPROCESS_BATCH,
+            target="pending",  # filled below once the batch exists
+            actor=operator,
+            reason="Rebuild after the mapping fix.",
+        )
+    )
+    file = next(f for f in storage.list_files("enrollments/") if f.key == delivery.key)
+    outcome = runner.run(
+        file,
+        feed=FEED,
+        feed_version=1,
+        contract=CONTRACT,
+        rules=(DQ_002,),
+        plan=PLAN,
+        business_date=delivery.business_date.isoformat(),
+    )
+    assert outcome.state is BatchState.COMPLETED and outcome.batch_id is not None
+
+    from dataclasses import replace as dc_replace
+
+    metadata.record_action_event(
+        ActionRecordRow(
+            record_id="act-e2e",
+            feed_id=FEED.feed_id,
+            record=dc_replace(requested, target=outcome.batch_id),
+        )
+    )
+    (moved,) = verifier.sweep(batch_id=outcome.batch_id)
+    assert moved.record.phase is ActionPhase.VERIFIED
+    assert moved.record.observed_state is BatchState.COMPLETED
+    # And the poll surface reads the same ledger the sweep wrote.
+    assert metadata.get_action_record("act-e2e").record.is_complete is True
+
+
 # ── duplicate member within one file ─────────────────────────────────────────
 def test_one_duplicated_member_does_not_fail_the_roster(rig) -> None:
     """Found by this suite during T8. Before in-batch deduplication, a single

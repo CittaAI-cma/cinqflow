@@ -209,6 +209,30 @@ ALLOWED_STATES: dict[OpsAction, frozenset[BatchState]] = {
 }
 
 
+#: WHAT SUCCESS LOOKS LIKE, PER ACTION — the table `verify` reads its
+#: `expected` from, and the fourth an OpsAction pays into. Success differs by
+#: action and one hard-coded state would make some action lie: a retry
+#: expects the batch COMPLETED; an acknowledgement touches no batch, so ANY
+#: state counts (the act IS the row — it is complete when written down); a
+#: pause is about the FEED, so the batch's state is deliberately irrelevant
+#: here and the verifier reads the suspension ledger instead.
+EXPECTED_STATES: dict[OpsAction, frozenset[BatchState]] = {
+    OpsAction.ACKNOWLEDGE: frozenset(BatchState),
+    OpsAction.ASSIGN: frozenset(BatchState),
+    OpsAction.NOTE: frozenset(BatchState),
+    # Feed-level: verified against ops.feed_suspension, never batch state.
+    # `frozenset(BatchState)` says "whatever the batch is doing is fine";
+    # the REAL check lives in the verifier's suspension read.
+    OpsAction.PAUSE: frozenset(BatchState),
+    OpsAction.RESUME: frozenset(BatchState),
+    OpsAction.RETRY: frozenset({BatchState.COMPLETED}),
+    OpsAction.RESTART_FROM_STAGE: frozenset({BatchState.COMPLETED}),
+    OpsAction.REPROCESS_BATCH: frozenset({BatchState.COMPLETED}),
+    OpsAction.REPROCESS_FAILED_ONLY: frozenset({BatchState.COMPLETED}),
+    OpsAction.BACKDATE: frozenset({BatchState.COMPLETED}),
+}
+
+
 #: WHICH PERMISSION EACH ACTION COSTS — the third table an OpsAction pays into,
 #: after `ALLOWED_STATES` and the preview branch. Data, for the same reason:
 #: the surface (which buttons exist for THIS caller) and the server (whether to

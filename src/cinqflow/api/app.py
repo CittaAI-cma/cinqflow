@@ -239,6 +239,7 @@ from cinqflow.ports.metadata_db import (
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.delivery import DeliveryOutcome, DeliveryWorker
 from cinqflow.workers.incidents import priors_for, recovery_guides
+from cinqflow.workers.ops import OpsVerifier
 from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
 
 API_PREFIX = "/api"
@@ -3007,7 +3008,16 @@ def create_app(
             actor=principal.as_actor(),
             detail=record.explain(),
         )
-        return _action_record_out(record, record_id=row.record_id)
+        if not action.mutates_production:
+            # Bookkeeping's only effect IS the row, so verification has
+            # nothing to wait for — an acknowledgement left REQUESTED would
+            # teach operators that the surface never finishes anything.
+            # Pipeline actions stay strictly two-phase: the engine runs, and
+            # the verifier re-reads the control tables afterwards.
+            row = OpsVerifier(control=control, metadata=metadata).verify_record(
+                row.record_id, now=now
+            )
+        return _action_record_out(row.record, record_id=row.record_id)
 
     @app.get(
         f"{API_PREFIX}/operations/actions/{{record_id}}",

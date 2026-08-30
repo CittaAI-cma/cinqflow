@@ -420,12 +420,14 @@ def ingest(
     with commit(loaded) as connection:
         from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
         from cinqflow.workers.incidents import IncidentWorker
+        from cinqflow.workers.ops import OpsVerifier
 
         control_tables = PostgresControlTables(connection)
+        metadata_db = PostgresMetadataDb(connection)
         # CF-V2-E12-04: a failed batch opens its incident in the SAME
         # transaction that records the failure — the ledger row and the error
         # rows land or roll back together.
-        incidents = IncidentWorker(control=control_tables, metadata=PostgresMetadataDb(connection))
+        incidents = IncidentWorker(control=control_tables, metadata=metadata_db)
         runner = PipelineRunner(
             storage=storage,
             control=control_tables,
@@ -444,6 +446,13 @@ def ingest(
             resume_from=stage,
             batch_id=batch_id,
         )
+        # CF-V2-E12-03's second act: the engine just ran, so any REQUESTED
+        # action on this batch can now be verified against what the control
+        # tables actually say — in the same transaction as the run itself.
+        if outcome.batch_id is not None:
+            OpsVerifier(control=control_tables, metadata=metadata_db).sweep(
+                batch_id=outcome.batch_id
+            )
 
     console.print(f"[bold]cinqflow ingest[/bold]  {key}")
     console.print(f"landing: {outcome.decision.outcome.value}")

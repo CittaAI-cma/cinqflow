@@ -435,6 +435,17 @@ def test_every_action_has_a_row_in_the_allowed_state_matrix() -> None:
     assert set(ALLOWED_STATES) == set(OpsAction)
 
 
+def test_every_action_says_what_success_looks_like() -> None:
+    """CF-V2-E12-03 — the fourth table. `verify` reads its `expected` from
+    here, and an action missing a row is one the verifier cannot ever move
+    past REQUESTED."""
+    from cinqflow.core.operations.actions import EXPECTED_STATES
+
+    assert set(EXPECTED_STATES) == set(OpsAction)
+    for action, expected in EXPECTED_STATES.items():
+        assert expected, f"{action.value} has an empty success set — verify() refuses those"
+
+
 def test_every_action_names_the_permission_it_costs() -> None:
     """CF-V2-E12-03 — the third table an action pays into. An action missing
     from PERMISSION_FOR would be one the server cannot gate, which is how an

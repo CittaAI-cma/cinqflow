@@ -338,6 +338,32 @@ def test_a_requested_action_survives_the_response_and_can_be_polled(
     assert client.get("/api/operations/actions/never-was", headers=_as(OPERATOR)).status_code == 404
 
 
+def test_bookkeeping_verifies_on_the_wire_and_a_retry_does_not(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """CF-V2-E12-03 — the two-phase boundary, exact. An acknowledgement's only
+    effect IS the row, so it comes back complete; a retry touches the engine,
+    so it comes back REQUESTED and stays that way until a verifier re-reads
+    the control tables."""
+    _open_batch(control, state=BatchState.FAILED)
+    acked = client.post(
+        f"/api/operations/batches/{BATCH}/actions",
+        json={"action": "acknowledge"},
+        headers=_as(OPERATOR),
+    ).json()
+    assert acked["phase"] == "verified"
+    assert acked["is_complete"] is True
+    assert "written down" in acked["outcome"]
+
+    retried = client.post(
+        f"/api/operations/batches/{BATCH}/actions",
+        json={"action": "retry", "reason": "Transient cluster error."},
+        headers=_as(OPERATOR),
+    ).json()
+    assert retried["phase"] == "requested"
+    assert retried["is_complete"] is False
+
+
 def test_a_refusal_lands_in_the_action_history_too(
     client: TestClient, control: MemStoreControlTables
 ) -> None:
