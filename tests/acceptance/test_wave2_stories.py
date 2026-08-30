@@ -419,6 +419,71 @@ def test_an_incident_cannot_skip_straight_to_closed() -> None:
         novel_incident().close()
 
 
+# ── E16-07's pipeline half is blocked on E16-05, and stays blocked ──────────
+#
+#   The five tests above are the GATE — `Incident.embeddable` and
+#   `.narrative()` — and they pass today, unconditionally: an open incident
+#   does not embed, a resolved-but-unclosed one does not embed, a closed one
+#   does and carries its signature. `wave2.md` says exactly this: "already
+#   enforce the first test; the story is the pipeline around them."
+#
+#   That pipeline is `CF-V2-E16-05`: "Knowledge ingestion + embedding pipeline
+#   (Inbox -> Parse -> Chunk -> PHI-verify -> Steward approve -> Embed)",
+#   whose own dependency row in `wave2.md` reads "E16-07 entirely — it *is*
+#   the write side of this pipeline." E16-05 is a WAVE-1 story — not one of
+#   Wave 2's eleven (E12-01..05, E8-04, E5-04, E7-05, E13-03, E13-04, E16-07)
+#   — and it is not implemented anywhere in this codebase: no such module
+#   exists under `core/` or `workers/`, and `ports/vector.py` and
+#   `core/retrieval/__init__.py` both say so themselves ("Wave 0 provisions
+#   this and leaves it empty"; "chunking, the PHI-verify gate, steward
+#   approval, embedding ... are Wave 1"). Building E16-05 here would be
+#   Wave-1 work smuggled into a Wave-2 slab; it stays out until an ADR moves
+#   it into scope.
+#
+#   The two tests below are SKIPPED, not xfailed. `xfail(strict=True)` (see
+#   tests/audit/test_wave0_gap_findings.py's own docstring) asserts today's
+#   behaviour is a BUG that should already work — that is not this. Nothing
+#   here is broken; a story is waiting on a dependency outside this phase.
+#   Marking it xfail would misreport a scoping decision as a defect.
+
+
+@pytest.mark.skip(
+    reason="blocked on E16-05 (embedding pipeline: Inbox -> Parse -> Chunk -> "
+    "PHI-verify -> Steward approve -> Embed), a Wave-1 story not built anywhere "
+    "in this codebase and not one of Wave 2's 11 stories — see wave2.md's "
+    "CF-V2-E16-07 'Blocked by' row."
+)
+def test_the_embed_on_close_hook_calls_a_real_pipeline_when_an_incident_closes() -> None:
+    """The write side: a closed incident's `narrative()` reaches the vector
+    store through E16-05's `Inbox -> Parse -> Chunk -> PHI-verify -> Steward
+    approve -> Embed`, and an OPEN or resolved-but-unclosed incident is
+    refused by the pipeline the same way `.narrative()` already refuses it.
+
+    Cannot be written today: there is no Inbox, Parse, Chunk, PHI-verify,
+    Steward-approve or Embed stage for a closed incident's narrative to pass
+    through. `Incident.embeddable` and `.narrative()` are proven above; this
+    is the pipeline that would call them.
+    """
+
+
+@pytest.mark.skip(
+    reason="blocked on E16-05, same dependency as above — runbook-supersede "
+    "atomicity, stale-runbook propagation into citing alerts, and the "
+    "five-minute close-to-retrievable lag all live downstream of the Embed "
+    "stage that does not exist yet."
+)
+def test_runbook_publish_supersedes_atomically_and_a_retired_feeds_runbook_reads_stale() -> None:
+    """The other three acceptance criteria named in `wave2.md`'s E16-07 row:
+
+    a runbook publish supersedes the prior version ATOMICALLY; a retired
+    feed's linked runbook is flagged stale IN THE ALERT THAT CITES IT, not
+    just on the runbook's own page; and the median lag from an incident
+    closing to its narrative being retrievable is under five minutes. None
+    of the three has anywhere to attach without E16-05 landing chunks
+    somewhere queryable first.
+    """
+
+
 # ══ CF-V2-E12-03 · the governed action surface ══════════════════════════════
 
 
