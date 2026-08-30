@@ -26,17 +26,20 @@ from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
+from cinqflow.core.agents.fingerprint_match.graph import AGENT as FINGERPRINT_MATCH_AGENT_NAME
+from cinqflow.core.agents.fingerprint_match.prompts import TEMPLATES as FINGERPRINT_TEMPLATES
 from cinqflow.core.agents.phi_detection.prompts import TEMPLATES as PHI_TEMPLATES
 from cinqflow.core.agents.pipeline_insight.prompts import TEMPLATES
 from cinqflow.core.agents.schema_inference.prompts import TEMPLATES as SCHEMA_TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState
-from cinqflow.core.model.identity import Principal
+from cinqflow.core.model.identity import Principal, Scopes
 from cinqflow.core.model.vocabulary import ActorType, BatchState, ErrorCategory, FileState, Layer
 from cinqflow.core.registry import contract as contract_registry
 from cinqflow.core.registry.contract import ContractColumn, DqRule, SchemaContract, Severity
 from cinqflow.core.registry.feed import FeedRecord
 from cinqflow.core.schema_spec import TypeName
+from cinqflow.intelligence.agents.fingerprint_match import FingerprintMatchAgent
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.gateway import LlmGateway
@@ -61,6 +64,14 @@ BATCH_ID = "8842"
 AUTHOR = Actor(subject="arun@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Arun Menon")
 REVIEWER = Actor(
     subject="priya@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Priya Nair"
+)
+
+#: `fingerprint_match_agent_for`'s tool-scope principal. Not duplicated from
+#: `workers.incidents.PLATFORM_SUBJECT` — `intelligence` sits BELOW `workers`
+#: in the layers contract, so this module may not import that one. Same
+#: literal subject, kept in step by convention rather than by import.
+PLATFORM_PRINCIPAL = Principal(
+    subject="platform@cinqflow", display_name="platform", scopes=Scopes(feeds=frozenset({"*"}))
 )
 
 
@@ -141,7 +152,7 @@ def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
             )
         )
     )
-    for template in (*TEMPLATES, *SCHEMA_TEMPLATES, *PHI_TEMPLATES):
+    for template in (*TEMPLATES, *SCHEMA_TEMPLATES, *PHI_TEMPLATES, *FINGERPRINT_TEMPLATES):
         store.save(_published(template.as_governed(author=AUTHOR)))
 
     started = now - timedelta(hours=9)
@@ -247,6 +258,39 @@ def agent_for(
     )
 
 
+def fingerprint_match_agent_for(
+    control: ControlTablesPort, metadata: MetadataDbPort
+) -> FingerprintMatchAgent:
+    """W2-38's real wiring, built the SAME way `agent_for` builds
+    `PipelineInsightAgent` — one `LlmGateway` over the one scripted stand-in,
+    never a second parallel way of assembling one.
+
+    ONE AGENT, not one per caller, unlike `agent_for`: `IncidentWorker` calls
+    this off a batch failure, which has no principal in hand — a batch
+    failing is the platform's own signal, not a request a person made.
+    `PLATFORM_PRINCIPAL` is the scope this agent's certified tool calls run
+    under; `caller` on `propose()` itself is `workers.incidents`'s own
+    `PLATFORM_ACTOR`, named at the call site, not here.
+    """
+    return FingerprintMatchAgent(
+        llm=LlmGateway(
+            llm=ScriptedLlm(responder=scripted),
+            phi_scrub=PatternPhiScrub(),
+            metadata_db=metadata,
+            observability=NoopObservability(),
+            budget=BUDGET,
+            routing=Routing(small="mock-small", large="mock-large"),
+        ),
+        tools=ToolContext(
+            principal=PLATFORM_PRINCIPAL,
+            control=control,
+            metadata=metadata,
+            agent=FINGERPRINT_MATCH_AGENT_NAME,
+        ),
+        runtime=InProcAgentRuntime(),
+    )
+
+
 def schema_inference_for(metadata: MetadataDbPort) -> SchemaInferenceAgent:
     """CF-V1-E5-02 on the dev server, with the same scripted stand-in.
 
@@ -296,6 +340,34 @@ def scripted(prompt: str, task_class: Any) -> str:
         listed = available.group(1) if available else ""
         tools = [name.strip() for name in listed.split(",") if name.strip()]
         return json.dumps({"calls": [{"tool": tool} for tool in tools[:3]]})
+
+    # `fingerprint_match_agent_for`'s two prompts. Matched on each template's
+    # own IDENTITY text (`core.agents.fingerprint_match.prompts`), which
+    # `core.prompts.assemble` always includes verbatim — not on `task_class`,
+    # which this agent shares with no story-specific meaning of its own.
+    if "incident narrator" in prompt:
+        # Content-free, same discipline as the citations branch below: no
+        # near-miss sentence is invented, only ever quoted from `retrieve`'s
+        # own findings — and this mock quotes nothing, so it says nothing.
+        return json.dumps({"narrative": "", "citations": []})
+
+    if "recovery-guide drafting assistant" in prompt:
+        # `remedy` is left unset on purpose: a mock that guessed a real
+        # `OpsAction` would be indistinguishable from a model that meant it.
+        # `confidence` is a NUMBER, unlike the citations branch's `"medium"`
+        # below — `_build_guide` does `float(raw["confidence"])`, and this is
+        # the one branch that value must survive.
+        return json.dumps(
+            {
+                "title": "Novel failure — see the evidence bundle",
+                "steps": [
+                    "Read the incident's evidence bundle.",
+                    "This is Lane 1's scripted model — no diagnosis is offered.",
+                ],
+                "confidence": 0.0,
+                "rationale": "Shape-valid, content-free — the same honesty every mock owes here.",
+            }
+        )
 
     citations = sorted(
         set(

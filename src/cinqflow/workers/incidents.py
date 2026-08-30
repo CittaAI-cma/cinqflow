@@ -13,15 +13,18 @@ dispatch mechanism is not this worker's concern.
 
 THE MATCHED PATH NEVER TOUCHES A MODEL. Clustering, fingerprinting and guide
 matching are `core.operations.fingerprint` arithmetic — R0, no approval, the
-same answer on every machine. The R2 half (a drafted runbook for a NOVEL
-fingerprint) is a later slab; this worker only ever writes the ledger's
-opening event.
+same answer on every machine. The R2 half — W2-38, `FingerprintMatchAgent`
+drafting a runbook for a NOVEL fingerprint — is wired below, and only ever
+reached for a fingerprint the deterministic half could not match.
 
 IDEMPOTENT ON THE BATCH. A batch that fails, is retried and fails again is
 the SAME incident continuing, not a second one — the incident id derives from
 the batch and signature, and an opening event is written once. Re-running the
 hook on a batch whose incident already has events is a no-op, so the pipeline
-can call it on every failure without checking first.
+can call it on every failure without checking first. The agent call rides the
+SAME guard: it happens only inside the branch that writes the opening event,
+so a batch replayed through `on_batch_failed` earns at most one drafted
+proposal, the same way it earns at most one ledger row.
 """
 
 from __future__ import annotations
@@ -29,10 +32,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from cinqflow.core.model.governed import LifecycleState, ObjectType
+from cinqflow.core.model.governed import Actor, LifecycleState, ObjectType
+from cinqflow.core.model.vocabulary import ActorType
 from cinqflow.core.operations import fingerprint as fingerprinting
 from cinqflow.core.operations import monitor as ops_monitor
 from cinqflow.core.operations.actions import OpsAction
+from cinqflow.intelligence.agents.fingerprint_match import FingerprintMatchAgent
 from cinqflow.ports.control_tables import ControlTablesPort
 from cinqflow.ports.metadata_db import MetadataDbPort, ObjectNotFoundError
 
@@ -40,6 +45,15 @@ from cinqflow.ports.metadata_db import MetadataDbPort, ObjectNotFoundError
 #: recording the failing batch's engineer here would blame whoever built the
 #: feed for the payer's outage.
 PLATFORM_SUBJECT = "platform@cinqflow"
+
+#: The `caller` on every automatic trigger of the fingerprint-match agent.
+#: SYSTEM, not AI: this names WHO ASKED (the platform, off a batch failure,
+#: with no human principal in hand), never the agent's own authored work —
+#: that is `fingerprint_match.AGENT_ACTOR`, which names `created_by` on the
+#: proposal itself and is asserted `ActorType.AI` there, unconditionally.
+PLATFORM_ACTOR = Actor(
+    subject=PLATFORM_SUBJECT, actor_type=ActorType.SYSTEM, display_name="platform"
+)
 
 
 def recovery_guides(metadata: MetadataDbPort) -> tuple[fingerprinting.RecoveryGuide, ...]:
@@ -123,9 +137,20 @@ def priors_for(
 
 
 class IncidentWorker:
-    def __init__(self, *, control: ControlTablesPort, metadata: MetadataDbPort) -> None:
+    def __init__(
+        self,
+        *,
+        control: ControlTablesPort,
+        metadata: MetadataDbPort,
+        fingerprint_agent: FingerprintMatchAgent | None = None,
+    ) -> None:
         self._control = control
         self._metadata = metadata
+        #: Optional, and defaulted to `None`, so every existing caller and
+        #: every test that constructs this worker without one keeps working
+        #: unchanged. A worker with no agent still opens incidents exactly as
+        #: before — it simply never drafts.
+        self._fingerprint_agent = fingerprint_agent
 
     def on_batch_failed(
         self, batch_id: str, *, now: datetime | None = None
@@ -158,7 +183,20 @@ class IncidentWorker:
                     incident, actor_subject=PLATFORM_SUBJECT, occurred_ts=stamp
                 )
             )
+            # NOVEL only — a matched fingerprint never reaches the agent at
+            # all, the same discipline the module docstring states for the
+            # deterministic half. `propose` would refuse a KNOWN incident on
+            # its own (it is safe to call unconditionally), but checking here
+            # too means a matched failure never even attempts the call, and
+            # never spends a run_id or a budget cent doing so.
+            if (
+                self._fingerprint_agent is not None
+                and incident.kind is fingerprinting.IncidentKind.NOVEL
+            ):
+                self._fingerprint_agent.propose(incident, caller=PLATFORM_ACTOR, now=stamp)
             return incident
         # The same failure continuing: fold the decisions people already made
-        # onto the fresh evidence, and write nothing.
+        # onto the fresh evidence, and write nothing. This branch is also
+        # what keeps the agent call idempotent — it is reachable only from
+        # the branch above, which runs exactly once per batch.
         return fingerprinting.hydrate(incident, held)

@@ -17,7 +17,14 @@ from cinqflow.adapters.local.localfs_storage import LocalFsStorage
 from cinqflow.adapters.local.upload_connector import UploadConnector
 from cinqflow.adapters.mock.authn import StaticAuthn
 from cinqflow.api import create_app
-from cinqflow.intelligence.demo import BATCH_ID, BUDGET, agent_for, plane, schema_inference_for
+from cinqflow.intelligence.demo import (
+    BATCH_ID,
+    BUDGET,
+    agent_for,
+    fingerprint_match_agent_for,
+    plane,
+    schema_inference_for,
+)
 from cinqflow.workers.incidents import IncidentWorker
 
 #: The same root `profiles/local.yaml` names, so a file delivered through the
@@ -45,7 +52,18 @@ def build(landing_root: str | None = None) -> Any:
     # deliberately, never recomputed evidence — would show nothing for a batch
     # that visibly failed, and nothing on the incidents screen could ever be
     # acknowledged, resolved or closed.
-    IncidentWorker(control=control, metadata=store).on_batch_failed(BATCH_ID)
+    #
+    # W2-38: the same call now also carries a real `FingerprintMatchAgent` —
+    # built by `fingerprint_match_agent_for`, the demo plane's own scripted
+    # stand-in, exactly the way `agent_for` builds `PipelineInsightAgent`. The
+    # anchor batch's error matches no seeded guide, so this is the NOVEL path
+    # exercised for real on every dev-server start: one drafted proposal,
+    # from the scripted model, with no credential involved.
+    IncidentWorker(
+        control=control,
+        metadata=store,
+        fingerprint_agent=fingerprint_match_agent_for(control, store),
+    ).on_batch_failed(BATCH_ID)
     landing = LocalFsStorage(root=landing_root or DEFAULT_LANDING_ROOT)
     return create_app(
         authn=StaticAuthn(),

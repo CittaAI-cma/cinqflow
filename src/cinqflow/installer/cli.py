@@ -421,6 +421,7 @@ def ingest(
         from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
         from cinqflow.core.model.governed import ObjectType
         from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
+        from cinqflow.intelligence.demo import fingerprint_match_agent_for
         from cinqflow.workers.drift import propose_contract_update
         from cinqflow.workers.incidents import IncidentWorker
         from cinqflow.workers.ops import OpsVerifier
@@ -430,7 +431,18 @@ def ingest(
         # CF-V2-E12-04: a failed batch opens its incident in the SAME
         # transaction that records the failure — the ledger row and the error
         # rows land or roll back together.
-        incidents = IncidentWorker(control=control_tables, metadata=metadata_db)
+        #
+        # W2-38: `fingerprint_match_agent_for` wires a REAL FingerprintMatchAgent
+        # onto REAL Postgres control/metadata pins — same pattern `api/local.py`
+        # already uses for `agent_for`'s `PipelineInsightAgent` on this rung: a
+        # real data plane, the scripted intelligence plane, until wiring an
+        # actual LLM endpoint earns its own pass (see `api/local.py`'s own
+        # note). A NOVEL incident here drafts a real proposal in `metadata_db`.
+        incidents = IncidentWorker(
+            control=control_tables,
+            metadata=metadata_db,
+            fingerprint_agent=fingerprint_match_agent_for(control_tables, metadata_db),
+        )
         runner = PipelineRunner(
             storage=storage,
             control=control_tables,
