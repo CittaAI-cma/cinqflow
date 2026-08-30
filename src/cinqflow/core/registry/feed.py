@@ -73,6 +73,15 @@ class FeedRecord:
     min_size_bytes: int | None = None
     max_size_bytes: int | None = None
     allows_leading_underscore: bool = True
+    #: CF-V1-E8-03 — the feeds this one waits for. APPROVED CONFIGURATION, so
+    #: it travels the lifecycle, appears in the approval packet's diff, and
+    #: cannot be changed without somebody signing for it. `core.scheduling`
+    #: reads it off the governed body and answers "may this run start?"; the
+    #: names are not resolved here because a feed may legitimately be
+    #: registered before the one it depends on, and a dependency that is named
+    #: but not yet published is reported as "upstream not arrived" rather than
+    #: silently dropped.
+    depends_on: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("feed_id", "domain", "source_system", "file_format", "landing_path"):
@@ -93,6 +102,17 @@ class FeedRecord:
                 self.file_pattern,
                 self.sample_filename,
                 explain_mismatch(self.file_pattern, self.sample_filename),
+            )
+
+        if self.feed_id in self.depends_on:
+            raise FeedValidationError(
+                f"{self.feed_id} declares itself as its own upstream. It would wait "
+                "forever for a batch it is not allowed to start."
+            )
+        if len(set(self.depends_on)) != len(self.depends_on):
+            raise FeedValidationError(
+                f"{self.feed_id} names the same upstream twice. A duplicate edge changes "
+                "nothing about when the feed runs and doubles every hold it reports."
             )
 
         if (

@@ -30,6 +30,7 @@ from cinqflow.core.recon import error_id_hash
 from cinqflow.core.registry.contract import DqRule, SchemaContract, compare_to_contract
 from cinqflow.core.registry.feed import FeedRecord
 from cinqflow.core.registry.suspension import Suspension
+from cinqflow.core.scheduling import ReleaseDecision, guard_start
 from cinqflow.ports.control_tables import (
     BatchControl,
     ControlTablesPort,
@@ -101,6 +102,7 @@ class PipelineRunner:
         resume_from: Layer | None = None,
         batch_id: str | None = None,
         suspension: Suspension | None = None,
+        release: ReleaseDecision | None = None,
     ) -> RunOutcome:
         """Landing -> Bronze -> Silver Raw. Every outcome registers a file.
 
@@ -119,6 +121,18 @@ class PipelineRunner:
             and not suspension.may_start_new_work(datetime.now(UTC))
         ):
             raise FeedPausedError(suspension.explain(datetime.now(UTC)))
+
+        # CF-V1-E8-03, at the SAME seam and for the same reason. A dependency
+        # gate enforced in the scheduler alone would be advisory: this method
+        # is also reached by a manual trigger and by a replay, and "bad
+        # upstream data never cascades" has to hold on every route into a
+        # batch, not on the tidy one.
+        #
+        # Only on a NEW batch. A resume continues one that is already open, and
+        # holding it because its upstream broke afterwards would strand a batch
+        # halfway through the spine with no way to finish or fail it.
+        if resume_from is None and release is not None:
+            guard_start(release)
 
         registered = self._storage.fingerprint(file.key) if file.fingerprint is None else file
         fingerprint = file.fingerprint or self._storage.fingerprint(file.key)
