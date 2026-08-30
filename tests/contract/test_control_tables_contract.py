@@ -417,6 +417,27 @@ def test_a_materialised_cycle_is_readable_for_its_day(control: ControlTablesPort
     assert found[0].expected_ts == datetime(2026, 8, 1, 6, tzinfo=UTC)
 
 
+def test_a_read_back_timestamp_is_the_same_instant_and_the_same_wall_clock_hour(
+    control: ControlTablesPort,
+) -> None:
+    """THE REGRESSION FOR A REAL DEFECT, found while wiring the SLA worker
+    against a live plane whose session timezone was `Asia/Kolkata`.
+
+    Comparing aware datetimes as absolute instants — `==`, `<`, `>` — is
+    correct regardless of which timezone a value happens to be rendered in.
+    But `strftime` is not a comparison: `cycle.why(now)` renders "expected
+    6:00 AM — not received", and a session that hands back `11:30` for a row
+    stored as `06:00 UTC` makes every sentence an operator reads wrong, even
+    though every STATUS the platform computed from it was right the whole
+    time. `hour == 6` is the assertion that catches what `==` against another
+    UTC-aware datetime cannot: the actual number a person would read.
+    """
+    control.upsert_sla_instance(cycle(expected_ts=datetime(2026, 8, 1, 6, tzinfo=UTC)))
+    (found,) = control.sla_instances(cycle_date=CYCLE_DAY)
+    assert found.expected_ts.utcoffset() == timedelta(0)
+    assert found.expected_ts.hour == 6
+
+
 def test_materialising_the_same_cycle_twice_writes_one_row(control: ControlTablesPort) -> None:
     """UNIQUE (feed_id, cycle_date) is the worker's idempotency guarantee: it
     can run on any cadence, restart mid-run, or be replayed by a chaos test

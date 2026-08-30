@@ -77,9 +77,28 @@ def resolve_dsn(profile: Profile) -> str:
     return resolved
 
 
+def _connect(profile: Profile, *, autocommit: bool) -> psycopg.Connection[Any]:
+    """The ONE place a raw connection is opened, so the session's timezone is
+    pinned exactly once rather than at three call sites that could drift.
+
+    STORAGE IS UTC BY EXPLICIT RULE (ADR-0002) — but `timestamptz` in Postgres
+    is stored as an absolute instant and RENDERED in whatever timezone the
+    SESSION happens to be set to, which is an operator's `TimeZone` setting or
+    the server default, never a fact this platform controls. Without pinning
+    it, a value written as `06:00 UTC` reads back as `11:30` on a session
+    configured for `Asia/Kolkata` — comparisons still work (Python compares
+    aware datetimes as absolute instants), but every RENDERED sentence an
+    operator reads — "expected 6:00 AM — not received" — silently becomes
+    wrong the moment it touches a real connection whose environment happens to
+    differ from the one it was tested on. `options="-c TimeZone=UTC"` sets it
+    at connection startup, atomically, with no separate round trip to race.
+    """
+    return psycopg.connect(resolve_dsn(profile), autocommit=autocommit, options="-c TimeZone=UTC")
+
+
 @contextmanager
 def connect(profile: Profile, *, autocommit: bool = True) -> Iterator[Connection]:
-    with psycopg.connect(resolve_dsn(profile), autocommit=autocommit) as raw:
+    with _connect(profile, autocommit=autocommit) as raw:
         yield Connection(raw)
 
 
@@ -91,7 +110,7 @@ def transaction(profile: Profile) -> Iterator[Connection]:
     mock, not merely cheaper: perfect isolation, no cleanup code, and a failing
     test leaves a database an engineer can open and query.
     """
-    with psycopg.connect(resolve_dsn(profile), autocommit=False) as raw:
+    with _connect(profile, autocommit=False) as raw:
         try:
             yield Connection(raw)
         finally:
@@ -109,7 +128,7 @@ def commit(profile: Profile) -> Iterator[Connection]:
     stays untouched; it is the test fixture, and confusing the two is exactly
     how a suite ends up "passing" against a database nothing ever committed to.
     """
-    with psycopg.connect(resolve_dsn(profile), autocommit=False) as raw:
+    with _connect(profile, autocommit=False) as raw:
         try:
             yield Connection(raw)
         except BaseException:
