@@ -32,6 +32,7 @@ from cinqflow.ports.control_tables import (
     InputFile,
     QuarantineSummary,
     Reconciliation,
+    RuleResult,
     SchemaDrift,
     SlaAlert,
     SlaCycle,
@@ -391,6 +392,40 @@ class PostgresControlTables:
             for stage, group in sorted(by_stage.items())
         )
 
+    def record_rule_result(self, result: RuleResult) -> None:
+        self._db.execute(
+            "INSERT INTO recon.rule_results (result_id, batch_id, feed_id, rule_id, "
+            "evaluated, failed, excluded, recorded_ts) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                str(uuid.uuid4()),
+                result.batch_id,
+                result.feed_id,
+                result.rule_id,
+                result.evaluated,
+                result.failed,
+                result.excluded,
+                result.recorded_ts,
+            ),
+        )
+
+    def rule_results(self, batch_id: str) -> Sequence[RuleResult]:
+        rows = self._db.fetch_all(
+            "SELECT DISTINCT ON (rule_id) batch_id, feed_id, rule_id, evaluated, failed, "
+            "excluded, recorded_ts FROM recon.rule_results WHERE batch_id = %s "
+            "ORDER BY rule_id, recorded_ts DESC, result_id DESC",
+            (batch_id,),
+        )
+        return tuple(sorted((_rule_result(row) for row in rows), key=lambda r: r.rule_id))
+
+    def rule_result_history(self, feed_id: str, *, limit: int = 200) -> Sequence[RuleResult]:
+        rows = self._db.fetch_all(
+            "SELECT batch_id, feed_id, rule_id, evaluated, failed, excluded, recorded_ts "
+            "FROM recon.rule_results WHERE feed_id = %s "
+            "ORDER BY recorded_ts DESC, result_id DESC LIMIT %s",
+            (feed_id, limit),
+        )
+        return tuple(_rule_result(row) for row in rows)
+
     def get_schema_drift(self, batch_id: str) -> Sequence[SchemaDrift]:
         rows = self._db.fetch_all(
             "SELECT batch_id, feed_id, classification, column_name, detail, "
@@ -619,4 +654,16 @@ def _sla_alert(row: tuple[Any, ...]) -> SlaAlert:
         acknowledged_by=row[8] or "",
         acknowledged_ts=row[9],
         raised_ts=row[10],
+    )
+
+
+def _rule_result(row: tuple[Any, ...], /) -> RuleResult:
+    return RuleResult(
+        batch_id=row[0],
+        feed_id=row[1],
+        rule_id=row[2],
+        evaluated=row[3],
+        failed=row[4],
+        excluded=row[5],
+        recorded_ts=row[6],
     )

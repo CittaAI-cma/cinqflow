@@ -549,6 +549,37 @@ RECON_SCHEMA = Schema(
             primary_key=("history_id",),
             indexes=(("feed_id", "recorded_ts"),),
         ),
+        Table(
+            name="rule_results",
+            comment=(
+                "CF-V2-E7-05 — one rule's verdict on one batch, INCLUDING clean passes: "
+                "'silence is data too'. The drop ledger names the rules that fired; without "
+                "this table a rule that passed and a rule that never ran are "
+                "indistinguishable, and the DQ trend's denominator is a ratio over "
+                "failures. APPEND-ONLY: a re-run records again and reads fold to the "
+                "newest row per (batch, rule)."
+            ),
+            columns=(
+                Column("result_id", TypeName.UUID, nullable=False),
+                Column("batch_id", TypeName.STRING, nullable=False),
+                _FEED,
+                Column("rule_id", TypeName.STRING, nullable=False),
+                Column("evaluated", TypeName.INT64, nullable=False),
+                Column("failed", TypeName.INT64, nullable=False),
+                Column("excluded", TypeName.INT64, nullable=False),
+                Column("recorded_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("result_id",),
+            indexes=(("batch_id",), ("feed_id", "recorded_ts"), ("rule_id",)),
+            check_constraints=(
+                "evaluated >= 0",
+                "failed >= 0",
+                "excluded >= 0",
+                "failed <= evaluated",
+                "excluded <= failed",
+            ),
+            append_only=True,
+        ),
     ),
 )
 

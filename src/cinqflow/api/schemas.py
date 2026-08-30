@@ -2046,6 +2046,38 @@ class GuideMatchOut(BaseModel):
     explanation: str = ""
 
 
+class ReliabilityComponentOut(BaseModel):
+    """One signal's contribution — the click's answer. `measured` is the
+    difference between 'scored zero' and 'not measurable yet', which the
+    screen must never collapse."""
+
+    signal: str
+    value: float
+    weight: float
+    evidence: str
+    sample_size: int = 0
+    measured: bool = False
+
+
+class ReliabilityOut(BaseModel):
+    """CF-V2-E12-05 — 'can I trust this feed?' as a number with its parts.
+
+    `overall` is computed from the components on every access in core, so a
+    score whose parts do not add up is unrepresentable — this model just
+    carries the answer. `confidence` says how much of the intended weight was
+    actually measurable: a 94 built from four of six signals is a different
+    claim from a 94 built from all six.
+    """
+
+    feed_id: str
+    as_of: date
+    overall: float
+    band: str
+    confidence: float
+    components: list[ReliabilityComponentOut] = Field(default_factory=list)
+    citation: str = ""
+
+
 class AcknowledgeIncidentIn(BaseModel):
     """Acknowledging names the person automatically (the caller); assignment
     is optional and may name somebody else."""

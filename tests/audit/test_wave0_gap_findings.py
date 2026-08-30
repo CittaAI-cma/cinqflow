@@ -229,7 +229,14 @@ def test_ddl_provisions_the_registry_and_governance_tables() -> None:
 #
 # Still declared and unwritten: `landing_ctl.landing_event`. Wave 2's clock
 # does not touch it; it is not this gap's concern.
-_CONTROL_TABLE_WRITERS_MUST_EXIST = ("sla_instance", "sla_alerts", "feed_sla_config")
+_CONTROL_TABLE_WRITERS_MUST_EXIST = (
+    "sla_instance",
+    "sla_alerts",
+    "feed_sla_config",
+    # CF-V2-E7-05: provisioned and written in the same commit — the
+    # provisioned-and-unwritten era is what this test exists to end.
+    "rule_results",
+)
 
 
 @pytest.mark.parametrize("table", _CONTROL_TABLE_WRITERS_MUST_EXIST)

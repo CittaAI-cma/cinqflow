@@ -42,6 +42,10 @@ class Profile:
     pins: dict[str, dict[str, Any]]
     landing: dict[str, Any] = field(default_factory=dict)
     agents: dict[str, Any] = field(default_factory=dict)
+    #: CF-V2-E12-05 / ADR-0015: the score's weighting is CONFIGURABLE, and
+    #: configurable means per-environment, which means here and nowhere else.
+    #: Absent keys fall back to `core.reliability.Weights`' defaults.
+    reliability: dict[str, Any] = field(default_factory=dict)
 
     @property
     def name(self) -> str:

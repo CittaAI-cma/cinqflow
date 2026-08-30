@@ -129,6 +129,8 @@ from cinqflow.api.schemas import (
     RefusalOut,
     RejectProposalIn,
     ReleaseDecisionOut,
+    ReliabilityComponentOut,
+    ReliabilityOut,
     ResolveIncidentIn,
     ResumeFeedIn,
     ReviewQueueOut,
@@ -160,7 +162,7 @@ from cinqflow.api.schemas import (
     WorkQueueOut,
 )
 from cinqflow.core import delivery as delivery_core
-from cinqflow.core import lifecycle, onboarding, proposals, scheduling
+from cinqflow.core import lifecycle, onboarding, proposals, reliability, scheduling
 from cinqflow.core import mapping as mapping_core
 from cinqflow.core import operations as ops_board
 from cinqflow.core import rules as rules_core
@@ -183,7 +185,7 @@ from cinqflow.core.model.governed import (
     ObjectType,
 )
 from cinqflow.core.model.profile import Profile
-from cinqflow.core.model.vocabulary import Layer
+from cinqflow.core.model.vocabulary import BatchState, Layer
 from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
 from cinqflow.core.onboarding import evidence
 from cinqflow.core.onboarding import release as onboarding_release
@@ -3245,6 +3247,57 @@ def create_app(
             "close",
         )
 
+    # ── CF-V2-E12-05 · the reliability score ──────────────────────────────
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/reliability",
+        response_model=ReliabilityOut,
+        tags=["operations"],
+    )
+    def feed_reliability(
+        feed_id: str,
+        control: Control,
+        metadata: Store,
+        profile: ConnectionProfile,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> ReliabilityOut:
+        """CF-V2-E12-05 — 'can I trust this feed?', decomposable on click.
+
+        Every observation is a control-plane query, never a curated number —
+        the same discipline as the board's counters. A signal the plane
+        cannot measure yet (identity, until Wave 3) is UNMEASURED, not zero:
+        it lowers the score's confidence, never the score.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        _load(metadata, feed_id)  # 404 before an empty score for a feed that is not real
+        score = reliability.score_for(
+            feed_id=feed_id,
+            as_of=datetime.now(UTC).date(),
+            observations=_reliability_observations(control, feed_id),
+            weights=_weights_of(profile),
+            bands=_bands_of(profile),
+        )
+        return ReliabilityOut(
+            feed_id=score.feed_id,
+            as_of=score.as_of,
+            overall=score.overall,
+            band=score.band.value,
+            confidence=score.confidence,
+            components=[
+                ReliabilityComponentOut(
+                    signal=component.signal.value,
+                    value=component.value,
+                    weight=component.weight,
+                    evidence=component.evidence,
+                    sample_size=component.sample_size,
+                    measured=component.measured,
+                )
+                for component in score.components
+            ],
+            citation=str(score.citation),
+        )
+
     # ── CF-V1-E7-04 · the technical review queue ─────────────────────────
 
     @app.get(
@@ -5742,6 +5795,81 @@ def _action_refusal_out(refusal: ops_actions.Refusal) -> ActionRefusalOut:
         notifies=refusal.notifies,
         route=refusal.route,
     )
+
+
+def _weights_of(profile: Profile | None) -> reliability.Weights:
+    """The profile's weighting, or core's defaults — never a third place."""
+    if profile is None or not profile.reliability:
+        return reliability.Weights()
+    weights = profile.reliability.get("weights", {})
+    return reliability.Weights(**{str(k): float(v) for k, v in weights.items()})
+
+
+def _bands_of(profile: Profile | None) -> reliability.Bands:
+    if profile is None or not profile.reliability:
+        return reliability.Bands()
+    bands = profile.reliability.get("bands", {})
+    return reliability.Bands(**{str(k): float(v) for k, v in bands.items()})
+
+
+def _reliability_observations(
+    control: ControlTablesPort, feed_id: str
+) -> dict[reliability.Signal, tuple[float, str, int]]:
+    """Six signals, each a control-plane query — 'no hand-maintained figures
+    anywhere'. A signal with nothing to read stays OUT of the map, so it
+    becomes an unmeasured component rather than a zero."""
+    observations: dict[reliability.Signal, tuple[float, str, int]] = {}
+
+    rule_history = control.rule_result_history(feed_id, limit=200)
+    evaluated = sum(r.evaluated for r in rule_history)
+    failed = sum(r.failed for r in rule_history)
+    if evaluated > 0:
+        observations[reliability.Signal.DQ] = (
+            round(100.0 * (evaluated - failed) / evaluated, 1),
+            f"{failed:,} of {evaluated:,} evaluations failed across {len(rule_history)} rule runs",
+            len(rule_history),
+        )
+
+    cycles = control.sla_history(feed_id, days=90)
+    if cycles:
+        on_time = sum(1 for c in cycles if c.sla_status == "On-Time")
+        observations[reliability.Signal.SLA] = (
+            round(100.0 * on_time / len(cycles), 1),
+            f"{on_time} of {len(cycles)} cycles on time over 90 days",
+            len(cycles),
+        )
+
+    batches = control.list_batches(feed_id, 30)
+    recons = [r for b in batches for r in control.get_reconciliation(b.batch_id)]
+    if recons:
+        balanced = sum(1 for r in recons if r.balances)
+        observations[reliability.Signal.RECONCILIATION] = (
+            round(100.0 * balanced / len(recons), 1),
+            f"{balanced} of {len(recons)} stage reconciliations balanced",
+            len(recons),
+        )
+
+    terminal = [b for b in batches if b.state in {BatchState.COMPLETED, BatchState.FAILED}]
+    if terminal:
+        completed = sum(1 for b in terminal if b.state is BatchState.COMPLETED)
+        observations[reliability.Signal.PIPELINE] = (
+            round(100.0 * completed / len(terminal), 1),
+            f"{completed} of {len(terminal)} recent batches completed",
+            len(terminal),
+        )
+
+    if batches:
+        drifted = sum(
+            1 for b in batches if any(d.blocked_batch for d in control.get_schema_drift(b.batch_id))
+        )
+        observations[reliability.Signal.SCHEMA] = (
+            round(100.0 * (len(batches) - drifted) / len(batches), 1),
+            f"{drifted} of {len(batches)} recent batches blocked by schema drift",
+            len(batches),
+        )
+
+    # IDENTITY is deliberately absent until Wave 3 — unmeasured, never zero.
+    return observations
 
 
 def _incident_for(

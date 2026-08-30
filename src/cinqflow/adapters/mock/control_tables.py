@@ -17,6 +17,7 @@ from cinqflow.ports.control_tables import (
     InputFile,
     QuarantineSummary,
     Reconciliation,
+    RuleResult,
     SchemaDrift,
     SlaAlert,
     SlaCycle,
@@ -45,6 +46,7 @@ class MemStoreControlTables:
         self._quarantine: dict[str, list[QuarantineSummary]] = {}
         self._recon: dict[str, list[Reconciliation]] = {}
         self._drift: dict[str, list[SchemaDrift]] = {}
+        self._rule_results: list[RuleResult] = []
         self._sla_configs: dict[tuple[str, int], FeedSlaConfig] = {}
         self._cycles: dict[tuple[str, date], SlaCycle] = {}
         self._alerts: dict[str, SlaAlert] = {}
@@ -87,6 +89,9 @@ class MemStoreControlTables:
 
     def record_schema_drift(self, drift: SchemaDrift) -> None:
         self._drift.setdefault(drift.batch_id, []).append(drift)
+
+    def record_rule_result(self, result: RuleResult) -> None:
+        self._rule_results.append(result)
 
     # ── the SLA clock ────────────────────────────────────────────────────────
     def upsert_feed_sla_config(self, config: FeedSlaConfig) -> None:
@@ -164,6 +169,21 @@ class MemStoreControlTables:
 
     def get_schema_drift(self, batch_id: str) -> Sequence[SchemaDrift]:
         return tuple(self._drift.get(batch_id, ()))
+
+    def rule_results(self, batch_id: str) -> Sequence[RuleResult]:
+        newest: dict[str, RuleResult] = {}
+        for row in self._rule_results:
+            if row.batch_id != batch_id:
+                continue
+            held = newest.get(row.rule_id)
+            if held is None or row.recorded_ts >= held.recorded_ts:
+                newest[row.rule_id] = row
+        return tuple(sorted(newest.values(), key=lambda r: r.rule_id))
+
+    def rule_result_history(self, feed_id: str, *, limit: int = 200) -> Sequence[RuleResult]:
+        found = [r for r in self._rule_results if r.feed_id == feed_id]
+        found.sort(key=lambda r: r.recorded_ts, reverse=True)
+        return tuple(found[:limit])
 
     def list_errors(
         self, batch_id: str, category: ErrorCategory | None = None

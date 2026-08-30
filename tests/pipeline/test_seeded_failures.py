@@ -119,11 +119,21 @@ def test_the_simulator_drives_the_whole_spine_with_no_hand_placed_files(rig) -> 
     its monthly schedule, then the file arrives via the configured protocol,
     flows the full pipeline, and THE DEMO NEEDS NO HAND-PLACED FILES
     ANYWHERE." — CF-V0-E8-08, happy path"""
-    play, _, _ = rig
+    play, control, _ = rig
     outcome = play(PayerSimulator().deliver(business_date=AUGUST))
     assert outcome.state is BatchState.COMPLETED
     assert outcome.result is not None and outcome.result.balances
     assert outcome.result.reconciliation.records_in == 200
+
+    # CF-V2-E7-05: the rule's verdict is a ROW on the real plane, with the
+    # FULL denominator — the simulator's roster carries five blank first
+    # names, so this is the story's own example: failures under threshold
+    # quarantine with the rule named, and the batch proceeds.
+    (result,) = control.rule_results(outcome.batch_id)
+    assert result.rule_id == "DQ-002"
+    assert (result.evaluated, result.failed, result.excluded) == (200, 5, 5)
+    assert result.clean is False
+    assert result.pass_rate == pytest.approx(0.975)
 
 
 # ── incident #1 · the underscore filename ────────────────────────────────────
@@ -214,6 +224,11 @@ def test_a_contracted_column_that_stops_arriving_blocks_the_batch(rig) -> None:
     assert drift.classification == "removed"
     assert drift.column_name == "First_Name"
     assert drift.blocked_batch is False
+
+    # And the rule's own row carries the fired count — same denominator, so
+    # the trend can tell "fired on every row" from "never ran".
+    (rule_row,) = control.rule_results(outcome.batch_id)
+    assert (rule_row.evaluated, rule_row.failed, rule_row.excluded) == (200, 200, 200)
 
 
 # ── bad encoding ─────────────────────────────────────────────────────────────

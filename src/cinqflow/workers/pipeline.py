@@ -40,6 +40,7 @@ from cinqflow.ports.control_tables import (
     InputFile,
     QuarantineSummary,
     Reconciliation,
+    RuleResult,
     SchemaDrift,
     StageStatus,
 )
@@ -370,6 +371,7 @@ class PipelineRunner:
         )
         self._record_exclusions(batch, result)
         self._record_reconciliation(batch, result)
+        self._record_rule_results(batch, feed.feed_id, rules, result)
         self._control.update_batch_state(batch, state)
         self._storage.move(file.key, decision.move_to)
 
@@ -458,6 +460,46 @@ class PipelineRunner:
                 ),
             )
         )
+
+    def _record_rule_results(
+        self,
+        batch: str,
+        feed_id: str,
+        rules: tuple[DqRule, ...],
+        result: ExecutionResult,
+    ) -> None:
+        """CF-V2-E7-05 — every rule's verdict, INCLUDING the clean pass.
+
+        "Silence is data too": the drop ledger already names the rules that
+        fired, but a rule that passed and a rule that never ran must not be
+        indistinguishable — the DQ trend's denominator depends on it. One row
+        per rule handed to this run, so a rule silently skipped is visible as
+        the row that is missing.
+        """
+        recorded_ts = datetime.now(UTC)
+        evaluated = result.reconciliation.records_in
+        excluded_by_rule: dict[str, int] = {}
+        for dropped in result.reconciliation.drops:
+            excluded_by_rule[dropped.rule_id] = (
+                excluded_by_rule.get(dropped.rule_id, 0) + dropped.record_count
+            )
+        warned_by_rule: dict[str, int] = {}
+        for warning in result.warnings:
+            warned_by_rule[warning.rule_id] = warned_by_rule.get(warning.rule_id, 0) + 1
+        for rule in rules:
+            excluded = excluded_by_rule.get(rule.rule_id, 0)
+            failed = excluded + warned_by_rule.get(rule.rule_id, 0)
+            self._control.record_rule_result(
+                RuleResult(
+                    batch_id=batch,
+                    feed_id=feed_id,
+                    rule_id=rule.rule_id,
+                    evaluated=evaluated,
+                    failed=failed,
+                    excluded=excluded,
+                    recorded_ts=recorded_ts,
+                )
+            )
 
     def _fail(self, batch: str, failure: _StageFailureError) -> None:
         self._control.record_error(

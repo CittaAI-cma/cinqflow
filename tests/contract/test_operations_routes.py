@@ -684,6 +684,49 @@ def test_the_surface_says_which_environment_it_is_in(
         assert retry_preview["requires_approval_identifier"] is True
 
 
+# ── CF-V2-E12-05 · the reliability score ─────────────────────────────────────
+def test_the_score_decomposes_and_an_unmeasured_signal_is_not_a_zero(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """ "A score no one can decompose is a rumor" — and identity, unmeasured
+    until Wave 3, must lower CONFIDENCE, never the score."""
+    from cinqflow.ports.control_tables import RuleResult
+
+    _open_batch(control, state=BatchState.COMPLETED)
+    for minute, failed in enumerate((0, 0, 20)):
+        control.record_rule_result(
+            RuleResult(
+                batch_id=BATCH,
+                feed_id=ENROLLMENT,
+                rule_id="DQ-002",
+                evaluated=200,
+                failed=failed,
+                excluded=failed,
+                recorded_ts=NOW + timedelta(minutes=minute),
+            )
+        )
+
+    body = client.get(f"/api/feeds/{ENROLLMENT}/reliability", headers=_as(READ_ONLY)).json()
+    assert body["feed_id"] == ENROLLMENT
+    parts = {c["signal"]: c for c in body["components"]}
+    assert set(parts) == {"dq", "sla", "reconciliation", "schema", "identity", "pipeline"}
+
+    dq = parts["dq"]
+    assert dq["measured"] is True
+    assert dq["value"] == pytest.approx(100.0 * (600 - 20) / 600, abs=0.1)
+    assert "evaluations failed" in dq["evidence"]
+
+    identity = parts["identity"]
+    assert identity["measured"] is False
+    assert body["confidence"] < 1.0
+    assert 0.0 < body["overall"] <= 100.0
+    assert body["band"] in {"healthy", "at_risk", "critical"}
+
+
+def test_a_feed_nobody_registered_has_no_score_to_leak(client: TestClient) -> None:
+    assert client.get("/api/feeds/never-was/reliability", headers=_as(READ_ONLY)).status_code == 404
+
+
 # ── the guardrail ────────────────────────────────────────────────────────────
 def test_a_read_only_user_may_watch_and_not_act(
     client: TestClient, control: MemStoreControlTables

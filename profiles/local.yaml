@@ -77,3 +77,11 @@ agents:
   pipeline_insight:
     risk_class: R0                            # observe — always allowed, audited
     tool_whitelist: read_only                 # NO write tool, at any confidence, in any environment
+
+# CF-V2-E12-05 / ADR-0015 — the reliability score's configuration. The
+# weighting is configurable, and configurable means per-environment, which
+# means HERE. Weights must sum to 1.0; bands are ADR-0015's illustrative
+# defaults, overridable per feed later.
+reliability:
+  weights: { dq: 0.25, sla: 0.20, reconciliation: 0.25, schema: 0.10, identity: 0.10, pipeline: 0.10 }
+  bands: { healthy_at: 90, at_risk_at: 70 }

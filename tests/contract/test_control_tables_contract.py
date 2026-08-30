@@ -615,3 +615,50 @@ def test_acknowledging_an_alert_names_the_person_and_the_moment(
 def test_acknowledging_an_alert_nobody_raised_is_refused(control: ControlTablesPort) -> None:
     with pytest.raises(ControlTableError):
         control.acknowledge_alert(str(uuid.uuid4()), by="sam@cinqcare.test", at=NOW)
+
+
+# ── recon.rule_results · CF-V2-E7-05 ─────────────────────────────────────────
+def _rule_result(rule_id: str, *, failed: int = 0, excluded: int = 0, minute: int = 0):
+    from cinqflow.ports.control_tables import RuleResult
+
+    return RuleResult(
+        batch_id=BATCH,
+        feed_id=FEED,
+        rule_id=rule_id,
+        evaluated=200,
+        failed=failed,
+        excluded=excluded,
+        recorded_ts=NOW + timedelta(minutes=minute),
+    )
+
+
+def test_a_clean_pass_is_a_row_not_an_absence(opened: ControlTablesPort) -> None:
+    """ "Record every rule's execution result on every batch, including clean
+    passes — silence is data too." — CF-V2-E7-05"""
+    opened.record_rule_result(_rule_result("DQ-002"))
+    (result,) = opened.rule_results(BATCH)
+    assert result.clean is True
+    assert result.evaluated == 200
+    assert result.pass_rate == 1.0
+
+
+def test_a_rerun_records_again_and_reads_fold_to_the_newest(
+    opened: ControlTablesPort,
+) -> None:
+    """Append-only like every ledger — the first run's verdict survives, and
+    the current answer is the newest row per (batch, rule)."""
+    opened.record_rule_result(_rule_result("DQ-002", failed=40, excluded=40))
+    opened.record_rule_result(_rule_result("DQ-002", failed=0, minute=30))
+    (result,) = opened.rule_results(BATCH)
+    assert result.clean is True
+
+
+def test_the_history_is_newest_first_and_bounded(opened: ControlTablesPort) -> None:
+    for minute in range(5):
+        opened.record_rule_result(_rule_result(f"DQ-{minute:03d}", minute=minute))
+    history = opened.rule_result_history(FEED, limit=3)
+    assert [r.rule_id for r in history] == ["DQ-004", "DQ-003", "DQ-002"]
+
+
+def test_a_feed_with_no_rule_runs_is_empty_not_an_error(control: ControlTablesPort) -> None:
+    assert control.rule_result_history("a-feed-nobody-onboarded") == ()

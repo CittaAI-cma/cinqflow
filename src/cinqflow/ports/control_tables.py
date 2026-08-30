@@ -216,6 +216,45 @@ class DropLedgerEntry:
 
 
 @dataclass(frozen=True)
+class RuleResult:
+    """A row of `control.rule_results` — one rule's verdict on one batch,
+    INCLUDING the clean pass.
+
+        "Record every rule's execution result on every batch, including clean
+         passes — silence is data too." — CF-V2-E7-05
+
+    The drop ledger already names the rules that FIRED; without this table a
+    rule that passed and a rule that never ran are indistinguishable, and the
+    DQ trend's denominator is a ratio over failures. `evaluated` is the rows
+    the rule saw; `failed` is the rows it flagged; `excluded` is the subset
+    the consequence actually removed — a warn-severity rule fails rows and
+    excludes none, and collapsing those two numbers would hide exactly the
+    rules a steward is deciding thresholds for.
+    """
+
+    batch_id: str
+    feed_id: str
+    rule_id: str
+    evaluated: int
+    failed: int
+    excluded: int
+    recorded_ts: datetime
+
+    @property
+    def clean(self) -> bool:
+        return self.failed == 0
+
+    @property
+    def pass_rate(self) -> float:
+        """0.0–1.0. An unevaluated rule has no rate — the caller filters on
+        `evaluated` first; answering 1.0 here would make a skipped rule look
+        like a perfect one, which is the story's own don't."""
+        if self.evaluated <= 0:
+            return 0.0
+        return (self.evaluated - self.failed) / self.evaluated
+
+
+@dataclass(frozen=True)
 class FeedSlaConfig:
     """A row of `control.feed_sla_config` — a feed's delivery contract.
 
@@ -328,6 +367,10 @@ class ControlTablesPort(Protocol):
     def record_quarantine(self, summary: QuarantineSummary) -> None: ...
     def record_reconciliation(self, recon: Reconciliation) -> None: ...
     def record_schema_drift(self, drift: SchemaDrift) -> None: ...
+    def record_rule_result(self, result: RuleResult) -> None:
+        """CF-V2-E7-05. Append-only; a re-run records again and reads take the
+        newest row per (batch, rule), the same way every ops ledger folds."""
+        ...
 
     # ── the SLA clock — CF-V2-E12-01/05, the missing writer ──────────────────
     def upsert_feed_sla_config(self, config: FeedSlaConfig) -> None:
@@ -425,3 +468,13 @@ class ControlTablesPort(Protocol):
     def sla_alerts(
         self, *, cycle_date: date | None = None, feed_ids: Sequence[str] = ()
     ) -> Sequence[SlaAlert]: ...
+
+    def rule_results(self, batch_id: str) -> Sequence[RuleResult]:
+        """One row per rule, the newest per (batch, rule) — what E7-05's
+        per-batch view renders, clean passes included."""
+        ...
+
+    def rule_result_history(self, feed_id: str, *, limit: int = 200) -> Sequence[RuleResult]:
+        """Newest first, bounded — the DQ trend's input, and the reliability
+        score's DQ signal. Bounded for the same reason `sla_history` is."""
+        ...

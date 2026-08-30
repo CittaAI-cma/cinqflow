@@ -87,6 +87,7 @@ def load(path: str | Path) -> Profile:
         pins=pins,
         landing=raw.get("landing", {}),
         agents=raw.get("agents", {}),
+        reliability=raw.get("reliability", {}),
     )
 
 
