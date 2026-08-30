@@ -727,10 +727,12 @@ def create_app(
 
     # ── pause and resume · CF-V1-E3-04 ───────────────────────────────────────
     #
-    # OPERATIONAL, not governance. `RUN_PIPELINE` rather than `APPROVE`,
-    # because stopping and starting a feed is an operator's decision — and
-    # requiring an approver to lift a pause would mean finding a steward at
-    # 3am to turn the tap back on.
+    # OPERATIONAL, not governance. `PAUSE_FEED` rather than `APPROVE`, because
+    # stopping and starting a feed is an operator's decision — and requiring
+    # an approver to lift a pause would mean finding a steward at 3am to turn
+    # the tap back on. (Wave 0 gated this on RUN_PIPELINE because PAUSE_FEED
+    # did not exist yet; CF-V2-E12-03 gave the lever its own name so the
+    # scoped matrix can grant stopping and running separately.)
 
     @app.post(
         f"{API_PREFIX}/feeds/{{feed_id}}/pause",
@@ -742,7 +744,7 @@ def create_app(
         body: PauseFeedIn,
         metadata: Store,
         audit: Audit,
-        principal: Annotated[Principal, Depends(require(Action.RUN_PIPELINE))],
+        principal: Annotated[Principal, Depends(require(Action.PAUSE_FEED))],
     ) -> SuspensionOut:
         """Stop new work. Anything already running finishes."""
         if not principal.scopes.covers_feed(feed_id):
@@ -779,7 +781,7 @@ def create_app(
         body: ResumeFeedIn,
         metadata: Store,
         audit: Audit,
-        principal: Annotated[Principal, Depends(require(Action.RUN_PIPELINE))],
+        principal: Annotated[Principal, Depends(require(Action.PAUSE_FEED))],
     ) -> SuspensionOut:
         """Start it again. No reason required and no approver — see
         `core.registry.suspension.resume` for why that asymmetry is right."""
@@ -2854,12 +2856,20 @@ def create_app(
         """CF-V2-E12-03 — exactly the actions the surface would permit.
 
         A console that draws a button and then refuses it teaches people that
-        refusals are noise, so this and the POST read the same matrix.
+        refusals are noise, so this and the POST read the same matrix — BOTH
+        matrices: the allowed-state table and PERMISSION_FOR. A batch in the
+        right state still offers nothing to a caller whose role cannot act on
+        it, which is how a Read-Only analyst gets the same screen with no
+        buttons rather than buttons that bounce.
         """
         batch = _batch_or_404(control, batch_id, principal)
         environment = _environment_of(profile)
         paused = metadata.current_suspension(batch.feed_id).is_active_at(datetime.now(UTC))
-        available = ops_actions.offered(batch_state=batch.state, feed_paused=paused)
+        available = tuple(
+            action
+            for action in ops_actions.offered(batch_state=batch.state, feed_paused=paused)
+            if may(principal, ops_actions.PERMISSION_FOR[action], feed_id=batch.feed_id)
+        )
         return ActionSurfaceOut(
             target=batch_id,
             offered=[action.value for action in available],
@@ -2889,7 +2899,13 @@ def create_app(
         metadata: Store,
         audit: Audit,
         profile: ConnectionProfile,
-        principal: Annotated[Principal, Depends(require(Action.RETRY_BATCH))],
+        # ACKNOWLEDGE is the DOOR, not the gate: the weakest operations
+        # permission, so nobody who cannot even acknowledge reaches the
+        # handler. The action actually requested is gated inside on
+        # PERMISSION_FOR — a retry still costs RETRY_BATCH, a reprocess
+        # REPROCESS — because one route serves the whole enum and the
+        # permission differs per action.
+        principal: Annotated[Principal, Depends(require(Action.ACKNOWLEDGE))],
     ) -> ActionRecordOut:
         """CF-V2-E12-03 — see, decide, act, all audited, in one place.
 
@@ -2913,6 +2929,21 @@ def create_app(
                 f"{body.action!r} is not an operations action. This surface offers "
                 f"{offered_now} — and nothing free-form.",
             ) from None
+
+        # The gate the door could not check: this SPECIFIC action's permission.
+        # Refused with a row, like every other refusal on this surface — an
+        # operator reading the audit must find "I clicked reprocess and it
+        # bounced" as easily as "the reprocess ran".
+        decision = may(principal, ops_actions.PERMISSION_FOR[action], feed_id=batch.feed_id)
+        if not decision:
+            audit.record(
+                object_type=ObjectType.FEED,
+                object_id=batch.feed_id,
+                action=f"refused:{action.value}",
+                actor=principal.as_actor(),
+                detail=decision.reason,
+            )
+            raise HTTPException(status.HTTP_403_FORBIDDEN, decision.reason)
 
         suspension = metadata.current_suspension(batch.feed_id)
         now = datetime.now(UTC)

@@ -51,6 +51,7 @@ from enum import StrEnum, unique
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.model.governed import Actor
 from cinqflow.core.model.vocabulary import ActorType, BatchState, Layer, StatusWord
+from cinqflow.core.security import Action
 
 
 class ActionError(RuntimeError):
@@ -205,6 +206,32 @@ ALLOWED_STATES: dict[OpsAction, frozenset[BatchState]] = {
     # is about a business PERIOD — it may not have a batch at all, which is
     # frequently the whole reason somebody is running one.
     OpsAction.BACKDATE: frozenset(),
+}
+
+
+#: WHICH PERMISSION EACH ACTION COSTS — the third table an OpsAction pays into,
+#: after `ALLOWED_STATES` and the preview branch. Data, for the same reason:
+#: the surface (which buttons exist for THIS caller) and the server (whether to
+#: refuse) read one map, so they cannot disagree — and the completeness test
+#: enumerates it, so an eleventh action cannot arrive ungated.
+#:
+#: The groupings are consequence-shaped, not name-shaped: a restart re-runs
+#: something that stopped (RETRY_BATCH); a reprocess re-enters data that
+#: already loaded once (REPROCESS); pause and resume are the same lever moved
+#: in opposite directions (PAUSE_FEED).
+PERMISSION_FOR: dict[OpsAction, Action] = {
+    OpsAction.ACKNOWLEDGE: Action.ACKNOWLEDGE,
+    OpsAction.ASSIGN: Action.ASSIGN,
+    # A note is resolution context on an issue somebody is handling — the same
+    # bookkeeping consequence as acknowledging it, so the same permission.
+    OpsAction.NOTE: Action.ACKNOWLEDGE,
+    OpsAction.PAUSE: Action.PAUSE_FEED,
+    OpsAction.RESUME: Action.PAUSE_FEED,
+    OpsAction.RETRY: Action.RETRY_BATCH,
+    OpsAction.RESTART_FROM_STAGE: Action.RETRY_BATCH,
+    OpsAction.REPROCESS_BATCH: Action.REPROCESS,
+    OpsAction.REPROCESS_FAILED_ONLY: Action.REPROCESS,
+    OpsAction.BACKDATE: Action.BACKDATE,
 }
 
 

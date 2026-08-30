@@ -45,6 +45,12 @@ class Role(StrEnum):
     DATA_STEWARD = "data_steward"
     PLATFORM_ENGINEER = "platform_engineer"
     BUSINESS_APPROVER = "business_approver"
+    #: Wave 2 (CF-V2-E12-03). Eight of the wave's eleven stories are written
+    #: "As a Operations" — the person who watches the board, acts on a batch
+    #: and answers for a certification, and is deliberately NOT the person who
+    #: authored the feed. Wave 0 parked run/retry on the engineer because no
+    #: operator existed to hold them; this member is where they move to.
+    OPERATIONS = "operations"
 
     @property
     def may_change_things(self) -> bool:

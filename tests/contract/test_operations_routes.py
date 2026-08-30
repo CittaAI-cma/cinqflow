@@ -38,6 +38,7 @@ NOW = datetime.now(UTC)
 TODAY = NOW.date().isoformat()
 
 ENGINEER = "dev-engineer@cinqcare.test"
+OPERATOR = "dev-operations@cinqcare.test"
 READ_ONLY = "dev-analyst@cinqcare.test"
 SEED = Actor(subject="seed@cinqcare.test", actor_type=ActorType.HUMAN)
 APPROVER = Actor(subject="dev-platform@cinqcare.test", actor_type=ActorType.HUMAN)
@@ -270,17 +271,31 @@ def test_the_surface_offers_only_what_it_would_permit(
     client: TestClient, control: MemStoreControlTables
 ) -> None:
     _open_batch(control, state=BatchState.FAILED)
-    offered = client.get(f"/api/operations/batches/{BATCH}/actions", headers=_as(ENGINEER)).json()
+    offered = client.get(f"/api/operations/batches/{BATCH}/actions", headers=_as(OPERATOR)).json()
     assert "retry" in offered["offered"]
     assert "resume" not in offered["offered"]
     assert all(preview["what_will_happen"] for preview in offered["previews"])
+
+
+def test_the_surface_offers_nothing_to_a_role_that_cannot_act(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """CF-V2-E12-03 — both matrices, not one. The batch is in a retryable
+    state, but the engineer builds and the analyst reads: neither may act, so
+    neither is shown a button that would bounce."""
+    _open_batch(control, state=BatchState.FAILED)
+    for subject in (ENGINEER, READ_ONLY):
+        offered = client.get(
+            f"/api/operations/batches/{BATCH}/actions", headers=_as(subject)
+        ).json()
+        assert offered["offered"] == [], subject
 
 
 def test_retry_is_not_offered_on_a_running_batch(
     client: TestClient, control: MemStoreControlTables
 ) -> None:
     _open_batch(control, state=BatchState.IN_PROGRESS)
-    offered = client.get(f"/api/operations/batches/{BATCH}/actions", headers=_as(ENGINEER)).json()
+    offered = client.get(f"/api/operations/batches/{BATCH}/actions", headers=_as(OPERATOR)).json()
     assert "retry" not in offered["offered"]
 
 
@@ -292,7 +307,7 @@ def test_a_retry_comes_back_requested_and_not_complete(
     body = client.post(
         f"/api/operations/batches/{BATCH}/actions",
         json={"action": "retry", "reason": "Transient cluster error."},
-        headers=_as(ENGINEER),
+        headers=_as(OPERATOR),
     )
     assert body.status_code == 200, body.text
     record = body.json()
@@ -308,7 +323,7 @@ def test_a_retry_without_a_reason_is_refused(
     refused = client.post(
         f"/api/operations/batches/{BATCH}/actions",
         json={"action": "retry"},
-        headers=_as(ENGINEER),
+        headers=_as(OPERATOR),
     )
     assert refused.status_code == 409
     assert "say why" in refused.text
@@ -321,7 +336,7 @@ def test_a_wrong_state_retry_is_refused_and_leaves_a_row(
     refused = client.post(
         f"/api/operations/batches/{BATCH}/actions",
         json={"action": "retry", "reason": "Just in case."},
-        headers=_as(ENGINEER),
+        headers=_as(OPERATOR),
     )
     assert refused.status_code == 409
     actions = [entry.action for entry in store.read_audit(object_id=ENROLLMENT)]
@@ -337,7 +352,7 @@ def test_a_free_form_action_is_refused_with_the_vocabulary_named(
     refused = client.post(
         f"/api/operations/batches/{BATCH}/actions",
         json={"action": "DROP TABLE members", "reason": "x"},
-        headers=_as(ENGINEER),
+        headers=_as(OPERATOR),
     )
     assert refused.status_code == 400
     assert "nothing free-form" in refused.text
@@ -360,7 +375,7 @@ def test_retrying_a_paused_feed_is_refused_with_a_link(
     refused = client.post(
         f"/api/operations/batches/{BATCH}/actions",
         json={"action": "retry", "reason": "Transient."},
-        headers=_as(ENGINEER),
+        headers=_as(OPERATOR),
     )
     assert refused.status_code == 409
     assert "mapping change pending" in refused.text
@@ -484,7 +499,7 @@ def test_production_is_read_from_the_profile_not_guessed(
         refused = production.post(
             f"/api/operations/batches/{BATCH}/actions",
             json={"action": "retry", "reason": "Transient cluster error."},
-            headers=_as(ENGINEER),
+            headers=_as(OPERATOR),
         )
         assert refused.status_code == 409
         assert "approval identifier" in refused.text
@@ -496,7 +511,7 @@ def test_production_is_read_from_the_profile_not_guessed(
                 "reason": "Transient cluster error.",
                 "approval_identifier": "CHG-88421",
             },
-            headers=_as(ENGINEER),
+            headers=_as(OPERATOR),
         )
         assert allowed.status_code == 200, allowed.text
         assert allowed.json()["approval_identifier"] == "CHG-88421"
@@ -514,7 +529,7 @@ def test_the_surface_says_which_environment_it_is_in(
     with TestClient(app) as production:
         _open_batch(control, state=BatchState.FAILED)
         body = production.get(
-            f"/api/operations/batches/{BATCH}/actions", headers=_as(ENGINEER)
+            f"/api/operations/batches/{BATCH}/actions", headers=_as(OPERATOR)
         ).json()
         assert body["environment"] == "production"
         retry_preview = next(p for p in body["previews"] if p["action"] == "retry")
@@ -532,6 +547,22 @@ def test_a_read_only_user_may_watch_and_not_act(
         f"/api/operations/batches/{BATCH}/actions",
         json={"action": "retry", "reason": "x"},
         headers=_as(READ_ONLY),
+    )
+    assert denied.status_code == 403
+
+
+def test_an_engineer_may_watch_but_no_longer_act(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """CF-V2-E12-03 — run/retry moved to the eighth role. The engineer keeps
+    full visibility of the batch they built; acting on it now belongs to the
+    operator, and the server refuses, not just the menu."""
+    _open_batch(control, state=BatchState.FAILED)
+    assert client.get(f"/api/operations/batches/{BATCH}", headers=_as(ENGINEER)).status_code == 200
+    denied = client.post(
+        f"/api/operations/batches/{BATCH}/actions",
+        json={"action": "retry", "reason": "Transient cluster error."},
+        headers=_as(ENGINEER),
     )
     assert denied.status_code == 403
 

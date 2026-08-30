@@ -84,6 +84,11 @@ _DEFAULT_USERS: dict[str, Principal] = {
     "dev-approver@cinqcare.test": _principal(
         "dev-approver@cinqcare.test", "Grace Lin", Role.BUSINESS_APPROVER
     ),
+    # Wave 2 (CF-V2-E12-03) — the eighth role. The operator runs what the
+    # engineer built; eight of the wave's eleven stories speak as this person.
+    "dev-operations@cinqcare.test": _principal(
+        "dev-operations@cinqcare.test", "Tomás Rivera", Role.OPERATIONS
+    ),
     # A real person in no CINQFLOW group — the exception case, not an error case.
     "dev-nogroup@cinqcare.test": _principal("dev-nogroup@cinqcare.test", "Unassigned User"),
 }

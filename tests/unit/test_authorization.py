@@ -26,6 +26,8 @@ def _principal(*roles: Role, feeds: tuple[str, ...] = ("*",)) -> Principal:
 ENGINEER = _principal(Role.ENGINEER)
 READ_ONLY = _principal(Role.READ_ONLY)
 ADMIN = _principal(Role.ADMINISTRATOR)
+OPERATOR = _principal(Role.OPERATIONS)
+STEWARD = _principal(Role.DATA_STEWARD)
 NOBODY = Principal(subject="nobody@cinqcare.test", display_name="Unassigned")
 
 
@@ -52,14 +54,48 @@ def test_a_read_only_user_can_see_everything_and_ask_the_agent() -> None:
     assert may(READ_ONLY, Action.ASK_AGENT).allowed is True
 
 
-def test_an_engineer_may_run_and_retry_but_not_approve() -> None:
+def test_an_engineer_builds_and_an_operator_runs() -> None:
     """ "Separate create, approve, publish and operate rights" — the MVP's
-    segregation requirement. The person who builds a feed does not sign it
-    off."""
-    assert may(ENGINEER, Action.RUN_PIPELINE).allowed is True
-    assert may(ENGINEER, Action.RETRY_BATCH).allowed is True
+    segregation requirement, completed by CF-V2-E12-03's eighth role. Wave 0
+    parked run/retry on the engineer because nobody else existed to hold them;
+    the operator exists now, so the engineer builds and the operator runs —
+    and neither approves."""
+    assert may(OPERATOR, Action.RUN_PIPELINE).allowed is True
+    assert may(OPERATOR, Action.RETRY_BATCH).allowed is True
+    assert may(ENGINEER, Action.RUN_PIPELINE).allowed is False
+    assert may(ENGINEER, Action.RETRY_BATCH).allowed is False
     assert may(ENGINEER, Action.APPROVE).allowed is False
     assert may(ENGINEER, Action.PUBLISH).allowed is False
+    assert may(OPERATOR, Action.APPROVE).allowed is False
+    assert may(OPERATOR, Action.PUBLISH).allowed is False
+
+
+def test_an_operator_operates_and_cannot_author_what_they_operate() -> None:
+    """The mirror of the engineer's segregation: the person who reruns a feed
+    must not be able to rewrite the mapping whose damage they are rerunning
+    around. CF-V2-E8-04's recovery toolkit and E12-03's bookkeeping belong to
+    the operator; authoring stays refused."""
+    for allowed in (
+        Action.REPROCESS,
+        Action.BACKDATE,
+        Action.PAUSE_FEED,
+        Action.ACKNOWLEDGE,
+        Action.ASSIGN,
+        Action.CERTIFY_EXPORT,
+    ):
+        assert may(OPERATOR, allowed).allowed is True, allowed
+    for refused in (Action.CREATE_FEED, Action.EDIT_FEED, Action.SUBMIT_FOR_REVIEW):
+        assert may(OPERATOR, refused).allowed is False, refused
+
+
+def test_only_a_steward_may_waive_a_variance() -> None:
+    """CF-V2-E13-03 — the waiver is the most consequential button in the wave,
+    and it belongs to the role that answers for data quality. The operator who
+    found the variance and the engineer who caused it are both refused."""
+    assert may(STEWARD, Action.WAIVE_VARIANCE).allowed is True
+    assert may(OPERATOR, Action.WAIVE_VARIANCE).allowed is False
+    assert may(ENGINEER, Action.WAIVE_VARIANCE).allowed is False
+    assert may(ADMIN, Action.WAIVE_VARIANCE).allowed is False
 
 
 def test_an_administrator_manages_access_and_cannot_approve_either() -> None:

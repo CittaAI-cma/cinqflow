@@ -58,6 +58,28 @@ class Action(StrEnum):
     RETRY_BATCH = "retry_batch"
     MANAGE_USERS = "manage_users"
     ASK_AGENT = "ask_agent"
+    # ── Wave 2 (CF-V2-E12-03 / E8-04 / E13-03 / E13-04) ──────────────────────
+    #: CF-V1-E3-04's pause, reached from the operations surface. Its own action
+    #: rather than RUN_PIPELINE, because stopping a feed and running one are
+    #: different consequences and CF-V4-E2-02's scoped matrix will want to
+    #: grant them separately.
+    PAUSE_FEED = "pause_feed"
+    #: "I have seen this." Bookkeeping about who is handling something — it
+    #: never touches data, but it changes what the platform knows, so it is
+    #: still refused to Read-Only.
+    ACKNOWLEDGE = "acknowledge"
+    ASSIGN = "assign"
+    #: CF-V2-E8-04 — the recovery toolkit. Distinct from RETRY_BATCH because a
+    #: reprocess re-enters data that already loaded once, which is a larger
+    #: consequence than re-running something that stopped.
+    REPROCESS = "reprocess"
+    BACKDATE = "backdate"
+    #: CF-V2-E13-04. The verdict itself derives and needs only VIEW; exporting
+    #: the evidence document is handing it to a payer, which is an act.
+    CERTIFY_EXPORT = "certify_export"
+    #: CF-V2-E13-03 — steward only. The waiver is the most consequential
+    #: button in the wave: it lets a batch certify around a known variance.
+    WAIVE_VARIANCE = "waive_variance"
 
     @property
     def changes_things(self) -> bool:
@@ -72,9 +94,12 @@ class Action(StrEnum):
 # never here. This table says what a role may attempt; the router says where.
 _PERMITTED: dict[Role, frozenset[Action]] = {
     Role.READ_ONLY: frozenset({Action.VIEW, Action.ASK_AGENT}),
-    # The engineer BUILDS and OPERATES. Note what is still absent, unchanged
-    # from Wave 0: approve and publish. "Separate create, approve, publish and
-    # operate rights" — the person who builds a feed does not sign it off.
+    # The engineer BUILDS. Wave 0 also let them operate — run/retry sat here
+    # because nobody else existed to hold them — and Wave 2's eighth role is
+    # where they moved. Note what is still absent, unchanged from Wave 0:
+    # approve and publish. "Separate create, approve, publish and operate
+    # rights" — the person who builds a feed does not sign it off, and now
+    # does not rerun it either.
     Role.ENGINEER: frozenset(
         {
             Action.VIEW,
@@ -82,9 +107,26 @@ _PERMITTED: dict[Role, frozenset[Action]] = {
             Action.CREATE_FEED,
             Action.EDIT_FEED,
             Action.SUBMIT_FOR_REVIEW,
+            Action.CONFIGURE_RULE_POLICY,
+        }
+    ),
+    # Wave 2 (CF-V2-E12-03): the operator RUNS. Everything here is about
+    # batches that exist and feeds that are live — nothing here can author,
+    # submit or approve, so the person rerunning a damaged feed cannot also
+    # rewrite the mapping that damaged it. WAIVE_VARIANCE is deliberately
+    # absent: finding a variance and forgiving one are different people.
+    Role.OPERATIONS: frozenset(
+        {
+            Action.VIEW,
+            Action.ASK_AGENT,
             Action.RUN_PIPELINE,
             Action.RETRY_BATCH,
-            Action.CONFIGURE_RULE_POLICY,
+            Action.REPROCESS,
+            Action.BACKDATE,
+            Action.PAUSE_FEED,
+            Action.ACKNOWLEDGE,
+            Action.ASSIGN,
+            Action.CERTIFY_EXPORT,
         }
     ),
     # Plate 14's `platform_engineer` — the technical approver, and a DIFFERENT
@@ -116,6 +158,14 @@ _PERMITTED: dict[Role, frozenset[Action]] = {
             # what this still does not admit — the steward cannot author the
             # rule whose consequence they are setting.
             Action.CONFIGURE_RULE_POLICY,
+            # CF-V2-E13-03: the steward — and only the steward — may waive a
+            # variance. The operator who found it and the engineer who caused
+            # it are both refused, and a critical variance refuses everyone
+            # (that second refusal lives in core/variance, on the type).
+            Action.WAIVE_VARIANCE,
+            # CF-V2-E13-04: the steward may hand the evidence to a payer too —
+            # certification is their answerability, not only operations'.
+            Action.CERTIFY_EXPORT,
         }
     ),
     Role.BUSINESS_APPROVER: frozenset(

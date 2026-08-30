@@ -22,13 +22,14 @@ may change three things and no fourth:
 It may never change the words, the objects, or the depth. Everyone gets the
 same seven status words and the same drawer.
 
-WAVE 0 HAS THREE ROLES. Engineer, Read-Only and the administrator who assigns
-them — `core/model/identity.Role`. The seven-role matrix (Business Analyst,
-Data Steward, Operations, Approver) is CF-V4-E2-02. This table is deliberately
-shaped so that story WIDENS it rather than replacing it, exactly as
-`core/security._PERMITTED` is shaped. Inventing those four roles here to make
-the table look complete would put personas in the UI that the platform cannot
-authenticate, authorize or test.
+EVERY ROLE THE PLATFORM CAN AUTHENTICATE HAS A ROW. Wave 0 shipped three;
+Wave 1 added the four approval-lane roles (ADR-0022); Wave 2 added OPERATIONS
+(CF-V2-E12-03) and repaid the ADR-0021 debt by ranking all eight — a role
+falling through to `_FALLBACK` was exactly the accidental else-branch that ADR
+was written to abolish. What remains for CF-V4-E2-02 is the SCOPED permission
+matrix, not this table. A row may name slots from a later wave: the `active`
+filter keeps them absent until their wave activates, so ranking is declared
+once and never rewritten per wave.
 
 An absent slot renders NOTHING. Never a stub, never a placeholder, never an
 empty card that teaches a user the platform is broken — the same rule
@@ -127,9 +128,6 @@ SLOTS: dict[HomeSlot, Slot] = {
 
 #: Rank per role. ORDER IS THE WHOLE POINT — this is the ranking half of the
 #: merge rule, so the list is ordered, not a set.
-#:
-#: CF-V4-E2-02 adds BUSINESS_ANALYST, DATA_STEWARD, OPERATIONS and APPROVER
-#: rows here. It does not change the shape, and it does not touch the UI.
 _HOME: dict[Role, tuple[HomeSlot, ...]] = {
     # The engineer opens this screen to find the most expensive thing to
     # ignore. Harm first, inventory afterwards.
@@ -161,6 +159,42 @@ _HOME: dict[Role, tuple[HomeSlot, ...]] = {
         HomeSlot.REFUSALS_TODAY,
         HomeSlot.ACCESS_CHANGES,
         HomeSlot.RUNS,
+    ),
+    # The operator's morning question, in the order the exit demo asks it:
+    # what needs me, what arrived, can I trust today, and everything running.
+    # TRUST_TODAY activates with its wave; the row is complete now.
+    Role.OPERATIONS: (
+        HomeSlot.NEEDS_YOU,
+        HomeSlot.ARRIVED,
+        HomeSlot.TRUST_TODAY,
+        HomeSlot.RUNS,
+    ),
+    # The BA authors: what needs her (drafts bounced, reviews returned), the
+    # feeds she owns, what arrived to work from, and the fastest question.
+    Role.BUSINESS_ANALYST: (
+        HomeSlot.NEEDS_YOU,
+        HomeSlot.FEEDS,
+        HomeSlot.ARRIVED,
+        HomeSlot.ASK_SHORTCUT,
+    ),
+    # The three approver roles LEAD with the decision queue — an approver's
+    # home that leads with anything else is a queue that ages invisibly.
+    Role.DATA_STEWARD: (
+        HomeSlot.AWAITING_DECISION,
+        HomeSlot.NEEDS_YOU,
+        HomeSlot.REFUSALS_TODAY,
+        HomeSlot.RUNS,
+    ),
+    Role.PLATFORM_ENGINEER: (
+        HomeSlot.AWAITING_DECISION,
+        HomeSlot.RUNS,
+        HomeSlot.REFUSALS_TODAY,
+        HomeSlot.FEEDS,
+    ),
+    Role.BUSINESS_APPROVER: (
+        HomeSlot.AWAITING_DECISION,
+        HomeSlot.TRUST_TODAY,
+        HomeSlot.ARRIVED,
     ),
 }
 

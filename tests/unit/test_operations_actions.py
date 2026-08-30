@@ -435,6 +435,20 @@ def test_every_action_has_a_row_in_the_allowed_state_matrix() -> None:
     assert set(ALLOWED_STATES) == set(OpsAction)
 
 
+def test_every_action_names_the_permission_it_costs() -> None:
+    """CF-V2-E12-03 — the third table an action pays into. An action missing
+    from PERMISSION_FOR would be one the server cannot gate, which is how an
+    eleventh action arrives ungated rather than as a text box."""
+    from cinqflow.core.operations.actions import PERMISSION_FOR
+
+    assert set(PERMISSION_FOR) == set(OpsAction)
+    for action, permission in PERMISSION_FOR.items():
+        assert permission.changes_things, (
+            f"{action.value} is gated on {permission.value}, which Read-Only holds — "
+            "every operations action must cost a permission that changes things"
+        )
+
+
 def test_the_recovery_actions_all_reload_data_and_all_need_an_approval() -> None:
     recoveries = {
         OpsAction.RESTART_FROM_STAGE,

@@ -470,6 +470,9 @@ def test_every_cloned_object_leaves_an_audit_row(client: TestClient, store: MemM
 
 STEWARD = "dev-steward@cinqcare.test"
 ENGINEER = "dev-engineer@cinqcare.test"
+# CF-V2-E12-03: pausing is the operator's lever now — PAUSE_FEED moved to the
+# eighth role along with run/retry.
+OPERATOR = "dev-operations@cinqcare.test"
 
 
 def test_an_illegal_transition_is_refused_and_recorded(
@@ -516,7 +519,7 @@ def test_pausing_a_feed_stops_new_work_and_says_who_and_why(client: TestClient) 
     paused = client.post(
         f"/api/feeds/{FEED_ID}/pause",
         json={"reason": "Fidelis are re-cutting the extract after a plan merge"},
-        headers=_as(ENGINEER),
+        headers=_as(OPERATOR),
     )
     assert paused.status_code == 200, paused.text
     body = paused.json()
@@ -524,14 +527,14 @@ def test_pausing_a_feed_stops_new_work_and_says_who_and_why(client: TestClient) 
     assert body["is_paused"] is True
     assert body["may_start_new_work"] is False
     assert body["affects_work_already_running"] is False
-    assert body["paused_by"] == ENGINEER
+    assert body["paused_by"] == OPERATOR
     assert "plan merge" in body["explanation"]
     assert "does not abandon work in progress" in body["explanation"]
 
 
 def test_pausing_needs_a_reason(client: TestClient) -> None:
     client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
-    refused = client.post(f"/api/feeds/{FEED_ID}/pause", json={"reason": ""}, headers=_as(ENGINEER))
+    refused = client.post(f"/api/feeds/{FEED_ID}/pause", json={"reason": ""}, headers=_as(OPERATOR))
     assert refused.status_code == 422
 
 
@@ -542,7 +545,7 @@ def test_a_pause_does_not_change_the_lifecycle_state(client: TestClient) -> None
     client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
     before = client.get(f"/api/feeds/{FEED_ID}", headers=_as(BA)).json()["lifecycle_state"]
     client.post(
-        f"/api/feeds/{FEED_ID}/pause", json={"reason": "payer migration"}, headers=_as(ENGINEER)
+        f"/api/feeds/{FEED_ID}/pause", json={"reason": "payer migration"}, headers=_as(OPERATOR)
     )
     after = client.get(f"/api/feeds/{FEED_ID}", headers=_as(BA)).json()["lifecycle_state"]
     assert before == after
@@ -553,9 +556,9 @@ def test_resuming_needs_no_approver(client: TestClient) -> None:
     without finding a steward."""
     client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
     client.post(
-        f"/api/feeds/{FEED_ID}/pause", json={"reason": "payer migration"}, headers=_as(ENGINEER)
+        f"/api/feeds/{FEED_ID}/pause", json={"reason": "payer migration"}, headers=_as(OPERATOR)
     )
-    resumed = client.post(f"/api/feeds/{FEED_ID}/resume", json={}, headers=_as(ENGINEER))
+    resumed = client.post(f"/api/feeds/{FEED_ID}/resume", json={}, headers=_as(OPERATOR))
 
     assert resumed.status_code == 200, resumed.text
     assert resumed.json()["is_paused"] is False
@@ -567,14 +570,14 @@ def test_the_pause_ledger_keeps_both_events(client: TestClient) -> None:
     days and a feed never paused must not look identical afterwards."""
     client.post("/api/feeds", json=FULL_FEED, headers=_as(BA))
     client.post(
-        f"/api/feeds/{FEED_ID}/pause", json={"reason": "payer migration"}, headers=_as(ENGINEER)
+        f"/api/feeds/{FEED_ID}/pause", json={"reason": "payer migration"}, headers=_as(OPERATOR)
     )
-    client.post(f"/api/feeds/{FEED_ID}/resume", json={}, headers=_as(ENGINEER))
+    client.post(f"/api/feeds/{FEED_ID}/resume", json={}, headers=_as(OPERATOR))
 
     ledger = client.get(f"/api/feeds/{FEED_ID}/suspensions", headers=_as(BA)).json()
     assert [row["action"] for row in ledger] == ["resumed", "paused"]
     assert ledger[1]["reason"] == "payer migration"
-    assert ledger[1]["actor_subject"] == ENGINEER
+    assert ledger[1]["actor_subject"] == OPERATOR
 
 
 def test_a_read_only_user_may_not_pause_a_feed(client: TestClient) -> None:

@@ -45,6 +45,14 @@ users:
     roles: [business_approver]
     scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
 
+  # Wave 2 (CF-V2-E12-03): the eighth role. The operator runs what the
+  # engineer built — run/retry moved here, off the engineer, in the same
+  # commit that added the role.
+  - subject: "dev-operations@cinqcare.test"
+    name: "Tomás Rivera"
+    roles: [operations]
+    scopes: { domains: ["*"], feeds: ["*"], environments: [dev] }
+
   # The exception case CF-V0-E2-01 requires: a real person in NO CINQFLOW group.
   # They must reach a clear "no access assigned" page — never a broken or empty
   # application — and the attempt must be logged.
