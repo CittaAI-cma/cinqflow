@@ -77,5 +77,6 @@ module = [
     "presidio_analyzer.*",
     "presidio_anonymizer.*",
     "croniter.*",
+    "langgraph.*",
 ]
 ignore_missing_imports = true

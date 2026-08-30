@@ -37,7 +37,7 @@ pins:
   notification:   { adapter: none }
   observability:  { adapter: none }
   http_edge:      { adapter: none }
-  agent_runtime:  { adapter: inproc }
+  agent_runtime:  { adapter: inproc, tracing: off }
 
 landing:
   layout: "{domain}/{source_system}/{feed}/{folder}/{business_date}"

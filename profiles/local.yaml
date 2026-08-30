@@ -65,7 +65,7 @@ pins:
   notification:   { adapter: slack-webhook, webhook: "secret://slack-webhook" }  # approvals only in W1
   observability:  { adapter: none }
   http_edge:      { adapter: none }           # uvicorn runs api/dev.py directly, outside this pin
-  agent_runtime:  { adapter: inproc }         # langgraph seat, unpopulated until Wave 2
+  agent_runtime:  { adapter: inproc, tracing: off }  # langgraph fitted (ADR-0018); still not the default
 
 # Landing folder layout is a platform constant, not an environment difference:
 #   /<domain>/<source_system>/<feed>/{incoming|processed|rejected|archive}/<business_date>/

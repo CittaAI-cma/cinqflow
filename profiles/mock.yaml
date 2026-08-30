@@ -34,7 +34,7 @@ pins:
   notification:   { adapter: mock }
   observability:  { adapter: mock }
   http_edge:      { adapter: mock }
-  agent_runtime:  { adapter: inproc }
+  agent_runtime:  { adapter: inproc, tracing: off }
 
 landing:
   layout: "{domain}/{source_system}/{feed}/{folder}/{business_date}"

@@ -169,12 +169,25 @@ def _law_checks() -> list[Check]:
     return checks
 
 
+def _egress_check() -> Check:
+    """ADR-0018's telemetry kill-switch, checked rather than trusted.
+
+    A local import: `conformance.checks.egress` imports `Check`/`Verdict` FROM
+    this module, so importing it at module scope here would be a real cycle.
+    Deferred exactly like `_law_checks()`'s own imports, for the same reason.
+    """
+    from conformance.checks.egress import check_egress
+
+    return check_egress()
+
+
 def run(profile: Profile | None = None) -> list[Check]:
     checks: list[Check] = []
     for group, pins in PIN_GROUPS.items():
         _ = group
         checks.extend(check_pin(pin, profile) for pin in pins)
     checks.extend(_law_checks())
+    checks.append(_egress_check())
     return checks
 
 
@@ -219,6 +232,7 @@ def _register_adapters() -> None:
     happened to be imported would grade a different socket depending on how it
     was invoked.
     """
+    import cinqflow.adapters.langgraph
     import cinqflow.adapters.local
     import cinqflow.adapters.mock
     import cinqflow.adapters.openai_compatible

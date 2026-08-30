@@ -31,11 +31,19 @@ SDK_HOLDERS = frozenset({"adapters/openai_compatible/llm.py"})
 
 #: Reading the environment is the secrets adapter's job and the Postgres
 #: adapter's DSN resolution. Everything else receives values it was given.
+#:
+#: `adapters/langgraph/agent_runtime.py` WRITES `os.environ` rather than
+#: reading it — `_silence_telemetry()`, ADR-0018. That is a narrower act than
+#: it looks: langsmith/langchain sniff their OWN env vars at import time,
+#: before the connection profile is even loaded, so pinning them off through
+#: the profile/secrets pin would run too late to matter. Widening this list is
+#: a deliberate act with a review attached, which is the point of a list.
 ENV_READERS = frozenset(
     {
         "adapters/mock/secrets.py",
         "adapters/local/secrets.py",
         "adapters/local/pg_control.py",
+        "adapters/langgraph/agent_runtime.py",
     }
 )
 
