@@ -16,7 +16,6 @@ Lane 3's ≥95% precision gate, on the seeded failure library.
 from __future__ import annotations
 
 import ast
-import inspect
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -52,6 +51,7 @@ from cinqflow.intelligence.gateway import LlmGateway
 from cinqflow.intelligence.tools import ToolContext
 from cinqflow.ports.control_tables import BatchControl, ErrorRecord
 from cinqflow.workers import incidents as incidents_worker
+from tests.support.ast_checks import assert_deterministic_nodes
 
 pytestmark = [pytest.mark.contract, pytest.mark.lane1]
 
@@ -202,24 +202,12 @@ def _responder(narrate: str, draft: str):  # type: ignore[no-untyped-def]
 
 
 def test_the_deterministic_nodes_never_reach_the_gateway() -> None:
-    """Asserted by walking the AST, not by reading the code — the same idiom
-    `mapping_suggestion`/`rule_authoring`/`schema_inference` use for their own
-    ground/assemble nodes."""
+    """Factored into `tests.support.ast_checks` — see
+    `test_alert_enrichment_agent.py` for the shared helper this now calls
+    instead of the hand-rolled, zero-hop-only copy it used to carry."""
     from cinqflow.intelligence.agents import fingerprint_match as wired
 
-    tree = ast.parse(inspect.getsource(wired))
-    bodies = {
-        node.name: node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name in {"_gather", "_retrieve"}
-    }
-    assert set(bodies) == {"_gather", "_retrieve"}, "both deterministic nodes must exist"
-
-    for name, node in bodies.items():
-        attributes = {child.attr for child in ast.walk(node) if isinstance(child, ast.Attribute)}
-        assert "llm" not in attributes, f"{name} reaches the gateway"
-        assert "complete" not in attributes, f"{name} calls a model"
-
+    assert_deterministic_nodes(wired, {"_gather", "_retrieve"})
     assert {NODE_GATHER, NODE_RETRIEVE} == DETERMINISTIC_NODES
 
 

@@ -13,8 +13,6 @@ The re-derivation gate against the client's 110 legacy rules is in
 
 from __future__ import annotations
 
-import ast
-import inspect
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -36,6 +34,7 @@ from cinqflow.core.rules import Check, CheckKind, RuleSpec
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.intelligence.agents.rule_authoring import RuleAuthoringAgent
 from cinqflow.intelligence.gateway import LlmGateway
+from tests.support.ast_checks import assert_deterministic_nodes
 
 pytestmark = [pytest.mark.contract, pytest.mark.lane1]
 
@@ -209,19 +208,12 @@ def test_the_bas_sentence_travels_inside_the_untrusted_fence(store: MemMetadataD
 
 
 def test_the_deterministic_nodes_never_reach_the_gateway() -> None:
+    """Factored into `tests.support.ast_checks` — see
+    `test_alert_enrichment_agent.py` for the shared helper this now calls
+    instead of the hand-rolled, zero-hop-only copy it used to carry."""
     from cinqflow.intelligence.agents import rule_authoring as wired
 
-    tree = ast.parse(inspect.getsource(wired))
-    bodies = {
-        node.name: node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name in {"_ground", "_assemble"}
-    }
-    assert set(bodies) == {"_ground", "_assemble"}
-    for name, node in bodies.items():
-        attributes = {child.attr for child in ast.walk(node) if isinstance(child, ast.Attribute)}
-        assert "llm" not in attributes, f"{name} reaches the gateway"
-        assert "complete" not in attributes, f"{name} calls a model"
+    assert_deterministic_nodes(wired, {"_ground", "_assemble"})
 
 
 # ── the platform spells the column ──────────────────────────────────────────

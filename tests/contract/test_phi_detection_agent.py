@@ -16,8 +16,6 @@ against the client's own 171-term glossary.
 
 from __future__ import annotations
 
-import ast
-import inspect
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -44,6 +42,7 @@ from cinqflow.core.proposals import ProposalState
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent, RecallGateFailedError
 from cinqflow.intelligence.gateway import LlmGateway
+from tests.support.ast_checks import assert_deterministic_nodes
 
 pytestmark = pytest.mark.contract
 
@@ -215,21 +214,14 @@ def test_the_deterministic_nodes_reach_no_model(store) -> None:  # type: ignore[
     """Asserted on the AST, not on a docstring.
 
     `_classify` and `_confirm` may reach the scrubber pin — a local NER model
-    is not the gateway — but neither may reach `self.llm`.
+    is not the gateway — but neither may reach `self.llm`. Factored into
+    `tests.support.ast_checks` — see `test_alert_enrichment_agent.py` for the
+    shared helper this now calls instead of the hand-rolled, zero-hop-only
+    copy it used to carry.
     """
     from cinqflow.intelligence.agents import phi_detection as wired
 
-    tree = ast.parse(inspect.getsource(wired))
-    bodies = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name in {"_classify", "_confirm"}
-    ]
-    assert len(bodies) == 2, "both deterministic nodes must exist under these names"
-    for node in bodies:
-        attributes = {child.attr for child in ast.walk(node) if isinstance(child, ast.Attribute)}
-        assert "llm" not in attributes, f"{node.name} reaches the gateway"
-        assert "complete" not in attributes, f"{node.name} calls a model"
+    assert_deterministic_nodes(wired, {"_classify", "_confirm"})
 
 
 # ── the refusals ─────────────────────────────────────────────────────────────
