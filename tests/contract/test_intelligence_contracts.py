@@ -1,15 +1,19 @@
-"""The ONE contract suite for the intelligence-plane pins.
+"""The ONE contract suite for three of the intelligence-plane pins.
 
-    llm · phi_scrub · vector · agent_runtime
+    llm · phi_scrub · agent_runtime
 
-These four carry most of the platform's refusals, and the refusals are what
+(`vector` — the fourth — has its own dedicated suite as of W1-29,
+`test_vector_contract.py`: its real adapter's `supersede` verb and the
+transaction discipline underneath both `index()` and `supersede()` outgrew a
+shared file the moment they needed real-Postgres fault injection.)
+
+These three carry most of the platform's refusals, and the refusals are what
 make the plane safe rather than merely capable. So the suite is written mostly
 as negatives: the attempt is made, and the refusal is asserted.
 
     "no model credentials exist outside the LLM gateway"
     "PHI is scrubbed before ANY prompt; the scrub-then-prompt ordering has its
      own test"
-    "retrieval applies the caller's RBAC scopes BEFORE any similarity computation"
     "no evaluation threshold may be claimed from Lane 1 (mock) or Lane 2 (replay)"
     — docs/architecture/INVARIANTS.md
 """
@@ -28,7 +32,6 @@ from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
-from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.model.agent_action import ActionOutcome
 from cinqflow.core.model.governed import Actor, LifecycleState
@@ -45,7 +48,6 @@ from cinqflow.ports.llm import (
     UndeclaredEndpointError,
 )
 from cinqflow.ports.phi_scrub import PhiScrubPort
-from cinqflow.ports.vector import Chunk, VectorPort
 
 from .conftest import adapters_for
 
@@ -455,50 +457,6 @@ def test_clean_text_is_left_exactly_alone(scrubber: PhiScrubPort) -> None:
     result = scrubber.scrub(clean)
     assert result.text == clean
     assert result.was_scrubbed is False
-
-
-# ── vector ───────────────────────────────────────────────────────────────────
-@pytest.fixture(params=adapters_for("vector"))
-def vector(request: pytest.FixtureRequest, make: Callable[..., Any]) -> VectorPort:
-    return make(request.param)
-
-
-def test_wave_0_provisions_the_store_and_leaves_it_empty(vector: VectorPort) -> None:
-    """ "pgvector stays provisioned and empty, exactly as specified."
-
-    The knowledge plane is Wave 1. Provisioning now and asserting empty is the
-    honest way to say the seat exists and the capability does not.
-    """
-    assert vector.count() == 0
-
-
-def test_scope_filters_the_candidate_set_before_similarity(vector: VectorPort) -> None:
-    """ "Apply a scope filter to results rather than to the query" is a
-    documented don't. Filtering results is the version that leaks: the row was
-    fetched, and every future path that forgets the filter exposes it."""
-    in_scope = Chunk(
-        chunk_id="c1",
-        text="Fidelis downstate roster",
-        citation=CitationId(kind=CitationKind.TERM, subject="roster"),
-        metadata={"domain": "enrollments"},
-    )
-    out_of_scope = Chunk(
-        chunk_id="c2",
-        text="Fidelis downstate roster",
-        citation=CitationId(kind=CitationKind.TERM, subject="roster"),
-        metadata={"domain": "claims"},
-    )
-    vector.index([in_scope, out_of_scope], [(1.0, 0.0), (1.0, 0.0)])
-
-    found = vector.retrieve((1.0, 0.0), scope_filter={"domain": "enrollments"})
-    assert [s.chunk.chunk_id for s in found] == ["c1"]
-
-
-def test_a_chunk_cannot_exist_without_a_citation() -> None:
-    """A chunk that cannot be cited cannot ground a claim, and an ungrounded
-    claim is a defect class."""
-    with pytest.raises(TypeError):
-        Chunk(chunk_id="c", text="t")  # type: ignore[call-arg]
 
 
 # ── agent_runtime ────────────────────────────────────────────────────────────
