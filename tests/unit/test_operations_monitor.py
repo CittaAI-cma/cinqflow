@@ -23,6 +23,7 @@ from cinqflow.core.model.vocabulary import BatchState, ErrorCategory, Layer, Sta
 from cinqflow.core.operations.monitor import (
     CASCADE_WINDOW,
     BatchFilter,
+    ErrorRole,
     SlaState,
     build_batch_view,
     search,
@@ -91,6 +92,7 @@ def error(
     category: ErrorCategory = ErrorCategory.SYSTEM,
     rule_id: str | None = None,
     message: str = "",
+    record_key: str | None = None,
 ) -> ErrorRecord:
     return ErrorRecord(
         error_id_hash=digest,
@@ -100,6 +102,7 @@ def error(
         message=message or f"error {digest}",
         occurred_ts=FAILED_AT + timedelta(seconds=seconds),
         rule_id=rule_id,
+        record_key=record_key,
     )
 
 
@@ -365,3 +368,55 @@ def test_this_module_offers_no_mutation() -> None:
     forbidden = {"retry", "pause", "resume", "acknowledge", "assign", "execute", "cancel"}
     exported = {name for name in dir(module) if not name.startswith("_")}
     assert not (exported & forbidden)
+
+
+# ── the per-record pile, kept out of both other piles ────────────────────────
+def test_a_per_record_failure_is_its_own_finding_not_fallout() -> None:
+    """214 quarantine reasons filed as "consequences of the first" is 214
+    findings an operator has been told not to read."""
+    cascade = separate_cascade(
+        [
+            error("h1", seconds=0, layer=Layer.BRONZE, message="required key absent"),
+            error("h2", seconds=2, layer=Layer.SILVER_RAW, message="upstream produced no output"),
+            error("h3", seconds=3, layer=Layer.SILVER_RAW, record_key="M-88213"),
+        ]
+    )
+    roles = {view.error_id_hash: view.role for view in cascade.all}
+    assert roles == {
+        "h1": ErrorRole.ACTIONABLE,
+        "h2": ErrorRole.CONSEQUENCE,
+        "h3": ErrorRole.INDEPENDENT,
+    }
+    assert len(cascade.independent) == 1
+    assert len(cascade.all) == 3
+
+
+def test_every_quarantined_row_stays_visible_however_many_there_are() -> None:
+    rows = [error("root", seconds=0, message="mapping produced an unparseable date")]
+    rows += [error(f"q{n}", seconds=1, record_key=f"M-{n}") for n in range(214)]
+
+    cascade = separate_cascade(rows)
+
+    assert len(cascade.independent) == 214
+    assert cascade.first is not None
+    assert cascade.first.error_id_hash == "root"
+    # Not one of them was absorbed into "safe to ignore".
+    assert cascade.consequences == ()
+
+
+def test_the_first_error_is_actionable_even_when_it_names_a_record() -> None:
+    """A batch whose every error is per-record still needs a root for the
+    incident to be about."""
+    cascade = separate_cascade([error("only", seconds=0, record_key="M-1")])
+    assert cascade.first is not None
+    assert cascade.first.role is ErrorRole.ACTIONABLE
+
+
+def test_is_consequence_still_answers_the_question_a_screen_asks() -> None:
+    cascade = separate_cascade(
+        [
+            error("h1", seconds=0, layer=Layer.BRONZE),
+            error("h2", seconds=2, layer=Layer.SILVER_RAW),
+        ]
+    )
+    assert [view.is_consequence for view in cascade.all] == [False, True]

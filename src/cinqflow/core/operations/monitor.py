@@ -127,6 +127,8 @@ class ErrorLike(Protocol):
     def occurred_ts(self) -> datetime: ...
     @property
     def rule_id(self) -> str | None: ...
+    @property
+    def record_key(self) -> str | None: ...
 
 
 # ── one stage ────────────────────────────────────────────────────────────────
@@ -184,9 +186,28 @@ class StageView:
 
 
 # ── errors, and which of them are somebody's problem ─────────────────────────
+@unique
+class ErrorRole(StrEnum):
+    """Why this error is in the incident. THREE, and the third is the one that
+    stops a platform hiding a second problem behind the first.
+
+    CONSEQUENCE is not "less important" — it is "do not go and fix this one".
+    Naming it is what turns 'three errors logged' into 'one thing to do'.
+
+    INDEPENDENT is a per-record failure: it carries its own `record_key`, so it
+    is a fact about one member's data rather than fallout from the systemic
+    failure above it. Burying 214 quarantine reasons under one root cause is
+    how the real second problem goes unnoticed for a month.
+    """
+
+    ACTIONABLE = "actionable"
+    CONSEQUENCE = "consequence"
+    INDEPENDENT = "independent"
+
+
 @dataclass(frozen=True)
 class ErrorView:
-    """One `error_log` row, with whether it is a cause or a consequence."""
+    """One `error_log` row, with its part in the cascade."""
 
     error_id_hash: str
     stage: Layer
@@ -194,10 +215,17 @@ class ErrorView:
     message: str
     occurred_ts: datetime
     rule_id: str | None = None
-    #: True when this error is fallout from an earlier one in the same batch.
-    is_consequence: bool = False
+    record_key: str | None = None
+    #: What this error IS, relative to the others in its batch.
+    role: ErrorRole = ErrorRole.ACTIONABLE
     #: The error this one followed from, when it is a consequence.
     caused_by: str | None = None
+
+    @property
+    def is_consequence(self) -> bool:
+        """Kept as a property because a screen asks this question directly, and
+        because `role is CONSEQUENCE` reads worse at every call site."""
+        return self.role is ErrorRole.CONSEQUENCE
 
     @property
     def citation(self) -> CitationId:
@@ -217,14 +245,24 @@ class Cascade:
     `actionable` is what a person works on. `consequences` is kept and shown —
     not hidden — because an operator who sees three errors on the batch and two
     on the incident will go looking for the missing one.
+
+    `independent` is the per-record pile: real findings, each about one
+    member's data, kept out of both the other two so that neither "one thing to
+    fix" nor "safe to ignore" absorbs them.
     """
 
     actionable: tuple[ErrorView, ...] = ()
     consequences: tuple[ErrorView, ...] = ()
+    independent: tuple[ErrorView, ...] = ()
 
     @property
     def all(self) -> tuple[ErrorView, ...]:
-        return tuple(sorted(self.actionable + self.consequences, key=lambda e: e.occurred_ts))
+        return tuple(
+            sorted(
+                self.actionable + self.consequences + self.independent,
+                key=lambda e: e.occurred_ts,
+            )
+        )
 
     @property
     def first(self) -> ErrorView | None:
@@ -267,14 +305,39 @@ def separate_cascade(errors: Sequence[ErrorLike], *, window: timedelta = CASCADE
     its own place at the top of the list. Over-grouping is the dangerous
     direction: an operator told "two of these are consequences" stops reading
     them, and a real second fault hidden in that pile is one nobody finds.
+
+    AND A FIFTH CONDITION, WHICH IS ABOUT SCALE RATHER THAN CAUSATION. An error
+    carrying its own `record_key` is a fact about ONE MEMBER'S data — a date
+    that would not parse, an identifier that matched nothing. It is never
+    fallout, however well it fits the four above, because 214 quarantined rows
+    filed as "consequences of the first" is 214 findings an operator has been
+    told not to read. Those become INDEPENDENT: their own facts, listed
+    separately, counted separately.
+
+    The first error in time order stays ACTIONABLE whatever it carries. It is
+    the thing to go and fix, and a batch whose every error is per-record still
+    needs a root for the incident to be about.
     """
     ordered = sorted(errors, key=lambda e: (e.occurred_ts, e.error_id_hash))
     spine = list(Layer)
     actionable: list[ErrorView] = []
     consequences: list[ErrorView] = []
+    independent: list[ErrorView] = []
 
-    for error in ordered:
-        cause = _cause_for(error, actionable, spine=spine, window=window)
+    for position, error in enumerate(ordered):
+        record_key = error.record_key
+        cause = (
+            None
+            if position == 0 or record_key
+            else _cause_for(error, actionable, spine=spine, window=window)
+        )
+        if cause is not None:
+            role = ErrorRole.CONSEQUENCE
+        elif position > 0 and record_key:
+            role = ErrorRole.INDEPENDENT
+        else:
+            role = ErrorRole.ACTIONABLE
+
         view = ErrorView(
             error_id_hash=error.error_id_hash,
             stage=error.stage,
@@ -282,12 +345,23 @@ def separate_cascade(errors: Sequence[ErrorLike], *, window: timedelta = CASCADE
             message=error.message,
             occurred_ts=error.occurred_ts,
             rule_id=error.rule_id,
-            is_consequence=cause is not None,
+            record_key=record_key,
+            role=role,
             caused_by=cause.error_id_hash if cause else None,
         )
-        (consequences if cause else actionable).append(view)
+        match role:
+            case ErrorRole.CONSEQUENCE:
+                consequences.append(view)
+            case ErrorRole.INDEPENDENT:
+                independent.append(view)
+            case ErrorRole.ACTIONABLE:
+                actionable.append(view)
 
-    return Cascade(actionable=tuple(actionable), consequences=tuple(consequences))
+    return Cascade(
+        actionable=tuple(actionable),
+        consequences=tuple(consequences),
+        independent=tuple(independent),
+    )
 
 
 def _cause_for(
