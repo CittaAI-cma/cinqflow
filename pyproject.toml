@@ -31,6 +31,7 @@ markers = [
     "pipeline:   pyramid layer 3 — a golden pipeline: known input, byte-exact output",
     "invariant:  pyramid layer 4 — a platform law, as a property test",
     "evaluation: pyramid layer 5 — an AI eval on held-out goldens",
+    "acceptance: a story's own worked example, in the client's numbers",
     "lane1:      AI lane 1 — scripted mock. Proves machinery. NO credentials.",
     "lane2:      AI lane 2 — recorded cassettes. Proves wiring. NO credentials.",
     "lane3:      AI lane 3 — the real endpoint. The ONLY source of a quality claim.",
