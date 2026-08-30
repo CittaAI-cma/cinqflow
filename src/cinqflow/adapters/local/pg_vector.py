@@ -81,6 +81,29 @@ class PgVectorStore:
                 ),
             )
 
+    def supersede(
+        self,
+        *,
+        retire: Sequence[str],
+        chunks: Sequence[Chunk],
+        vectors: Sequence[tuple[float, ...]],
+    ) -> None:
+        """`index()`'s upsert, then a `DELETE ... WHERE chunk_id = ANY(...)` —
+        the same `Connection`, so both statements land inside whichever
+        transaction the caller already opened around it (`adapters.local
+        .pg_control.commit`'s "everything inside the block is one
+        transaction", the `pg_compute` precedent this mirrors). Index BEFORE
+        retire, for the reason `adapters.mock.vector.ListVector.supersede`
+        states: a failure between the two statements must never leave a
+        guide with ZERO chunks.
+        """
+        self.index(chunks, vectors)
+        if retire:
+            self._db.execute(
+                "DELETE FROM knowledge.chunk WHERE chunk_id = ANY(%s)",
+                (list(retire),),
+            )
+
     def retrieve(
         self, vector: tuple[float, ...], *, limit: int = 10, scope_filter: dict[str, str]
     ) -> Sequence[ScoredChunk]:

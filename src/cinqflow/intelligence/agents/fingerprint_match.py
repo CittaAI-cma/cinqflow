@@ -117,6 +117,16 @@ class DraftedGuide:
                     "remedy": self.guide.remedy.value if self.guide.remedy else None,
                     "is_transient": self.guide.is_transient,
                     "signatures": sorted(self.guide.signatures),
+                    # CF-V1-W1-26. The originating incident's feed — what
+                    # `workers.incidents.recovery_guides` checks at READ time
+                    # to compute `RecoveryGuide.stale`, and what
+                    # `core.knowledge.chunk_runbook` scopes the knowledge
+                    # plane's chunks by. The guide itself answers a
+                    # FINGERPRINT that can recur on other feeds later
+                    # (`_accept_runbook_proposal`'s own note); this records
+                    # only where it was FIRST seen, which is what a staleness
+                    # check about THIS incident's feed needs.
+                    "feed_id": incident.feed_id,
                     "confidence": self.confidence,
                     "rationale": self.rationale,
                     # This record's own grounding — see the class docstring

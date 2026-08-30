@@ -269,6 +269,76 @@ def test_a_new_runbook_version_gets_its_own_chunks_the_old_ones_are_not_silently
     assert vector.count() == 7, "3 chunks from v1 plus 4 from v2 — versions do not collide"
 
 
+# ── CF-V1-W1-26 · atomic supersede: `supersedes=` retires the prior version ──
+
+
+def test_a_new_runbook_version_atomically_supersedes_the_priors_chunks() -> None:
+    """Write the acceptance test FIRST, as the slab's own brief asks: publish
+    v1 (retrievable), publish v2 with `supersedes=v1` — v1's chunks are GONE,
+    v2's are present, and the count never passes through a state with both OR
+    neither. Proven here at the level this environment can actually prove it:
+    ONE method call (`KnowledgeIngestWorker.ingest_runbook` ->
+    `VectorPort.supersede`), so there is no second call between which an
+    external reader could observe a half-done state — see
+    `adapters.mock.vector.ListVector.supersede`'s own index-then-retire
+    ordering for the mock's half of that guarantee, and `pg_vector
+    .PgVectorStore.supersede`'s docstring for what the real adapter still
+    needs (a caller-owned transaction) to make it literal on Postgres too.
+    """
+    worker, _store, vector, _llm = _harness()
+    v1 = _published_runbook()
+    worker.ingest_runbook(v1, run_id="run-9a", caller=CALLER)
+    assert vector.count() == 3
+    v1_ids = {sc.chunk.chunk_id for sc in _all_indexed(vector)}
+
+    v2 = GovernedObject(
+        object_type=ObjectType.RUNBOOK,
+        object_id="RB-1",
+        version=2,
+        lifecycle_state=LifecycleState.PUBLISHED,
+        created_by=STEWARD,
+        created_ts=NOW,
+        body={**v1.body, "steps": [*v1.body["steps"], "A fourth, newly added step."]},
+        approved_by=STEWARD,
+        approved_ts=NOW,
+    )
+    result = worker.ingest_runbook(v2, run_id="run-9b", caller=CALLER, supersedes=v1)
+
+    assert len(result.indexed) == 4
+    assert vector.count() == 4, "v1's three chunks are GONE — never 7 (both), never 0 (neither)"
+    v2_ids = {sc.chunk.chunk_id for sc in _all_indexed(vector)}
+    assert v1_ids.isdisjoint(v2_ids), "v2's ids are freshly content-addressed, not v1's reused"
+    for scored in _all_indexed(vector):
+        assert scored.chunk.metadata["object_version"] == "2"
+
+
+def test_a_supersede_where_every_new_step_is_refused_leaves_the_priors_chunks_alone() -> None:
+    """Never neither: if the NEW version has nothing clean to embed, the OLD
+    version's chunks are the only good answer that exists — retiring them
+    too would turn a partial failure into total data loss."""
+    worker, _store, vector, _llm = _harness()
+    v1 = _published_runbook()
+    worker.ingest_runbook(v1, run_id="run-10a", caller=CALLER)
+    assert vector.count() == 3
+
+    v2 = GovernedObject(
+        object_type=ObjectType.RUNBOOK,
+        object_id="RB-1",
+        version=2,
+        lifecycle_state=LifecycleState.PUBLISHED,
+        created_by=STEWARD,
+        created_ts=NOW,
+        body={**v1.body, "steps": [PHI_SHAPED_TEXT]},
+        approved_by=STEWARD,
+        approved_ts=NOW,
+    )
+    result = worker.ingest_runbook(v2, run_id="run-10b", caller=CALLER, supersedes=v1)
+
+    assert result.indexed == ()
+    assert len(result.refused) == 1
+    assert vector.count() == 3, "v1's chunks are untouched — nothing clean arrived to replace them"
+
+
 # ── scope_filter: required, and honoured on the write side ───────────────────
 
 

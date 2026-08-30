@@ -57,6 +57,33 @@ class VectorPort(Protocol):
         for human review."""
         ...
 
+    def supersede(
+        self,
+        *,
+        retire: Sequence[str],
+        chunks: Sequence[Chunk],
+        vectors: Sequence[tuple[float, ...]],
+    ) -> None:
+        """CF-V1-W1-26. Index the new chunks and retire `retire`'s chunk ids —
+        ONE call, not `index()` then a separate delete.
+
+        A governed object's new version does not edit the old version's
+        chunks in place; it is a NEW set of content-addressed ids
+        (`core.knowledge.chunk_id_for` folds `object_version` into the hash).
+        Superseding therefore means: index the new ids, then remove the old
+        ones — in THAT order, so a caller that never reaches the retire step
+        (an adapter failure between the two writes) leaves BOTH versions
+        retrievable rather than NEITHER. `ADR-0007`'s "Retired deletes its
+        chunks... a rebuildable projection of approved knowledge" applies to a
+        superseded version exactly as it does to a retired object: nothing is
+        lost, because the source (the prior governed object version) still
+        exists and could re-chunk the same ids again.
+
+        `retire=()` makes this equivalent to `index()` — a guide's first
+        publish has nothing to supersede.
+        """
+        ...
+
     def retrieve(
         self, vector: tuple[float, ...], *, limit: int = 10, scope_filter: dict[str, str]
     ) -> Sequence[ScoredChunk]:

@@ -73,11 +73,34 @@ def recovery_guides(metadata: MetadataDbPort) -> tuple[fingerprinting.RecoveryGu
                 OpsAction(obj.body["remedy"]) if obj.body.get("remedy") in set(OpsAction) else None
             ),
             is_transient=bool(obj.body.get("is_transient", False)),
-            stale=bool(obj.body.get("stale", False)),
+            stale=_feed_retired(metadata, obj.body.get("feed_id")),
         )
         for obj in metadata.list(ObjectType.RUNBOOK)
         if obj.lifecycle_state is LifecycleState.PUBLISHED
     )
+
+
+def _feed_retired(metadata: MetadataDbPort, feed_id: object) -> bool:
+    """CF-V1-W1-26 — staleness is a fact computed HERE, at read time, never a
+    field written onto the runbook. A guide's own body records which feed it
+    came from; whether that feed has SINCE retired is a fact about a
+    DIFFERENT object's lifecycle, and re-versioning every runbook every time
+    some feed it references retires would churn a governed object's history
+    for a fact that isn't about that object at all. `mirrors
+    intelligence.tools._feed_retired` — the identical arithmetic the two
+    duplicated `recovery_guides` need, for the layering reason the module
+    note at the top of `intelligence.tools` states.
+
+    A guide with no recorded `feed_id` (hand-authored, or from before
+    CF-V1-W1-26) is never stale — there is nothing to check it against.
+    """
+    if not feed_id:
+        return False
+    try:
+        feed = metadata.get(ObjectType.FEED, str(feed_id))
+    except ObjectNotFoundError:
+        return False
+    return feed.lifecycle_state is LifecycleState.RETIRED
 
 
 def priors_for(

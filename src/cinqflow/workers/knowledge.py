@@ -55,6 +55,15 @@ this worker ask a `VectorPort` "do you already have this id" without a
 similarity query it was never built to answer, and adding one is outside
 this slab's authorised surface (`ports/vector.py` is read, not rebuilt, per
 this story's own brief).
+
+CF-V1-W1-26 ADDS `VectorPort.supersede` — the ONE new verb this slab does
+add, because content-addressing alone does not cover a NEW VERSION: a
+version bump changes `object_version`, which changes every chunk id, so a
+plain re-run of `index()` would leave the prior version's ids sitting in the
+store forever rather than upserting over them. `ingest_runbook`'s
+`supersedes` parameter recovers those old ids (by re-chunking the prior,
+still-Published version — never a delete keyed on anything guessed) and
+retires them in the SAME call that indexes the new ones.
 """
 
 from __future__ import annotations
@@ -113,19 +122,49 @@ class KnowledgeIngestWorker:
         return self._ingest(chunk_incident(incident), run_id=run_id, caller=caller)
 
     def ingest_runbook(
-        self, runbook: GovernedObject, *, run_id: str, caller: Actor
+        self,
+        runbook: GovernedObject,
+        *,
+        run_id: str,
+        caller: Actor,
+        supersedes: GovernedObject | None = None,
     ) -> KnowledgeIngestResult:
         """Chunk -> PHI-verify -> Embed + Index a PUBLISHED runbook's steps.
 
         `chunk_runbook` raises `KnowledgeSourceError` unwrapped for anything
         not Published — ADR-0007's own gate, not repeated here.
+
+        CF-V1-W1-26 · ATOMIC SUPERSEDE. `supersedes`, when given, is the
+        guide_id's immediately PRIOR published version — its steps are
+        re-chunked (never re-read from a cache) purely to recover the exact
+        chunk ids `chunk_id_for` gave them at THEIR embed time, the same
+        content-addressing `ingest_incident`/`ingest_runbook` already lean on
+        for idempotency. Those ids are retired in the SAME `VectorPort
+        .supersede` call that indexes the new version — never a separate
+        `.index()` followed by a separate delete, which is exactly the
+        "delete-then-maybe-fail-to-reindex" shape that could leave a guide
+        with no chunks at all. `supersedes` must itself still be Published
+        (a stored version's lifecycle_state never changes after the fact —
+        see `core.model.governed.GovernedObject.new_version`), or
+        `chunk_runbook` refuses it exactly as it would any other non-
+        Published source.
         """
-        return self._ingest(chunk_runbook(runbook), run_id=run_id, caller=caller)
+        retire = (
+            tuple(candidate.chunk_id for candidate in chunk_runbook(supersedes))
+            if supersedes is not None
+            else ()
+        )
+        return self._ingest(chunk_runbook(runbook), run_id=run_id, caller=caller, retire=retire)
 
     # ── the shared engine ────────────────────────────────────────────────────
 
     def _ingest(
-        self, candidates: Sequence[ChunkCandidate], *, run_id: str, caller: Actor
+        self,
+        candidates: Sequence[ChunkCandidate],
+        *,
+        run_id: str,
+        caller: Actor,
+        retire: Sequence[str] = (),
     ) -> KnowledgeIngestResult:
         now = self._clock()
         verified: list[ChunkCandidate] = []
@@ -153,6 +192,11 @@ class KnowledgeIngestWorker:
             )
 
         if not verified:
+            # CF-V1-W1-26: a supersede that refused EVERY new chunk retires
+            # nothing either — the prior version's chunks are the only clean
+            # copy that exists, and leaving them in place (stale in the
+            # ordinary sense, never absent) beats deleting the last good
+            # answer a guide had.
             return KnowledgeIngestResult(indexed=(), refused=tuple(refused))
 
         # ONE batched call — the same lesson the scrubber taught the mapping
@@ -179,7 +223,10 @@ class KnowledgeIngestWorker:
             for candidate, embedding in zip(verified, embeddings, strict=True)
         )
         vectors = tuple(embedding.vector for embedding in embeddings)
-        self._vector.index(chunks, vectors)
+        if retire:
+            self._vector.supersede(retire=retire, chunks=chunks, vectors=vectors)
+        else:
+            self._vector.index(chunks, vectors)
 
         return KnowledgeIngestResult(
             indexed=tuple(candidate.citation for candidate in verified),

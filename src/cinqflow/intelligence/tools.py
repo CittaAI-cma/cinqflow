@@ -811,11 +811,25 @@ def _recovery_guides(metadata: MetadataDbPort) -> tuple[fingerprinting.RecoveryG
                 OpsAction(obj.body["remedy"]) if obj.body.get("remedy") in set(OpsAction) else None
             ),
             is_transient=bool(obj.body.get("is_transient", False)),
-            stale=bool(obj.body.get("stale", False)),
+            stale=_feed_retired(metadata, obj.body.get("feed_id")),
         )
         for obj in metadata.list(ObjectType.RUNBOOK)
         if obj.lifecycle_state is LifecycleState.PUBLISHED
     )
+
+
+def _feed_retired(metadata: MetadataDbPort, feed_id: object) -> bool:
+    """Mirrors `workers.incidents._feed_retired` exactly — CF-V1-W1-26's
+    derive-at-read staleness check, computed here too for the layering reason
+    the module note above states. See that function's own docstring for why
+    this is arithmetic rather than a stored field."""
+    if not feed_id:
+        return False
+    try:
+        feed = metadata.get(ObjectType.FEED, str(feed_id))
+    except ObjectNotFoundError:
+        return False
+    return feed.lifecycle_state is LifecycleState.RETIRED
 
 
 def _priors_for(

@@ -419,7 +419,7 @@ def test_an_incident_cannot_skip_straight_to_closed() -> None:
         novel_incident().close()
 
 
-# ── E16-07's pipeline half was blocked on E16-05; the SPINE now exists ──────
+# ── E16-07's pipeline half was blocked on E16-05; W1-26 wires it ────────────
 #
 #   The five tests above are the GATE — `Incident.embeddable` and
 #   `.narrative()` — and they pass today, unconditionally: an open incident
@@ -427,80 +427,73 @@ def test_an_incident_cannot_skip_straight_to_closed() -> None:
 #   does and carries its signature. `wave2.md` says exactly this: "already
 #   enforce the first test; the story is the pipeline around them."
 #
-#   That pipeline is `CF-V2-E16-05`: "Knowledge ingestion + embedding pipeline
-#   (Inbox -> Parse -> Chunk -> PHI-verify -> Steward approve -> Embed)",
-#   whose own dependency row in `wave2.md` reads "E16-07 entirely — it *is*
-#   the write side of this pipeline." E16-05 is a WAVE-1 story — not one of
-#   Wave 2's eleven (E12-01..05, E8-04, E5-04, E7-05, E13-03, E13-04, E16-07).
+#   W1-25 landed the pipeline itself (`core.knowledge`, `workers.knowledge
+#   .KnowledgeIngestWorker` — CF-V1-E16-05). W1-26 is what this pair of tests
+#   was waiting on: the two REAL callers (`Incident.close()`'s state
+#   transition; `publish_object`'s RUNBOOK branch) and the atomic-supersede
+#   and stale-propagation acceptance criteria named below. Both tests stay
+#   SKIPPED here, not because the behaviour is unbuilt but because THIS FILE
+#   is deliberately pure `core` arithmetic (see every other import above —
+#   no adapter, no FastAPI, no worker, in 900+ lines) and every one of
+#   W1-26's criteria is I/O-shaped: an API route, a `MetadataDbPort` write, a
+#   `VectorPort` read. Importing FastAPI and the mock adapters into this one
+#   pair of tests to make them "real" would be the same mistake `xfail`ing a
+#   scoping decision is — bending a file's own stated shape to make a check
+#   mark green here, when the acceptance criteria already have tests at the
+#   layer they actually live on:
 #
-#   W1-25 landed its CHUNK -> PHI-verify -> Embed + Index spine: `core.knowledge`
-#   (pure chunk-boundary and idempotency logic; see
-#   `tests/unit/test_knowledge_chunking.py`) and `workers.knowledge
-#   .KnowledgeIngestWorker` (the wired stage; see
-#   `tests/contract/test_knowledge_ingestion_pipeline.py`), scoped HONESTLY to
-#   the two content sources that are real today — a closed `Incident`'s
-#   narrative and a Published `RUNBOOK`'s steps, both already-parsed Python
-#   objects. "Inbox" and "Parse" in the full generic sense (a document-upload
-#   surface with layout-aware PDF parsing) remain unbuilt, on purpose — see
-#   `core.knowledge`'s own module docstring.
+#     • `tests/contract/test_operations_routes.py
+#       ::test_closing_an_incident_embeds_its_narrative_exactly_once` — the
+#       embed-on-close hook, proven idempotent (closing is one-way, so a
+#       second close cannot double-fire it — structurally, not by a guard).
+#     • `tests/contract/test_knowledge_ingestion_pipeline.py
+#       ::test_a_new_runbook_version_atomically_supersedes_the_priors_chunks`
+#       — `KnowledgeIngestWorker.ingest_runbook(..., supersedes=...)` against
+#       scripted spies.
+#     • `tests/contract/test_runbook_publish_knowledge_hook.py
+#       ::test_a_second_publish_of_the_same_guide_atomically_supersedes_the_first`
+#       — the SAME supersede, through the real `/objects/runbook/{id}/publish`
+#       route.
+#     • `tests/contract/test_operations_routes.py
+#       ::test_a_guide_whose_feed_has_retired_reads_stale_in_the_incident_that_cites_it`
+#       — a retired feed's guide reads `stale=True` IN THE INCIDENT VIEW that
+#       cites it, with the runbook's own stored body asserted byte-identical
+#       before and after.
 #
-#   What is STILL missing, and what keeps the two tests below skipped: nothing
-#   calls `KnowledgeIngestWorker` automatically. `Incident.close()` does not
-#   invoke it; a runbook `transition_to(PUBLISHED)` does not either. Wiring
-#   that hook, plus runbook-supersede atomicity, stale-runbook propagation
-#   into citing alerts, and the five-minute close-to-retrievable lag
-#   measurement, are E16-07's own remaining scope — a Wave-2 story, not this
-#   Wave-1 slab's.
-#
-#   The two tests below are SKIPPED, not xfailed. `xfail(strict=True)` (see
-#   tests/audit/test_wave0_gap_findings.py's own docstring) asserts today's
-#   behaviour is a BUG that should already work — that is not this. Nothing
-#   here is broken; a story is waiting on a dependency outside this phase.
-#   Marking it xfail would misreport a scoping decision as a defect.
+#   STILL genuinely open, and not claimed anywhere above: the median
+#   close-to-retrievable LAG measurement `wave2.md`'s E16-07 row also names.
+#   Nothing in this slab measures it — it needs an observability query this
+#   story was not asked to build, and claiming it here would be exactly the
+#   dishonesty this comment exists to avoid.
 
 
 @pytest.mark.skip(
-    reason="the CHUNK -> PHI-verify -> Embed spine exists (W1-25, "
-    "workers.knowledge.KnowledgeIngestWorker.ingest_incident) and is proven "
-    "callable directly in tests/contract/test_knowledge_ingestion_pipeline.py — "
-    "what is still missing is the HOOK: nothing calls it when Incident.close() "
-    "runs. That wiring is CF-V2-E16-07's own remaining scope."
+    reason="landed in W1-26 — see tests/contract/test_operations_routes.py"
+    "::test_closing_an_incident_embeds_its_narrative_exactly_once for the real "
+    "hook, proven idempotent. Skipped here (not un-skipped) because this file "
+    "is deliberately pure `core` arithmetic and the hook is I/O-shaped; see "
+    "the section note above for why that is a shape decision, not a gap."
 )
 def test_the_embed_on_close_hook_calls_a_real_pipeline_when_an_incident_closes() -> None:
-    """The write side: a closed incident's `narrative()` reaches the vector
-    store through E16-05's `Inbox -> Parse -> Chunk -> PHI-verify -> Steward
-    approve -> Embed`, and an OPEN or resolved-but-unclosed incident is
-    refused by the pipeline the same way `.narrative()` already refuses it.
-
-    The pipeline this describes is callable today —
-    `workers.knowledge.KnowledgeIngestWorker.ingest_incident`. What is not
-    built is the AUTOMATIC hook: `Incident.close()` does not call it, so a
-    real incident closing anywhere in this codebase does not yet reach the
-    vector store on its own. `Incident.embeddable` and `.narrative()` are
-    proven above; the pipeline itself is proven in
-    `tests/contract/test_knowledge_ingestion_pipeline.py`; this is the wiring
-    between the two that E16-07 still owes.
-    """
+    """Superseded by `test_operations_routes.py`'s route-level test — this
+    docstring stays as the pointer, not the proof, because a pure-core file
+    cannot exercise an API route or a `VectorPort` without importing FastAPI
+    and the mock adapters into a file that has never needed either."""
 
 
 @pytest.mark.skip(
-    reason="the CHUNK -> PHI-verify -> Embed spine exists (W1-25) — "
-    "runbook-supersede atomicity, stale-runbook propagation into citing "
-    "alerts, and the five-minute close-to-retrievable lag are E16-07's OWN "
-    "remaining acceptance criteria, not blocked on a missing Embed stage "
-    "any more."
+    reason="atomic supersede and stale-propagation landed in W1-26 — see "
+    "test_runbook_publish_knowledge_hook.py::"
+    "test_a_second_publish_of_the_same_guide_atomically_supersedes_the_first and "
+    "test_operations_routes.py::"
+    "test_a_guide_whose_feed_has_retired_reads_stale_in_the_incident_that_cites_it. "
+    "The five-minute close-to-retrievable LAG measurement is the one criterion "
+    "this slab does not claim — see the section note above."
 )
 def test_runbook_publish_supersedes_atomically_and_a_retired_feeds_runbook_reads_stale() -> None:
-    """The other three acceptance criteria named in `wave2.md`'s E16-07 row:
-
-    a runbook publish supersedes the prior version ATOMICALLY; a retired
-    feed's linked runbook is flagged stale IN THE ALERT THAT CITES IT, not
-    just on the runbook's own page; and the median lag from an incident
-    closing to its narrative being retrievable is under five minutes. All
-    three now have somewhere to attach — `workers.knowledge
-    .KnowledgeIngestWorker.ingest_runbook` embeds a Published runbook's steps
-    — but none of the three is wired or measured yet; that remains E16-07's.
-    """
+    """Superseded by the two route-level tests named in the skip reason —
+    same caveat as the test above about why this file points rather than
+    proves."""
 
 
 # ══ CF-V2-E12-03 · the governed action surface ══════════════════════════════

@@ -253,6 +253,7 @@ from cinqflow.ports.metadata_db import (
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.delivery import DeliveryOutcome, DeliveryWorker
 from cinqflow.workers.incidents import priors_for, recovery_guides
+from cinqflow.workers.knowledge import KnowledgeIngestWorker
 from cinqflow.workers.ops import OpsVerifier
 from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
 
@@ -293,6 +294,19 @@ MappingSuggestionFactory = Callable[[MetadataDbPort], MappingSuggestionAgent]
 
 #: Same reasoning, same lifetime. CF-V1-E7-01.
 RuleAuthoringFactory = Callable[[MetadataDbPort], RuleAuthoringAgent]
+
+#: CF-V1-W1-26 · CF-V1-E16-07. Same reasoning, same lifetime as the agent
+#: factories above — built per request off whichever metadata pin serves it —
+#: even though `KnowledgeIngestWorker` is a pipeline stage (Archetype B), not
+#: an agent: it still writes through `LlmGateway.embed` and `VectorPort
+#: .index`, both request-scoped on the real plane for the same reason a
+#: proposal-writing agent is. `None` (the default every route below checks
+#: for) is what a deployment with no knowledge pin fitted looks like — the
+#: incident closes and the runbook publishes exactly as they would otherwise;
+#: only the side effect of either becoming retrievable knowledge does not
+#: happen, the same "everything else works with no model" shape `ask`
+#: degrades to.
+KnowledgeIngestFactory = Callable[[MetadataDbPort], KnowledgeIngestWorker]
 
 
 @unique
@@ -379,6 +393,7 @@ def create_app(
     phi_detection_factory: PhiDetectionFactory | None = None,
     mapping_suggestion_factory: MappingSuggestionFactory | None = None,
     rule_authoring_factory: RuleAuthoringFactory | None = None,
+    knowledge_ingest_factory: KnowledgeIngestFactory | None = None,
     budget: Budget | None = None,
     profile: Profile | None = None,
 ) -> FastAPI:
@@ -423,6 +438,9 @@ def create_app(
     app.state.phi_detection_factory = phi_detection_factory
     app.state.mapping_suggestion_factory = mapping_suggestion_factory
     app.state.rule_authoring_factory = rule_authoring_factory
+    # CF-V1-W1-26. See `KnowledgeIngestFactory`'s own comment for why `None`
+    # is a valid, honest deployment shape rather than a misconfiguration.
+    app.state.knowledge_ingest_factory = knowledge_ingest_factory
     # The cap the observability screen reports against. A screen showing spend
     # with no cap beside it is a number, not a control.
     app.state.llm_budget = budget or Budget(
@@ -2657,8 +2675,16 @@ def create_app(
     ) -> GovernedOut:
         """Approved -> Published. Only now will the engine read it — execution
         gates on the READER (`executable()` refuses anything else), so nothing
-        unapproved can run even if a route were mis-guarded."""
-        return _governance_act(
+        unapproved can run even if a route were mis-guarded.
+
+        CF-V1-W1-26 · CF-V1-E16-07, RUNBOOK ONLY: a published guide's steps
+        become knowledge — see `_embed_published_runbook`'s own docstring for
+        why it runs AFTER the transition below rather than as a gate beside
+        the MAPPING/DQ_RULE ones on `approve_object`, and for the atomic
+        supersede this triggers when the guide_id has a prior published
+        version.
+        """
+        result = _governance_act(
             "publish",
             object_type,
             object_id,
@@ -2669,6 +2695,11 @@ def create_app(
                 obj, actor=principal.as_actor(), roles=frozenset(principal.roles)
             ),
         )
+        if object_type is ObjectType.RUNBOOK:
+            _embed_published_runbook(
+                metadata, object_id, principal, app.state.knowledge_ingest_factory
+            )
+        return result
 
     @app.post(
         f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/retire",
@@ -3214,6 +3245,28 @@ def create_app(
             actor=principal.as_actor(),
             detail=f"{incident_id} -> {moved.state.value}",
         )
+        # CF-V1-W1-26 · CF-V1-E16-07 — the hook: a closed incident's narrative
+        # becomes knowledge. Checked EXPLICITLY on `.embeddable` rather than
+        # assumed from `action_name == "close"` — `Incident.embeddable`
+        # already IS the gate (`core.operations.fingerprint`'s own docstring;
+        # `.narrative()` refuses anything not CLOSED), and asking it here
+        # instead of re-deriving "was this a close" keeps exactly one place
+        # that knows what "embeddable" means. Acknowledge and resolve reach
+        # this same line and never trip it — only `close()` can produce a
+        # CLOSED incident. `close()` is a ONE-WAY transition (the state
+        # machine refuses OPEN/ACKNOWLEDGED/RESOLVED -> CLOSED a second time,
+        # raising `IncidentTransitionError` above before `moved` even exists)
+        # so a second close attempt never reaches this line at all — the
+        # pipeline fires AT MOST once per incident, structurally, not by a
+        # guard added here.
+        if moved.embeddable:
+            factory: KnowledgeIngestFactory | None = app.state.knowledge_ingest_factory
+            if factory is not None:
+                factory(metadata).ingest_incident(
+                    moved,
+                    run_id=f"knowledge-incident-{incident_id}-{uuid4().hex[:8]}",
+                    caller=principal.as_actor(),
+                )
         return _incident_out(moved)
 
     @app.post(
@@ -4459,7 +4512,15 @@ def _runbook_body_from(record: dict[str, Any]) -> dict[str, Any]:
     .RecoveryGuide` carries. `guide_id` travels in the body too, alongside
     being the object's own id, so the body is a complete, self-describing
     record of what was published rather than one that depends on its own
-    key to be read."""
+    key to be read.
+
+    `feed_id` (CF-V1-W1-26) is the one field with no `RecoveryGuide` counterpart
+    — it never reaches the matcher, only `workers.incidents.recovery_guides`'s
+    own staleness check and `core.knowledge.chunk_runbook`'s scope tags read
+    it. `DraftedGuide.as_payload` is the only producer of this record today,
+    and it always names the originating incident's feed; a hand-authored
+    runbook with no incident behind it simply carries `None` here, which
+    reads as "linked to no feed" — never stale, never scoped."""
     return {
         "guide_id": record.get("guide_id"),
         "title": record.get("title"),
@@ -4467,12 +4528,76 @@ def _runbook_body_from(record: dict[str, Any]) -> dict[str, Any]:
         "steps": list(record.get("steps", ())),
         "remedy": record.get("remedy"),
         "is_transient": bool(record.get("is_transient", False)),
+        "feed_id": record.get("feed_id"),
     }
 
 
 def _next_runbook_version(metadata: MetadataDbPort, guide_id: str) -> int:
     history = metadata.history(ObjectType.RUNBOOK, guide_id)
     return max((obj.version for obj in history), default=0) + 1
+
+
+def _embed_published_runbook(
+    metadata: MetadataDbPort,
+    object_id: str,
+    principal: Principal,
+    factory: KnowledgeIngestFactory | None,
+) -> None:
+    """CF-V1-W1-26 · CF-V1-E16-07 — a runbook publish is what makes its steps
+    knowledge (ADR-0007: "Only Published governed objects embed").
+
+    Module-level, not nested beside `_governance_act`, for the same reason
+    `_runbook_body_from` and its neighbours already are: this is called from
+    `publish_object` AFTER `_governance_act` has already persisted the
+    transition, never as a gate that could block it — an embedding failure
+    is not a reason to refuse a publish the lifecycle engine already approved
+    routing for, the same distinction W1-24 drew between a `complete()`
+    failure (the feature degrades to a manual path) and an `embed()` one
+    (nothing downstream is waiting on it synchronously). `factory=None`
+    degrades silently: the publish already succeeded, and the only thing
+    that does not happen is this side effect — exactly what `ask` does when
+    no LLM pin is fitted, except there is no caller here to hand a refusal to.
+
+    ATOMIC SUPERSEDE. `_prior_published_version` finds the guide_id's most
+    recent OTHER Published version, if one exists, and hands it to
+    `KnowledgeIngestWorker.ingest_runbook` as `supersedes` — which is what
+    turns this into ONE `VectorPort.supersede` call rather than a plain
+    `index()` that would leave the prior version's chunks stranded under
+    their own (different) content-addressed ids forever.
+    """
+    if factory is None:
+        return
+    published = metadata.get(ObjectType.RUNBOOK, object_id)
+    prior = _prior_published_version(metadata, object_id, before=published.version)
+    factory(metadata).ingest_runbook(
+        published,
+        run_id=f"knowledge-runbook-{object_id}-v{published.version}-{uuid4().hex[:8]}",
+        caller=principal.as_actor(),
+        supersedes=prior,
+    )
+
+
+def _prior_published_version(
+    metadata: MetadataDbPort, object_id: str, *, before: int
+) -> GovernedObject | None:
+    """The most recent PUBLISHED version older than the one just published —
+    the one whose chunks an atomic supersede must retire. `None` on a guide's
+    first publish, which is exactly what `KnowledgeIngestWorker.ingest_runbook
+    `'s own `supersedes=None` default means: nothing to retire.
+
+    A version's `lifecycle_state` never changes once transitioned away from
+    Draft except by another transition on THAT SAME version
+    (`record_transition`'s "state and approver columns only, never the
+    body") — so an older version this finds as PUBLISHED really is still
+    sitting there Published, never silently downgraded by a later version's
+    own publish. That is exactly the state `chunk_runbook` needs to accept it.
+    """
+    candidates = [
+        obj
+        for obj in metadata.history(ObjectType.RUNBOOK, object_id)
+        if obj.version < before and obj.lifecycle_state is LifecycleState.PUBLISHED
+    ]
+    return max(candidates, key=lambda obj: obj.version, default=None)
 
 
 def _accept_runbook_proposal(

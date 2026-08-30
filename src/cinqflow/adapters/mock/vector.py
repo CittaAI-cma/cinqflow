@@ -34,6 +34,20 @@ class ListVector:
         for chunk, vector in zip(chunks, vectors, strict=True):
             self._entries[chunk.chunk_id] = (chunk, vector)
 
+    def supersede(
+        self,
+        *,
+        retire: Sequence[str],
+        chunks: Sequence[Chunk],
+        vectors: Sequence[tuple[float, ...]],
+    ) -> None:
+        # Index FIRST, retire SECOND — a mid-call exception (a length
+        # mismatch, `strict=True`'s own guard) leaves the prior version's
+        # entries untouched rather than gone with nothing to replace them.
+        self.index(chunks, vectors)
+        for chunk_id in retire:
+            self._entries.pop(chunk_id, None)
+
     def retrieve(
         self, vector: tuple[float, ...], *, limit: int = 10, scope_filter: dict[str, str]
     ) -> Sequence[ScoredChunk]:

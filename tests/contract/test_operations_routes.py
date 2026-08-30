@@ -8,17 +8,23 @@ declines to offer, and that fingerprinting calls no model.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 
 from cinqflow.adapters.mock.authn import StaticAuthn
 from cinqflow.adapters.mock.control_tables import MemStoreControlTables
+from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
+from cinqflow.adapters.mock.observability import NoopObservability
+from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
+from cinqflow.adapters.mock.vector import ListVector
 from cinqflow.api import create_app
+from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState, ObjectType
 from cinqflow.core.model.vocabulary import ActorType, BatchState, ErrorCategory, Layer
 from cinqflow.core.operations.fingerprint import signature
@@ -30,7 +36,9 @@ from cinqflow.core.registry.operations import (
     ServiceLevel,
 )
 from cinqflow.core.scheduling import DEPENDS_ON_KEY
+from cinqflow.intelligence.gateway import LlmGateway
 from cinqflow.ports.control_tables import BatchControl, ErrorRecord, StageStatus
+from cinqflow.workers.knowledge import KnowledgeIngestWorker
 
 pytestmark = [pytest.mark.contract, pytest.mark.lane1]
 
@@ -107,6 +115,12 @@ def _guide() -> GovernedObject:
             "steps": ["Re-run validate_input, then retry the batch."],
             "remedy": "retry",
             "is_transient": True,
+            # CF-V1-W1-26 — the feed this guide's originating incident
+            # belonged to, read by `workers.incidents._feed_retired` to
+            # compute `stale` at match time. Present on every OTHER existing
+            # test's read of this guide too; none of them retire ENROLLMENT,
+            # so `stale` stays False for them exactly as before.
+            "feed_id": ENROLLMENT,
         },
         approved_by=APPROVER,
         approved_ts=NOW,
@@ -130,6 +144,54 @@ def control() -> MemStoreControlTables:
 @pytest.fixture
 def client(store: MemMetadataDb, control: MemStoreControlTables) -> Iterator[TestClient]:
     app = create_app(authn=StaticAuthn(), metadata_db=store, control_tables=control)
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def vector() -> ListVector:
+    return ListVector()
+
+
+def _knowledge_ingest_factory(
+    vector: ListVector,
+) -> Callable[[MemMetadataDb], KnowledgeIngestWorker]:
+    def factory(metadata: MemMetadataDb) -> KnowledgeIngestWorker:
+        gateway = LlmGateway(
+            llm=ScriptedLlm(),
+            phi_scrub=PatternPhiScrub(),
+            metadata_db=metadata,
+            observability=NoopObservability(),
+            budget=Budget(per_run_usd=Decimal("1"), per_agent_per_day_usd=Decimal("10")),
+            routing=Routing(small="small-model", large="large-model"),
+            clock=lambda: NOW,
+        )
+        return KnowledgeIngestWorker(
+            phi_scrub=PatternPhiScrub(),
+            llm=gateway,
+            vector=vector,
+            metadata=metadata,
+            clock=lambda: NOW,
+        )
+
+    return factory
+
+
+@pytest.fixture
+def client_with_knowledge(
+    store: MemMetadataDb, control: MemStoreControlTables, vector: ListVector
+) -> Iterator[TestClient]:
+    """CF-V1-W1-26 — the SAME app, with the knowledge pin actually fitted, so
+    the embed-on-close hook has somewhere to write. The plain `client` fixture
+    above deliberately leaves `knowledge_ingest_factory=None`, proving the
+    hook degrades to a no-op exactly like `ask` does with no LLM pin — this
+    one proves what happens when the pin IS fitted."""
+    app = create_app(
+        authn=StaticAuthn(),
+        metadata_db=store,
+        control_tables=control,
+        knowledge_ingest_factory=_knowledge_ingest_factory(vector),
+    )
     with TestClient(app) as test_client:
         yield test_client
 
@@ -528,6 +590,102 @@ def test_incident_bookkeeping_needs_the_operations_role(
         ).status_code
         == 404
     )
+
+
+# ── CF-V1-W1-26 · TRIGGER 1 — closing an incident embeds its narrative ───────
+
+
+def test_closing_an_incident_embeds_its_narrative_exactly_once(
+    client_with_knowledge: TestClient,
+    control: MemStoreControlTables,
+    store: MemMetadataDb,
+    vector: ListVector,
+) -> None:
+    """The pipeline's two real callers, half one: `Incident.close()`'s state
+    transition is what reaches `KnowledgeIngestWorker.ingest_incident` — never
+    acknowledge, never resolve, and never a second close."""
+    incident_id = _opened_incident(control, store)
+
+    client_with_knowledge.post(
+        f"/api/operations/incidents/{incident_id}/acknowledge",
+        json={"assigned_to": "mei@cinqcare.test"},
+        headers=_as(OPERATOR),
+    )
+    assert vector.count() == 0, "acknowledged is not embeddable — the hook must not fire yet"
+
+    client_with_knowledge.post(
+        f"/api/operations/incidents/{incident_id}/resolve",
+        json={"resolution": "Re-ran validate_input, then retried the batch."},
+        headers=_as(OPERATOR),
+    )
+    assert vector.count() == 0, "resolved-but-unclosed is not embeddable either"
+
+    closed = client_with_knowledge.post(
+        f"/api/operations/incidents/{incident_id}/close", headers=_as(OPERATOR)
+    )
+    assert closed.status_code == 200, closed.text
+    assert vector.count() == 1
+
+    # Closing is a ONE-WAY transition: the state machine refuses a second
+    # CLOSED->CLOSED move with a 409 before `moved` even exists, so the embed
+    # hook is structurally unreachable on a retry — not merely un-triggered.
+    second_close = client_with_knowledge.post(
+        f"/api/operations/incidents/{incident_id}/close", headers=_as(OPERATOR)
+    )
+    assert second_close.status_code == 409
+    assert vector.count() == 1, "a second close attempt cannot double-fire the embed"
+
+
+def test_a_deployment_with_no_knowledge_pin_still_closes_incidents(
+    client: TestClient, control: MemStoreControlTables, store: MemMetadataDb
+) -> None:
+    """`client` (unlike `client_with_knowledge`) leaves
+    `knowledge_ingest_factory=None` — the same "everything else works with no
+    model" shape `ask` degrades to. Closing must still succeed."""
+    incident_id = _opened_incident(control, store)
+    client.post(
+        f"/api/operations/incidents/{incident_id}/acknowledge", json={}, headers=_as(OPERATOR)
+    )
+    client.post(
+        f"/api/operations/incidents/{incident_id}/resolve",
+        json={"resolution": "Re-ran validate_input, then retried the batch."},
+        headers=_as(OPERATOR),
+    )
+    closed = client.post(f"/api/operations/incidents/{incident_id}/close", headers=_as(OPERATOR))
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["state"] == "closed"
+
+
+def test_a_guide_whose_feed_has_retired_reads_stale_in_the_incident_that_cites_it(
+    client: TestClient, control: MemStoreControlTables, store: MemMetadataDb
+) -> None:
+    """CF-V1-W1-26 — "a guide whose linked feed has retired is flagged in
+    the very alert that cites it." Staleness is computed the moment the
+    guide is READ, from the feed's CURRENT lifecycle — never stored on the
+    runbook, and never requiring the runbook to be re-versioned over a fact
+    about a different object entirely."""
+    raw_guide_before = store.get(ObjectType.RUNBOOK, "BH-AF-002")
+
+    _open_batch(control)
+    _fail_at_bronze(control)
+    fresh = client.get(f"/api/operations/batches/{BATCH}/incident", headers=_as(ENGINEER)).json()
+    assert fresh["match"]["stale"] is False
+    assert "retired" not in fresh["match"]["explanation"]
+
+    # The feed retires — a SEPARATE governed object's lifecycle moving on,
+    # touching nothing about the runbook itself.
+    store.save(replace(_feed(ENROLLMENT), version=2, lifecycle_state=LifecycleState.RETIRED))
+
+    retired_read = client.get(
+        f"/api/operations/batches/{BATCH}/incident", headers=_as(ENGINEER)
+    ).json()
+    assert retired_read["match"]["stale"] is True
+    assert "feed has retired" in retired_read["match"]["explanation"]
+
+    # The runbook's own stored body is byte-identical to before — nothing
+    # about IT ever changed; only what a fresh read computes about the feed
+    # linked to it did.
+    assert store.get(ObjectType.RUNBOOK, "BH-AF-002") == raw_guide_before
 
 
 def test_the_incident_matches_the_guide_and_shows_its_evidence(
