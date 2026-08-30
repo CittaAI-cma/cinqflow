@@ -82,6 +82,8 @@ jobs:
         run: cinqflow install --profile "$CINQFLOW_PROFILE"
       - name: layers 3-4 — each test in a rolled-back transaction
         run: pytest -m "pipeline or invariant" -q -n auto
+      - name: the Wave-2 exit — the demo is the test run
+        run: ./scripts/wave2-demo.sh
 
   conformance:
     # Gate: "one check per energized pin, each naming its pin" — W0 — proves
