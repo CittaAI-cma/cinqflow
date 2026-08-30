@@ -218,6 +218,20 @@ export default async function MappingPage({
         </Link>
       </p>
 
+      {found.version > 1 ? (
+        <div className="card">
+          <strong>What changed since the last version</strong>
+          <p className="note">
+            Compared target field by target field, so a field that stops being populated is
+            stated rather than buried in a JSON diff. That is the shape silent row loss has:
+            nothing fails, and a column is empty from the next delivery onward.
+          </p>
+          <Link className="cited" href={`/data/intake/mapping/${found.feed_id}/compare`}>
+            Compare v{found.version - 1} with v{found.version} →
+          </Link>
+        </div>
+      ) : null}
+
       <p className="note">
         Every transform on this page is configuration, not code — a closed set of kinds with
         scalar parameters. There is no expression field anywhere in a mapping, which is what makes

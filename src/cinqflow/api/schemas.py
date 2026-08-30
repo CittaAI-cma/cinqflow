@@ -473,6 +473,12 @@ class TransitionIn(BaseModel):
     not by this schema, so a second client cannot relax it."""
 
     comment: str = ""
+    #: CF-V1-E6-04. The target fields this approval accepts will stop being
+    #: populated. NAMES, not a boolean: a checkbox is clicked, and the failure
+    #: this gate prevents is precisely the change nobody looked at. Ignored for
+    #: every object type but MAPPING, and for a mapping with no published
+    #: predecessor.
+    accepts_loss: list[str] = Field(default_factory=list)
 
 
 class GlossaryTermOut(BaseModel):
@@ -1257,12 +1263,18 @@ class MappingDiffLineOut(BaseModel):
     before: str = ""
     after: str = ""
     loses_its_source: bool = False
+    #: A full sentence, not a shorthand. An approver reading
+    #: `null_policy: 1 -> 3` has been shown a diff rather than told a fact.
+    explanation: str = ""
 
 
 class MappingDiffOut(BaseModel):
     feed_id: str
     from_version: int
     to_version: int
+    #: Whether the EARLIER version was live. Only then is a lost source a loss,
+    #: and only then does the approval gate ask for an acknowledgement.
+    from_published: bool = False
     lines: list[MappingDiffLineOut] = Field(default_factory=list)
     fields_losing_their_source: list[str] = Field(default_factory=list)
     summary: str = ""

@@ -330,3 +330,200 @@ def test_the_stored_mapping_reaches_the_glossary_through_lineage(
     obj = store.get(ObjectType.MAPPING, FEED_ID)
     assert obj.body["glossary_ids"] == ["BG-001"]
     assert obj.body["feed_id"] == FEED_ID
+
+
+# ── CF-V1-E6-04 · version compare, and the loss that does not announce itself ─
+
+
+def _publish(client: TestClient, comment: str = "the mapping matches the glossary") -> None:
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/submit",
+        json={"comment": "ready"},
+        headers=_as(BA),
+    )
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/approve",
+        json={"comment": comment},
+        headers=_as(STEWARD),
+    )
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/publish",
+        json={},
+        headers=_as(STEWARD),
+    )
+
+
+BOTH_LINES = [_line(), _line(target_field="line_of_business", source_columns=["LOB"])]
+
+
+def test_the_diff_is_by_target_field_not_by_json(client: TestClient) -> None:
+    """`diff_bodies` would render a mapping change as `lines: [...] -> [...]`
+    — technically complete, and useless to the person signing it."""
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": BOTH_LINES}, headers=_as(BA))
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": [_line()]}, headers=_as(BA))
+
+    diff = client.get(f"/api/feeds/{FEED_ID}/mapping/diff", headers=_as(BA)).json()
+
+    assert (diff["from_version"], diff["to_version"]) == (1, 2)
+    assert [line["address"] for line in diff["lines"]] == ["members.line_of_business"]
+    assert diff["lines"][0]["change"] == "removed"
+    assert "arrive empty on every row" in diff["lines"][0]["explanation"]
+
+
+def test_reordering_the_lines_is_not_reported_as_a_change(client: TestClient) -> None:
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": BOTH_LINES}, headers=_as(BA))
+    client.put(
+        f"/api/feeds/{FEED_ID}/mapping",
+        json={"lines": list(reversed(BOTH_LINES))},
+        headers=_as(BA),
+    )
+    diff = client.get(f"/api/feeds/{FEED_ID}/mapping/diff", headers=_as(BA)).json()
+    assert diff["lines"] == []
+    assert "identical" in diff["summary"]
+
+
+def test_comparing_a_feed_with_one_version_says_so(client: TestClient) -> None:
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": [_line()]}, headers=_as(BA))
+    nothing = client.get(f"/api/feeds/{FEED_ID}/mapping/diff", headers=_as(BA))
+    assert nothing.status_code == 404
+    assert "nothing to compare" in nothing.text
+
+
+def test_emptying_a_live_field_is_refused_unless_the_approver_names_it(
+    client: TestClient,
+) -> None:
+    """THE GATE THE STORY EXISTS FOR. Nothing fails when a mapping drops a
+    line: the batch runs, the counts reconcile, and one column arrives NULL on
+    every record from that day."""
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": BOTH_LINES}, headers=_as(BA))
+    _publish(client)
+
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": [_line()]}, headers=_as(BA))
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/submit",
+        json={"comment": "dropping LOB"},
+        headers=_as(BA),
+    )
+    refused = client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/approve",
+        json={"comment": "looks fine"},
+        headers=_as(STEWARD),
+    )
+
+    assert refused.status_code == 403
+    assert "members.line_of_business" in refused.text
+    assert "the batch will run" in refused.text.lower()
+
+
+def test_naming_the_field_lets_the_change_through(client: TestClient) -> None:
+    """Removing a source is sometimes exactly right — a payer stops sending a
+    field. What must not happen is removing one by accident."""
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": BOTH_LINES}, headers=_as(BA))
+    _publish(client)
+
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": [_line()]}, headers=_as(BA))
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/submit",
+        json={"comment": "Fidelis stopped sending LOB"},
+        headers=_as(BA),
+    )
+    approved = client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/approve",
+        json={
+            "comment": "Fidelis confirmed LOB is gone from the August layout",
+            "accepts_loss": ["members.line_of_business"],
+        },
+        headers=_as(STEWARD),
+    )
+
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["lifecycle_state"] == "approved"
+
+
+def test_the_refusal_leaves_a_row(client: TestClient) -> None:
+    """A guardrail nobody can see fired is a comment."""
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": BOTH_LINES}, headers=_as(BA))
+    _publish(client)
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": [_line()]}, headers=_as(BA))
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/submit",
+        json={"comment": "dropping LOB"},
+        headers=_as(BA),
+    )
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/approve",
+        json={"comment": "looks fine"},
+        headers=_as(STEWARD),
+    )
+
+    trail = client.get("/api/audit", headers=_as(STEWARD)).json()
+    assert any(entry["action"] == "refused:silent_row_loss" for entry in trail)
+
+
+def test_a_first_mapping_needs_no_acknowledgement(client: TestClient) -> None:
+    """There is no published predecessor, so there is nothing a field can stop
+    being. Asking here would train people to acknowledge everything."""
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": BOTH_LINES}, headers=_as(BA))
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/submit",
+        json={"comment": "ready"},
+        headers=_as(BA),
+    )
+    approved = client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/approve",
+        json={"comment": "both lines match the glossary"},
+        headers=_as(STEWARD),
+    )
+    assert approved.status_code == 200, approved.text
+
+
+def test_adding_a_field_to_a_published_mapping_needs_no_acknowledgement(
+    client: TestClient,
+) -> None:
+    """The gate is about LOSS. A change that only adds must not cost the
+    approver a ritual, or the ritual is what they will learn."""
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": [_line()]}, headers=_as(BA))
+    _publish(client)
+
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": BOTH_LINES}, headers=_as(BA))
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/submit",
+        json={"comment": "adding LOB"},
+        headers=_as(BA),
+    )
+    approved = client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/approve",
+        json={"comment": "LOB is new in the August layout"},
+        headers=_as(STEWARD),
+    )
+    assert approved.status_code == 200, approved.text
+
+
+def test_the_gate_compares_against_the_published_version_not_the_previous_one(
+    client: TestClient,
+) -> None:
+    """The pipeline reads published metadata and nothing else, so what matters
+    is what changes for IT. A draft in between is not what is running."""
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": BOTH_LINES}, headers=_as(BA))
+    _publish(client)
+
+    # v2 — a draft that also drops LOB, never submitted.
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": [_line()]}, headers=_as(BA))
+    # v3 — drops it too, and this is the one submitted.
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": [_line()]}, headers=_as(BA))
+    client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/submit",
+        json={"comment": "dropping LOB"},
+        headers=_as(BA),
+    )
+    refused = client.post(
+        f"/api/objects/{ObjectType.MAPPING.value}/{FEED_ID}/approve",
+        json={"comment": "looks fine"},
+        headers=_as(STEWARD),
+    )
+
+    assert refused.status_code == 403, (
+        "v2 and v3 are identical, so a previous-version comparison would have found no "
+        "loss — and the field would have gone dark against what is actually running"
+    )
+    assert "members.line_of_business" in refused.text

@@ -317,3 +317,31 @@ export interface Mapping {
   findings: MappingFinding[];
   blocking_count: number;
 }
+
+// ── CF-V1-E6-04 · version compare, and the loss that does not announce itself ─
+
+/**
+ * One target field that differs between two mapping versions.
+ *
+ * `loses_its_source` is the field a row-loss investigation starts from, and it
+ * is computed rather than described: a line that went from populated to empty
+ * is how a column silently goes dark after a release, with nothing failing.
+ */
+export interface MappingDiffLine {
+  address: string;
+  change: string;
+  before: string;
+  after: string;
+  loses_its_source: boolean;
+  explanation: string;
+}
+
+export interface MappingDiff {
+  feed_id: string;
+  from_version: number;
+  to_version: number;
+  from_published: boolean;
+  lines: MappingDiffLine[];
+  fields_losing_their_source: string[];
+  summary: string;
+}

@@ -69,6 +69,8 @@ from cinqflow.api.schemas import (
     InheritedOut,
     KeyCandidateOut,
     KeySearchOut,
+    MappingDiffLineOut,
+    MappingDiffOut,
     MappingFindingOut,
     MappingIn,
     MappingLineModel,
@@ -117,8 +119,11 @@ from cinqflow.core.agents.pipeline_insight.graph import AGENT
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.impact import ImpactPacket, ImpactUnknownError, Touched, build_packet
 from cinqflow.core.intelligence import Budget
+from cinqflow.core.mapping import versioning as mapping_versioning
+from cinqflow.core.mapping.versioning import UnacknowledgedLossError, refuse_unacknowledged_loss
 from cinqflow.core.model.governed import (
     GovernedObject,
+    LifecycleState,
     LifecycleViolationError,
     ObjectType,
 )
@@ -1874,7 +1879,28 @@ def create_app(
         below: the wrong lane, a packet with unknown impact, a missing
         rationale, and the author approving their own change. Every one of
         them leaves a row, and each had a test that made the attempt before
-        this handler existed."""
+        this handler existed.
+
+        CF-V1-E6-04 adds a FIFTH, for mappings only: a change that empties a
+        field of a PUBLISHED mapping is refused unless the approver named that
+        field in `accepts_loss`. It is checked here rather than inside
+        `lifecycle.approve` because it needs the PREVIOUS version, which the
+        lifecycle engine has no store to read — and it is checked BEFORE the
+        act so nothing is persisted by a refusal.
+        """
+        if object_type is ObjectType.MAPPING:
+            try:
+                _refuse_silent_row_loss(metadata, object_id, tuple(body.accepts_loss))
+            except UnacknowledgedLossError as refused:
+                audit.record(
+                    object_type=ObjectType.MAPPING,
+                    object_id=object_id,
+                    action="refused:silent_row_loss",
+                    actor=principal.as_actor(),
+                    detail=str(refused),
+                )
+                raise HTTPException(status.HTTP_403_FORBIDDEN, str(refused)) from None
+
         return _governance_act(
             "approve",
             object_type,
@@ -1890,6 +1916,36 @@ def create_app(
                 packet=_packet_for(metadata, obj),
             ),
         )
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/mapping/diff",
+        response_model=MappingDiffOut,
+        tags=["mapping"],
+    )
+    def mapping_diff(
+        feed_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        from_version: int | None = None,
+        to_version: int | None = None,
+    ) -> MappingDiffOut:
+        """Compare two mapping versions, target field by target field.
+
+        A first-class route rather than the generic body diff, because what an
+        approver needs to know about a mapping change is not "the JSON differs"
+        but WHICH FIELDS LOSE THEIR SOURCE. That is the shape silent row loss
+        has, and `diff_bodies` would render it as `lines: [...] -> [...]`.
+        """
+        history = list(metadata.history(ObjectType.MAPPING, feed_id))
+        if len(history) < 2:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"feed {feed_id!r} has {len(history)} mapping version(s) — "
+                "there is nothing to compare",
+            )
+        after = _version_or(history, to_version, default=max(o.version for o in history))
+        before = _version_or(history, from_version, default=after.version - 1)
+        return _mapping_diff_out(before, after)
 
     @app.post(
         f"{API_PREFIX}/objects/{{object_type}}/{{object_id}}/request-changes",
@@ -2690,6 +2746,79 @@ def _mapping_body_from(records: tuple[dict[str, Any], ...], feed_id: str) -> dic
             )
         )
     return mapping_core.mapping_body(mapping_core.FeedMapping(feed_id=feed_id, lines=tuple(lines)))
+
+
+def _version_or(
+    history: list[GovernedObject], wanted: int | None, *, default: int
+) -> GovernedObject:
+    chosen = wanted if wanted is not None else default
+    for obj in history:
+        if obj.version == chosen:
+            return obj
+    raise HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        f"there is no version {chosen} — this object has "
+        f"{', '.join(str(o.version) for o in history)}",
+    )
+
+
+def _refuse_silent_row_loss(
+    metadata: MetadataDbPort, feed_id: str, accepts_loss: tuple[str, ...]
+) -> None:
+    """CF-V1-E6-04's gate, at the approval seam.
+
+    Compares the version being approved against the currently PUBLISHED one —
+    not against the immediately previous version, which may be a draft nobody
+    ran. What matters is what changes for the pipeline, and the pipeline reads
+    published metadata and nothing else.
+
+    Silent on a first mapping: there is no published predecessor, so there is
+    nothing a field can stop being.
+    """
+    history = list(metadata.history(ObjectType.MAPPING, feed_id))
+    published = [obj for obj in history if obj.is_executable]
+    pending = [obj for obj in history if obj.lifecycle_state is LifecycleState.PENDING_REVIEW]
+    if not published or not pending:
+        return
+    live = max(published, key=lambda o: o.version)
+    proposed = max(pending, key=lambda o: o.version)
+    if proposed.version <= live.version:
+        return
+    refuse_unacknowledged_loss(
+        mapping_versioning.compare(
+            mapping_core.from_governed(live),
+            mapping_core.from_governed(proposed),
+            from_published=True,
+        ),
+        accepts_loss,
+    )
+
+
+def _mapping_diff_out(before: GovernedObject, after: GovernedObject) -> MappingDiffOut:
+    diff = mapping_versioning.compare(
+        mapping_core.from_governed(before),
+        mapping_core.from_governed(after),
+        from_published=before.is_executable,
+    )
+    return MappingDiffOut(
+        feed_id=diff.feed_id,
+        from_version=diff.from_version,
+        to_version=diff.to_version,
+        from_published=diff.from_published,
+        lines=[
+            MappingDiffLineOut(
+                address=change.address,
+                change=change.kind.value,
+                before=change.before,
+                after=change.after,
+                loses_its_source=change.loses_its_source,
+                explanation=change.explain(),
+            )
+            for change in diff.changed
+        ],
+        fields_losing_their_source=list(diff.fields_losing_their_source),
+        summary=diff.summary(),
+    )
 
 
 def _accept_mapping_proposal(
