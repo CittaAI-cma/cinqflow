@@ -15,13 +15,21 @@ test run rather than a script somebody performs.
 
 from __future__ import annotations
 
+import time
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
+from cinqflow.adapters.mock.llm import ScriptedLlm
+from cinqflow.adapters.mock.metadata_db import MemMetadataDb
+from cinqflow.adapters.mock.observability import NoopObservability
+from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
+from cinqflow.adapters.mock.vector import ListVector
 from cinqflow.core.certification import Check, CheckKind, Verdict, certify, evidence_document
-from cinqflow.core.model.governed import Actor
+from cinqflow.core.intelligence import Budget, Routing
+from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState, ObjectType
 from cinqflow.core.model.vocabulary import (
     ActorType,
     BatchState,
@@ -43,6 +51,7 @@ from cinqflow.core.operations.actions import (
     verify,
 )
 from cinqflow.core.operations.fingerprint import (
+    GuideMatch,
     Incident,
     IncidentState,
     IncidentTransitionError,
@@ -64,13 +73,17 @@ from cinqflow.core.operations.recovery import (
 from cinqflow.core.reliability import Score, Signal, Weights, score_for
 from cinqflow.core.sla import ArrivalBoard, Cycle, SlaStatus, alerts_for, grouped
 from cinqflow.core.variance import Variance, VarianceError, VarianceKind, Waiver
+from cinqflow.intelligence.gateway import LlmGateway
 from cinqflow.ports.control_tables import ErrorRecord
+from cinqflow.workers.incidents import recovery_guides
+from cinqflow.workers.knowledge import KnowledgeIngestWorker
 
 pytestmark = pytest.mark.acceptance
 
 NOW = datetime(2026, 8, 30, 9, 0, tzinfo=UTC)
 T0 = datetime(2026, 8, 30, 3, 3, tzinfo=UTC)
 SAM = Actor(subject="sam@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Sam Okafor")
+PLATFORM = Actor(subject="platform@cinqflow", actor_type=ActorType.SYSTEM, display_name="platform")
 
 
 def error(
@@ -419,81 +432,246 @@ def test_an_incident_cannot_skip_straight_to_closed() -> None:
         novel_incident().close()
 
 
-# ── E16-07's pipeline half was blocked on E16-05; W1-26 wires it ────────────
+# ── E16-07's pipeline half landed in W1-25/26; these two tests exercise it ──
 #
 #   The five tests above are the GATE — `Incident.embeddable` and
-#   `.narrative()` — and they pass today, unconditionally: an open incident
-#   does not embed, a resolved-but-unclosed one does not embed, a closed one
-#   does and carries its signature. `wave2.md` says exactly this: "already
-#   enforce the first test; the story is the pipeline around them."
+#   `.narrative()` — and they pass unconditionally: an open incident does not
+#   embed, a resolved-but-unclosed one does not embed, a closed one does and
+#   carries its signature. `wave2.md` says exactly this: "already enforce the
+#   first test; the story is the pipeline around them." The two tests below
+#   ARE that pipeline, proven directly: `workers.knowledge
+#   .KnowledgeIngestWorker` (CF-V1-E16-05, W1-25) and its two real callers,
+#   atomic supersede and stale propagation (CF-V1-E16-07, W1-26).
 #
-#   W1-25 landed the pipeline itself (`core.knowledge`, `workers.knowledge
-#   .KnowledgeIngestWorker` — CF-V1-E16-05). W1-26 is what this pair of tests
-#   was waiting on: the two REAL callers (`Incident.close()`'s state
-#   transition; `publish_object`'s RUNBOOK branch) and the atomic-supersede
-#   and stale-propagation acceptance criteria named below. Both tests stay
-#   SKIPPED here, not because the behaviour is unbuilt but because THIS FILE
-#   is deliberately pure `core` arithmetic (see every other import above —
-#   no adapter, no FastAPI, no worker, in 900+ lines) and every one of
-#   W1-26's criteria is I/O-shaped: an API route, a `MetadataDbPort` write, a
-#   `VectorPort` read. Importing FastAPI and the mock adapters into this one
-#   pair of tests to make them "real" would be the same mistake `xfail`ing a
-#   scoping decision is — bending a file's own stated shape to make a check
-#   mark green here, when the acceptance criteria already have tests at the
-#   layer they actually live on:
+#   Called DIRECTLY against the worker here, not through `api/app.py`'s HTTP
+#   routes: `_move_incident`'s embed-on-close hook and `publish_object`'s
+#   `_embed_published_runbook` are private closures inside `create_app`,
+#   reachable only over HTTP, and both call exactly one method —
+#   `KnowledgeIngestWorker.ingest_incident` / `.ingest_runbook` — which is
+#   the method these two tests call too. The route-level proof that the
+#   HOOKS actually fire (as opposed to the pipeline they fire into) already
+#   exists, and is left there rather than duplicated here:
 #
 #     • `tests/contract/test_operations_routes.py
 #       ::test_closing_an_incident_embeds_its_narrative_exactly_once` — the
 #       embed-on-close hook, proven idempotent (closing is one-way, so a
 #       second close cannot double-fire it — structurally, not by a guard).
-#     • `tests/contract/test_knowledge_ingestion_pipeline.py
-#       ::test_a_new_runbook_version_atomically_supersedes_the_priors_chunks`
-#       — `KnowledgeIngestWorker.ingest_runbook(..., supersedes=...)` against
-#       scripted spies.
 #     • `tests/contract/test_runbook_publish_knowledge_hook.py
 #       ::test_a_second_publish_of_the_same_guide_atomically_supersedes_the_first`
-#       — the SAME supersede, through the real `/objects/runbook/{id}/publish`
-#       route.
+#       — the SAME supersede below, through the real
+#       `/objects/runbook/{id}/publish` route.
 #     • `tests/contract/test_operations_routes.py
 #       ::test_a_guide_whose_feed_has_retired_reads_stale_in_the_incident_that_cites_it`
 #       — a retired feed's guide reads `stale=True` IN THE INCIDENT VIEW that
-#       cites it, with the runbook's own stored body asserted byte-identical
-#       before and after.
+#       cites it, with the runbook's own stored body asserted byte-identical.
 #
-#   STILL genuinely open, and not claimed anywhere above: the median
-#   close-to-retrievable LAG measurement `wave2.md`'s E16-07 row also names.
-#   Nothing in this slab measures it — it needs an observability query this
-#   story was not asked to build, and claiming it here would be exactly the
-#   dishonesty this comment exists to avoid.
+#   What is real here rather than pointed-at: the PIPELINE those hooks call
+#   — `ScriptedLlm`, `PatternPhiScrub` and `ListVector` behind it, exactly as
+#   `tests/contract/test_knowledge_ingestion_pipeline.py` builds it — proving
+#   a closed narrative is genuinely retrievable, a resolved-but-unclosed one
+#   is refused BY THE PIPELINE (not merely by a property nobody asks), a
+#   second runbook publish supersedes the first atomically, a retired feed's
+#   guide reads stale in the very `GuideMatch.explain()` an incident's alert
+#   shows, and the close-to-retrievable lag carries no artificial delay.
 
 
-@pytest.mark.skip(
-    reason="landed in W1-26 — see tests/contract/test_operations_routes.py"
-    "::test_closing_an_incident_embeds_its_narrative_exactly_once for the real "
-    "hook, proven idempotent. Skipped here (not un-skipped) because this file "
-    "is deliberately pure `core` arithmetic and the hook is I/O-shaped; see "
-    "the section note above for why that is a shape decision, not a gap."
-)
+def _knowledge_harness() -> tuple[KnowledgeIngestWorker, LlmGateway, ListVector, MemMetadataDb]:
+    """`KnowledgeIngestWorker` behind the same three mock ports
+    (`ScriptedLlm`, `PatternPhiScrub`, `ListVector`) `test_knowledge_ingestion
+    _pipeline.py` builds it against, plus the `LlmGateway` wrapping the LLM
+    port — so a caller here can embed its own query text through the exact
+    governed call `_ingest` uses, rather than reaching past the gateway into
+    the raw adapter.
+    """
+    store = MemMetadataDb()
+    llm = ScriptedLlm()
+    gateway = LlmGateway(
+        llm=llm,
+        phi_scrub=PatternPhiScrub(),
+        metadata_db=store,
+        observability=NoopObservability(),
+        budget=Budget(per_run_usd=Decimal("1"), per_agent_per_day_usd=Decimal("10")),
+        routing=Routing(small="small-model", large="large-model"),
+        clock=lambda: T0,
+    )
+    vector = ListVector()
+    worker = KnowledgeIngestWorker(
+        phi_scrub=PatternPhiScrub(), llm=gateway, vector=vector, metadata=store, clock=lambda: T0
+    )
+    return worker, gateway, vector, store
+
+
 def test_the_embed_on_close_hook_calls_a_real_pipeline_when_an_incident_closes() -> None:
-    """Superseded by `test_operations_routes.py`'s route-level test — this
-    docstring stays as the pointer, not the proof, because a pure-core file
-    cannot exercise an API route or a `VectorPort` without importing FastAPI
-    and the mock adapters into a file that has never needed either."""
+    """CF-V1-W1-26's TRIGGER 1: closing an incident is what
+    `api/app.py::_move_incident` checks `.embeddable` on to call
+    `KnowledgeIngestWorker.ingest_incident` — called here directly (the hook
+    itself is HTTP-only; see the section note above for the route-level
+    proof that it fires). This proves the PIPELINE the hook fires into: a
+    resolved-but-unclosed incident is refused by the pipeline ITSELF, not
+    merely absent because nobody checked `.embeddable`, and a closed
+    incident's exact narrative — citing the exact incident, carrying its
+    signature — is genuinely retrievable through `VectorPort.retrieve`
+    afterward, not merely marked `embeddable` and left untested.
+    """
+    worker, gateway, vector, _store = _knowledge_harness()
+
+    resolved = (
+        novel_incident()
+        .acknowledge(by="ops@cinqcare.test")
+        .resolve(
+            resolution="Re-ran validate_input; business_date restored.",
+            at=T0 + timedelta(minutes=18),
+        )
+    )
+    with pytest.raises(IncidentTransitionError):
+        worker.ingest_incident(resolved, run_id="run-resolved", caller=PLATFORM)
+    assert vector.count() == 0, (
+        "resolved-but-unclosed produces NOTHING retrievable — refused by the "
+        "pipeline itself, not merely absent because '.embeddable' went unchecked"
+    )
+
+    closed = resolved.close()
+    result = worker.ingest_incident(closed, run_id="run-closed", caller=PLATFORM)
+    assert result.indexed == (closed.citation,)
+    assert result.refused == ()
+    assert vector.count() == 1
+
+    # "Genuinely retrievable": embed the SAME narrative text through the SAME
+    # governed gateway a real query would use, then ask the vector port for
+    # it — not the mock's private dict, `VectorPort.retrieve`.
+    query = gateway.embed(
+        agent="test-query", run_id="run-query", caller=PLATFORM, texts=(closed.narrative(),)
+    )[0]
+    (retrieved,) = vector.retrieve(query.vector, limit=5, scope_filter={"feed_id": closed.feed_id})
+    assert retrieved.chunk.citation == closed.citation
+    assert retrieved.chunk.text == closed.narrative()
+    assert closed.signature in retrieved.chunk.text
 
 
-@pytest.mark.skip(
-    reason="atomic supersede and stale-propagation landed in W1-26 — see "
-    "test_runbook_publish_knowledge_hook.py::"
-    "test_a_second_publish_of_the_same_guide_atomically_supersedes_the_first and "
-    "test_operations_routes.py::"
-    "test_a_guide_whose_feed_has_retired_reads_stale_in_the_incident_that_cites_it. "
-    "The five-minute close-to-retrievable LAG measurement is the one criterion "
-    "this slab does not claim — see the section note above."
-)
 def test_runbook_publish_supersedes_atomically_and_a_retired_feeds_runbook_reads_stale() -> None:
-    """Superseded by the two route-level tests named in the skip reason —
-    same caveat as the test above about why this file points rather than
-    proves."""
+    """CF-V1-W1-26's three remaining E16-07 criteria, proved directly against
+    the real pipeline (`KnowledgeIngestWorker`) and the real staleness
+    arithmetic (`workers.incidents.recovery_guides`):
+
+    1. A second publish of the same guide supersedes the first ATOMICALLY —
+       `VectorPort.supersede` indexes the new version and retires the prior
+       one in ONE call, so the store's count never passes through a state
+       with both versions' chunks, or neither.
+    2. A guide whose linked feed has since retired reads stale IN THE ALERT
+       THAT CITES IT — `GuideMatch.explain()`, the sentence an incident's own
+       view shows — not merely on the runbook's own page. Proved by
+       rebuilding `recovery_guides()` from the SAME store before and after
+       the feed retires, with the runbook's own stored body asserted
+       byte-identical across both reads: staleness is DERIVED, never written.
+    3. The lag from an incident closing to its narrative being retrievable
+       carries no artificial delay when the pipeline is driven directly
+       against mock adapters — there is no scheduler or queue anywhere in
+       what W1-24/25/26 built. THIS PROVES THE CODE PATH ADDS NO DELAY, NOT
+       that a real embedding endpoint answers inside five minutes under
+       production load: a mock embed call and an in-memory index cost
+       microseconds, and neither a real endpoint nor real load is exercised
+       by a test running against mocks.
+    """
+    worker, gateway, vector, store = _knowledge_harness()
+    fp_signature = novel_incident().signature
+
+    # ── (1) atomic supersede ────────────────────────────────────────────────
+    v1 = GovernedObject(
+        object_type=ObjectType.RUNBOOK,
+        object_id="BH-AF-002",
+        version=1,
+        lifecycle_state=LifecycleState.PUBLISHED,
+        created_by=SAM,
+        created_ts=T0,
+        body={
+            "title": "Missing mandatory task parameter",
+            "signatures": [fp_signature],
+            "steps": ["Re-run validate_input, then evaluate_bronze_load."],
+            "feed_id": "fidelis_roster",
+        },
+        approved_by=SAM,
+        approved_ts=T0,
+    )
+    store.save(v1)
+    worker.ingest_runbook(v1, run_id="run-v1", caller=PLATFORM)
+    assert vector.count() == 1
+    v1_ids = {sc.chunk.chunk_id for sc in vector.retrieve((0.0,) * 8, limit=10, scope_filter={})}
+
+    v2 = GovernedObject(
+        object_type=ObjectType.RUNBOOK,
+        object_id="BH-AF-002",
+        version=2,
+        lifecycle_state=LifecycleState.PUBLISHED,
+        created_by=SAM,
+        created_ts=T0,
+        body={**v1.body, "steps": [*v1.body["steps"], "Then confirm the row count."]},
+        approved_by=SAM,
+        approved_ts=T0,
+    )
+    store.save(v2)
+    result = worker.ingest_runbook(v2, run_id="run-v2", caller=PLATFORM, supersedes=v1)
+    assert len(result.indexed) == 2
+    assert vector.count() == 2, "v1's one chunk is gone — never 3 (both), never 0 (neither)"
+    v2_ids = {sc.chunk.chunk_id for sc in vector.retrieve((0.0,) * 8, limit=10, scope_filter={})}
+    assert v1_ids.isdisjoint(v2_ids), "v2's ids are freshly content-addressed, not v1's reused"
+
+    # ── (2) a retired feed's guide reads stale IN THE ALERT ─────────────────
+    feed = GovernedObject(
+        object_type=ObjectType.FEED,
+        object_id="fidelis_roster",
+        version=1,
+        lifecycle_state=LifecycleState.PUBLISHED,
+        created_by=SAM,
+        created_ts=T0,
+        body={},
+        approved_by=SAM,
+        approved_ts=T0,
+    )
+    store.save(feed)
+
+    def _matched() -> GuideMatch | None:
+        return fingerprint_batch(
+            batch_id="1244",
+            feed_id="fidelis_roster",
+            errors=BH_AF_002_ERRORS,
+            guides=recovery_guides(store),
+            now=T0,
+        ).match
+
+    fresh_match = _matched()
+    assert fresh_match is not None
+    assert "retired" not in fresh_match.explain()
+
+    raw_before = store.get(ObjectType.RUNBOOK, "BH-AF-002")
+    store.save(replace(feed, version=2, lifecycle_state=LifecycleState.RETIRED))
+
+    stale_match = _matched()
+    assert stale_match is not None
+    assert "feed has retired" in stale_match.explain()
+    assert store.get(ObjectType.RUNBOOK, "BH-AF-002") == raw_before, (
+        "the runbook's own stored body never changes — staleness is a fact "
+        "computed at read time, never written onto the guide"
+    )
+
+    # ── (3) close-to-retrievable lag carries no artificial delay ────────────
+    closed = (
+        novel_incident()
+        .acknowledge(by="ops@cinqcare.test")
+        .resolve(resolution="Re-ran validate_input.", at=T0 + timedelta(minutes=18))
+        .close()
+    )
+    started = time.perf_counter()
+    worker.ingest_incident(closed, run_id="run-lag", caller=PLATFORM)
+    query = gateway.embed(
+        agent="test-query", run_id="run-lag", caller=PLATFORM, texts=(closed.narrative(),)
+    )[0]
+    (retrieved,) = vector.retrieve(query.vector, limit=1, scope_filter={"feed_id": closed.feed_id})
+    elapsed = time.perf_counter() - started
+    assert retrieved.chunk.citation == closed.citation
+    assert elapsed < 300, (
+        f"{elapsed:.4f}s against mocks proves no artificial delay in the code "
+        "path — not a production measurement against a real embedding endpoint"
+    )
 
 
 # ══ CF-V2-E12-03 · the governed action surface ══════════════════════════════
