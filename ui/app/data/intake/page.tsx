@@ -50,6 +50,16 @@ export default async function DataIntake({
         </span>
       </p>
 
+      <p className="inline action-row">
+        <Link className="action" href="/data/intake/new">
+          Register a new feed
+        </Link>
+        <span className="note">
+          A feed is six fields — domain, format, landing folder, file-name pattern, schedule — plus
+          a real sample name the pattern is checked against before it can be saved.
+        </span>
+      </p>
+
       <p className="note">
         <Link href="/data/canonical">The canonical model</Link> — what feeds map to ·{" "}
         <Link href="/data/intake/sources">Sources</Link> — who sends us data, and who to ring ·{" "}
@@ -82,9 +92,9 @@ export default async function DataIntake({
             </>
           ) : (
             <>
-              No feeds registered. A feed is six fields — domain, format, landing folder,
-              file-name pattern, schedule, owner — and its pattern is validated against a real
-              sample name before it can be saved.
+              No feeds registered. <Link href="/data/intake/new">Register the first one</Link> —
+              six fields, and a real sample name its pattern is validated against before it can be
+              saved.
             </>
           )}
         </div>

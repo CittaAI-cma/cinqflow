@@ -357,6 +357,8 @@
   .outcome .kv { grid-template-columns: auto minmax(0, 1fr); column-gap: var(--s-3); }
   .outcome[data-outcome="ACCEPTED"]   { border-left-color: var(--st-completed); }
   .outcome[data-outcome="ACCEPTED"]   .outcome-word { color: var(--st-completed); }
+  .outcome[data-outcome="CREATED"]    { border-left-color: var(--st-completed); }
+  .outcome[data-outcome="CREATED"]    .outcome-word { color: var(--st-completed); }
   .outcome[data-outcome="UNEXPECTED"] { border-left-color: var(--st-processing); }
   .outcome[data-outcome="UNEXPECTED"] .outcome-word { color: var(--st-processing); }
   .outcome[data-outcome="REJECTED"]   { border-left-color: var(--st-needs-attention); }

@@ -56,7 +56,7 @@ export default async function DeliverToAFeed({
         <div className="card empty">
           <span className="empty-title">There is no feed to deliver to yet</span>
           A file belongs to a feed — the feed is what decides where it lands and which pattern it
-          is matched against. <Link href="/data/intake">Register one first</Link>.
+          is matched against. <Link href="/data/intake/new">Register one first</Link>.
         </div>
       ) : (
         <div className="card">
