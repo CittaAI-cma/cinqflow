@@ -2046,6 +2046,74 @@ class GuideMatchOut(BaseModel):
     explanation: str = ""
 
 
+class VarianceIn(BaseModel):
+    """One discrepancy an operator writes down. The platform computes the
+    delta and the criticality — a caller who could declare their own variance
+    non-critical would be grading their own homework."""
+
+    kind: str
+    expected: Decimal
+    actual: Decimal
+    tolerance: Decimal = Decimal("0")
+
+
+class WaiveVarianceIn(BaseModel):
+    """The most consequential button in the wave. The reason is refused blank
+    (and refused 'n/a') by the core; the expiry defaults to the 90-day
+    ceiling and cannot exceed it."""
+
+    reason: str
+    expires_on: date | None = None
+
+
+class CorrectVarianceIn(BaseModel):
+    note: str
+
+
+class ExplainVarianceIn(BaseModel):
+    explanation: str
+
+
+class VarianceOut(BaseModel):
+    variance_id: str
+    batch_id: str
+    feed_id: str
+    kind: str
+    expected: Decimal
+    actual: Decimal
+    delta: Decimal
+    tolerance: Decimal
+    critical: bool
+    outcome: str
+    opened_by: str
+    opened_ts: datetime
+    explanation: str = ""
+    waived_by: str = ""
+    waiver_reason: str = ""
+    waiver_expires_on: date | None = None
+    citation: str = ""
+
+
+class CertificationCheckOut(BaseModel):
+    kind: str
+    passed: bool
+    completed: bool
+    evidence: str
+
+
+class CertificationOut(BaseModel):
+    """CF-V2-E13-04 — the verdict, DERIVED on this read. There is no route
+    that sets one, and that absence is the acceptance criterion."""
+
+    batch_id: str
+    feed_id: str
+    verdict: str
+    publishable: bool
+    derived_ts: datetime | None = None
+    checks: list[CertificationCheckOut] = Field(default_factory=list)
+    variances: list[VarianceOut] = Field(default_factory=list)
+
+
 class ReliabilityComponentOut(BaseModel):
     """One signal's contribution — the click's answer. `measured` is the
     difference between 'scored zero' and 'not measurable yet', which the

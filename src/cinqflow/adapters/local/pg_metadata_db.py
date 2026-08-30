@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from cinqflow.adapters.local.pg_control import Connection
@@ -46,6 +47,7 @@ from cinqflow.core.registry.suspension import (
     SuspensionEvent,
     current,
 )
+from cinqflow.core.variance import Variance, VarianceKind, VarianceOutcome, Waiver
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
     ActionRecordRow,
@@ -211,6 +213,28 @@ def _suspension(row: tuple[Any, ...]) -> SuspensionEvent:
         actor=_actor(row[3], ActorType.HUMAN.value, row[4]),
         occurred_ts=row[5],
         resumes_after=row[6],
+    )
+
+
+def _variance(row: tuple[Any, ...]) -> Variance:
+    waiver = (
+        Waiver(waived_by=row[11], reason=row[12], granted_on=row[13], expires_on=row[14])
+        if row[11]
+        else None
+    )
+    return Variance(
+        variance_id=row[0],
+        batch_id=row[1],
+        feed_id=row[2],
+        kind=VarianceKind(row[3]),
+        expected=row[4],
+        actual=row[5],
+        tolerance=row[6],
+        outcome=VarianceOutcome(row[7]),
+        opened_by=row[8],
+        opened_ts=row[9],
+        explanation=row[10] or "",
+        waiver=waiver,
     )
 
 
@@ -867,3 +891,69 @@ class PostgresMetadataDb:
         filtered = [e for e in current_events if state is None or e.state is state]
         filtered.sort(key=lambda e: e.occurred_ts, reverse=True)
         return tuple(filtered[:limit])
+
+    # ── ops.variance_event · CF-V2-E13-03 — append-only, one row per decision ──
+    def record_variance_event(
+        self, variance: Variance, *, actor_subject: str, occurred_ts: datetime
+    ) -> Variance:
+        waiver = variance.waiver
+        self._db.execute(
+            "INSERT INTO ops.variance_event (event_id, variance_id, batch_id, feed_id, kind, "
+            "expected, actual, tolerance, outcome, opened_by, opened_ts, explanation, "
+            "waived_by, waiver_reason, waiver_granted_on, waiver_expires_on, actor_subject, "
+            "occurred_ts) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                str(uuid.uuid4()),
+                variance.variance_id,
+                variance.batch_id,
+                variance.feed_id,
+                variance.kind.value,
+                variance.expected,
+                variance.actual,
+                variance.tolerance,
+                variance.outcome.value,
+                variance.opened_by,
+                variance.opened_ts,
+                variance.explanation,
+                waiver.waived_by if waiver else None,
+                waiver.reason if waiver else None,
+                waiver.granted_on if waiver else None,
+                waiver.expires_on if waiver else None,
+                actor_subject,
+                occurred_ts,
+            ),
+        )
+        return variance
+
+    def get_variance(self, variance_id: str) -> Variance:
+        rows = self._db.fetch_all(
+            "SELECT variance_id, batch_id, feed_id, kind, expected, actual, tolerance, "
+            "outcome, opened_by, opened_ts, explanation, waived_by, waiver_reason, "
+            "waiver_granted_on, waiver_expires_on FROM ops.variance_event "
+            "WHERE variance_id = %s ORDER BY occurred_ts DESC, event_id DESC LIMIT 1",
+            (variance_id,),
+        )
+        if not rows:
+            raise ObjectNotFoundError(f"variance {variance_id} was never recorded")
+        return _variance(rows[0])
+
+    def list_variances(
+        self, *, batch_id: str | None = None, feed_id: str | None = None, limit: int = 50
+    ) -> Sequence[Variance]:
+        statement = (
+            "SELECT DISTINCT ON (variance_id) variance_id, batch_id, feed_id, kind, expected, "
+            "actual, tolerance, outcome, opened_by, opened_ts, explanation, waived_by, "
+            "waiver_reason, waiver_granted_on, waiver_expires_on, occurred_ts "
+            "FROM ops.variance_event WHERE 1=1"
+        )
+        parameters: tuple[Any, ...] = ()
+        if batch_id is not None:
+            statement += " AND batch_id = %s"
+            parameters += (batch_id,)
+        if feed_id is not None:
+            statement += " AND feed_id = %s"
+            parameters += (feed_id,)
+        statement += " ORDER BY variance_id, occurred_ts DESC, event_id DESC"
+        rows = self._db.fetch_all(statement, parameters)
+        current = sorted(rows, key=lambda row: row[15], reverse=True)
+        return tuple(_variance(row) for row in current[:limit])

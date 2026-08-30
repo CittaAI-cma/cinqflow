@@ -11,6 +11,7 @@ from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
 from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry.suspension import Suspension, SuspensionEvent, current
+from cinqflow.core.variance import Variance
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
     ActionRecordRow,
@@ -38,6 +39,7 @@ class MemMetadataDb:
         self._suspensions: list[SuspensionEvent] = []
         self._action_events: list[ActionRecordRow] = []
         self._incident_events: list[IncidentEvent] = []
+        self._variance_events: list[tuple[Variance, str, object]] = []
 
     def save(self, obj: GovernedObject) -> GovernedObject:
         versions = self._objects.setdefault((obj.object_type, obj.object_id), [])
@@ -283,3 +285,35 @@ class MemMetadataDb:
         current_events = [e for e in newest.values() if state is None or e.state is state]
         current_events.sort(key=lambda e: e.occurred_ts, reverse=True)
         return tuple(current_events[:limit])
+
+    # ── ops.variance_event · CF-V2-E13-03 ────────────────────────────────────
+    def record_variance_event(
+        self, variance: Variance, *, actor_subject: str, occurred_ts: object
+    ) -> Variance:
+        self._variance_events.append((variance, actor_subject, occurred_ts))
+        return variance
+
+    def get_variance(self, variance_id: str) -> Variance:
+        held: Variance | None = None
+        for variance, _, _ in self._variance_events:
+            if variance.variance_id == variance_id:
+                held = variance  # later append wins, like every ledger here
+        if held is None:
+            raise ObjectNotFoundError(f"variance {variance_id} was never recorded")
+        return held
+
+    def list_variances(
+        self, *, batch_id: str | None = None, feed_id: str | None = None, limit: int = 50
+    ) -> Sequence[Variance]:
+        newest_variance: dict[str, Variance] = {}
+        order: list[str] = []
+        for variance, _, _ in self._variance_events:
+            if batch_id is not None and variance.batch_id != batch_id:
+                continue
+            if feed_id is not None and variance.feed_id != feed_id:
+                continue
+            if variance.variance_id not in newest_variance:
+                order.append(variance.variance_id)
+            newest_variance[variance.variance_id] = variance
+        current = [newest_variance[v] for v in reversed(order)]
+        return tuple(current[:limit])

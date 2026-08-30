@@ -684,6 +684,187 @@ def test_the_surface_says_which_environment_it_is_in(
         assert retry_preview["requires_approval_identifier"] is True
 
 
+# ── CF-V2-E13-03/04 · variance, waiver, and the verdict that derives ─────────
+STEWARD = "dev-steward@cinqcare.test"
+
+
+def _balanced_batch(control: MemStoreControlTables, batch_id: str = BATCH) -> None:
+    from cinqflow.ports.control_tables import Reconciliation, RuleResult
+
+    _open_batch(control, batch_id=batch_id, state=BatchState.COMPLETED)
+    control.record_reconciliation(
+        Reconciliation(
+            batch_id=batch_id,
+            stage=Layer.SILVER_RAW,
+            records_in=200,
+            records_out=200,
+            quarantined=0,
+            attributed_drops=0,
+        )
+    )
+    control.record_rule_result(
+        RuleResult(
+            batch_id=batch_id,
+            feed_id=ENROLLMENT,
+            rule_id="DQ-002",
+            evaluated=200,
+            failed=0,
+            excluded=0,
+            recorded_ts=NOW,
+        )
+    )
+
+
+def _open_count_variance(client: TestClient, *, expected: str, actual: str) -> dict:
+    response = client.post(
+        f"/api/operations/batches/{BATCH}/variances",
+        json={"kind": "count", "expected": expected, "actual": actual, "tolerance": "10"},
+        headers=_as(OPERATOR),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_certification_derives_and_there_is_no_route_that_sets_one(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """ "Derive certification mechanically from the checks — no manual 'mark
+    as certified' button exists." The absence is asserted over the OpenAPI
+    document, so a route added later cannot arrive unnoticed."""
+    _balanced_batch(control)
+    body = client.get(
+        f"/api/operations/batches/{BATCH}/certification", headers=_as(READ_ONLY)
+    ).json()
+    assert body["verdict"] == "Certified"
+    assert body["publishable"] is True
+    kinds = {c["kind"] for c in body["checks"]}
+    assert {"balance", "reconciliation", "drop_ledger", "dq_rules", "schema_contract"} <= kinds
+
+    spec = client.get("/openapi.json").json()
+    for path, methods in spec["paths"].items():
+        if "certification" in path:
+            assert set(methods) <= {"get"}, f"{path} offers {set(methods)} — certification derives"
+
+
+def test_a_batch_with_no_evidence_is_pending_not_failed(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    _open_batch(control, state=BatchState.COMPLETED)
+    body = client.get(
+        f"/api/operations/batches/{BATCH}/certification", headers=_as(READ_ONLY)
+    ).json()
+    assert body["verdict"] == "Pending"
+
+
+def test_an_open_variance_blocks_and_a_waiver_certifies_with_the_waiver_named(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """Non-critical count variance: open blocks, waived certifies — as
+    CERTIFIED-WITH-WAIVER, a distinct verdict, because a payer must see at a
+    glance that something was ACCEPTED rather than passed."""
+    _balanced_batch(control)
+    opened = _open_count_variance(client, expected="200", actual="150")
+
+    blocked = client.get(
+        f"/api/operations/batches/{BATCH}/certification", headers=_as(READ_ONLY)
+    ).json()
+    assert blocked["verdict"] == "Not Certified"
+
+    waived = client.post(
+        f"/api/variances/{opened['variance_id']}/waive",
+        json={"reason": "Payer confirmed a one-off enrollment freeze for August."},
+        headers=_as(STEWARD),
+    )
+    assert waived.status_code == 200, waived.text
+    assert waived.json()["outcome"] == "waived"
+
+    after = client.get(
+        f"/api/operations/batches/{BATCH}/certification", headers=_as(READ_ONLY)
+    ).json()
+    assert after["verdict"] == "Certified-with-Waiver"
+
+    export = client.get(
+        f"/api/operations/batches/{BATCH}/certification/export", headers=_as(OPERATOR)
+    )
+    assert export.status_code == 200
+    assert "WAIVERS" in export.text
+    assert "enrollment freeze" in export.text
+    again = client.get(
+        f"/api/operations/batches/{BATCH}/certification/export", headers=_as(OPERATOR)
+    )
+    assert again.text == export.text  # byte-identical on re-derivation
+
+
+def test_a_critical_variance_cannot_be_waived_by_anyone(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """FINANCIAL is always critical: it is corrected or it blocks — the type
+    refuses, the route carries the sentence, and the refusal is a row."""
+    _balanced_batch(control)
+    opened = client.post(
+        f"/api/operations/batches/{BATCH}/variances",
+        json={"kind": "financial", "expected": "148000", "actual": "100000", "tolerance": "0"},
+        headers=_as(OPERATOR),
+    ).json()
+    assert opened["critical"] is True
+
+    refused = client.post(
+        f"/api/variances/{opened['variance_id']}/waive",
+        json={"reason": "It is probably fine."},
+        headers=_as(STEWARD),
+    )
+    assert refused.status_code == 409
+    assert "cannot be waived" in refused.text
+
+    # Corrected by the STEWARD who verified the reprocess — the operator
+    # who opened it cannot also close it: the universal negative bites on
+    # variances too.
+    corrected = client.post(
+        f"/api/variances/{opened['variance_id']}/correct",
+        json={"note": "$48,000 recovered via reprocess of the July claims batch."},
+        headers=_as(STEWARD),
+    )
+    assert corrected.status_code == 200
+    after = client.get(
+        f"/api/operations/batches/{BATCH}/certification", headers=_as(READ_ONLY)
+    ).json()
+    assert after["verdict"] == "Certified"  # corrected, not forgiven
+
+
+def test_only_a_steward_holds_the_waiver_pen(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    _balanced_batch(control)
+    opened = _open_count_variance(client, expected="200", actual="150")
+    for subject in (OPERATOR, ENGINEER, READ_ONLY):
+        denied = client.post(
+            f"/api/variances/{opened['variance_id']}/waive",
+            json={"reason": "A perfectly good reason."},
+            headers=_as(subject),
+        )
+        assert denied.status_code == 403, subject
+
+
+def test_the_export_is_an_act_and_needs_its_own_permission(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """The verdict is VIEW — everyone may know. The export is handing the
+    evidence to a payer, which is an act with a name."""
+    _balanced_batch(control)
+    assert (
+        client.get(
+            f"/api/operations/batches/{BATCH}/certification", headers=_as(READ_ONLY)
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            f"/api/operations/batches/{BATCH}/certification/export", headers=_as(READ_ONLY)
+        ).status_code
+        == 403
+    )
+
+
 # ── CF-V2-E12-05 · the reliability score ─────────────────────────────────────
 def test_the_score_decomposes_and_an_unmeasured_signal_is_not_a_zero(
     client: TestClient, control: MemStoreControlTables

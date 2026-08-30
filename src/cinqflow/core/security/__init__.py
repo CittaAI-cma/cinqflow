@@ -163,6 +163,12 @@ _PERMITTED: dict[Role, frozenset[Action]] = {
             # it are both refused, and a critical variance refuses everyone
             # (that second refusal lives in core/variance, on the type).
             Action.WAIVE_VARIANCE,
+            # E13-03 is titled "Variance INVESTIGATION" — the steward works
+            # the queue, not only its verdicts: acknowledging, assigning and
+            # closing a corrected variance are theirs too. The universal
+            # negative still bites: nobody decides what they opened.
+            Action.ACKNOWLEDGE,
+            Action.ASSIGN,
             # CF-V2-E13-04: the steward may hand the evidence to a payer too —
             # certification is their answerability, not only operations'.
             Action.CERTIFY_EXPORT,

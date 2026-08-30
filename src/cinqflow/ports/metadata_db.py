@@ -30,6 +30,7 @@ from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
 from cinqflow.core.profiling import FileProfile
 from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry.suspension import Suspension, SuspensionEvent
+from cinqflow.core.variance import Variance
 
 
 @dataclass(frozen=True)
@@ -350,4 +351,30 @@ class MetadataDbPort(Protocol):
         """Current state per incident, newest first. `state=OPEN` is the
         operations home's open-incident list; `batch_id=` is how the batch
         route finds the decisions to hydrate with."""
+        ...
+
+    # ── ops.variance_event · CF-V2-E13-03 ────────────────────────────────────
+    #
+    # The `Variance` value type already carries its whole state (outcome,
+    # explanation, waiver), so the ledger speaks Variance directly — one row
+    # per decision, current = newest per variance_id, and certification
+    # derives from these rows rather than from a stored verdict.
+
+    def record_variance_event(
+        self, variance: Variance, *, actor_subject: str, occurred_ts: datetime
+    ) -> Variance:
+        """Append one decision. No update verb exists — waiving writes a row,
+        so 'was this waived when March certified?' stays answerable."""
+        ...
+
+    def get_variance(self, variance_id: str) -> Variance:
+        """The current state — newest row. Raises `ObjectNotFoundError` for a
+        variance the ledger never held."""
+        ...
+
+    def list_variances(
+        self, *, batch_id: str | None = None, feed_id: str | None = None, limit: int = 50
+    ) -> Sequence[Variance]:
+        """Current state per variance, newest first — what `certify()` folds
+        into a verdict, and what the monthly recon report reads."""
         ...

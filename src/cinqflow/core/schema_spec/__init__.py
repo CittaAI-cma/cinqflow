@@ -1018,6 +1018,45 @@ OPS_SCHEMA = Schema(
             check_constraints=("state IN ('open', 'acknowledged', 'resolved', 'closed')",),
             append_only=True,
         ),
+        Table(
+            name="variance_event",
+            comment=(
+                "CF-V2-E13-03 — one variance's state at one moment, one row per decision. "
+                "Append-only like every ops ledger: waiving writes a row rather than "
+                "updating one, so 'was this waived when March certified?' is answerable "
+                "from what is stored. The current state is the newest row per variance_id. "
+                "Note what is NOT here: no certification column — certification DERIVES "
+                "from this ledger and the check history on every read, and a stored "
+                "verdict would be the second source E13-04 forbids."
+            ),
+            columns=(
+                Column("event_id", TypeName.UUID, nullable=False),
+                Column("variance_id", TypeName.STRING, nullable=False),
+                Column("batch_id", TypeName.STRING, nullable=False),
+                _FEED,
+                Column("kind", TypeName.STRING, nullable=False),
+                Column("expected", TypeName.DECIMAL, precision=20, scale=4, nullable=False),
+                Column("actual", TypeName.DECIMAL, precision=20, scale=4, nullable=False),
+                Column("tolerance", TypeName.DECIMAL, precision=20, scale=4, nullable=False),
+                Column("outcome", TypeName.STRING, nullable=False),
+                Column("opened_by", TypeName.STRING, nullable=False),
+                Column("opened_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("explanation", TypeName.STRING),
+                Column("waived_by", TypeName.STRING),
+                Column("waiver_reason", TypeName.STRING),
+                Column("waiver_granted_on", TypeName.DATE),
+                Column("waiver_expires_on", TypeName.DATE),
+                Column("actor_subject", TypeName.STRING, nullable=False),
+                Column("occurred_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("event_id",),
+            indexes=(("variance_id", "occurred_ts"), ("batch_id",), ("feed_id", "occurred_ts")),
+            check_constraints=(
+                "kind IN ('count', 'financial', 'member', 'duplicate')",
+                "outcome IN ('open', 'corrected', 'approved_with_explanation', 'waived')",
+            ),
+            append_only=True,
+        ),
     ),
     append_only=True,
 )

@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -30,6 +31,7 @@ from cinqflow.core.model.vocabulary import ActorType, BatchState, Layer
 from cinqflow.core.operations.actions import ActionPhase, OpsAction
 from cinqflow.core.operations.actions import verify as ops_verify
 from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
+from cinqflow.core.variance import Variance, VarianceKind, VarianceOutcome, Waiver
 from cinqflow.ports.authn import AuthenticationError, AuthnPort, Role
 from cinqflow.ports.catalog import CatalogPort
 from cinqflow.ports.compute_job import ComputeError, ComputeJobPort
@@ -329,6 +331,56 @@ def test_the_incident_ledger_has_no_edit_path_and_no_lifecycle_state(
     from dataclasses import fields as dataclass_fields
 
     assert "lifecycle_state" not in {f.name for f in dataclass_fields(IncidentEvent)}
+
+
+# ── ops.variance_event · CF-V2-E13-03 ────────────────────────────────────────
+def _count_variance(variance_id: str) -> Variance:
+    return Variance(
+        variance_id=variance_id,
+        batch_id="B-1244",
+        feed_id="fidelis-downstate-roster",
+        kind=VarianceKind.COUNT,
+        expected=Decimal("200"),
+        actual=Decimal("150"),
+        tolerance=Decimal("10"),
+        opened_by="ops@cinqcare.test",
+        opened_ts=NOW,
+    )
+
+
+def test_a_waiver_is_a_second_row_and_the_current_answer(metadata: MetadataDbPort) -> None:
+    """Waiving writes a row rather than updating one — 'was this waived when
+    March certified?' is answerable from what is stored."""
+    opened = _count_variance("VAR-1")
+    metadata.record_variance_event(opened, actor_subject=opened.opened_by, occurred_ts=NOW)
+    waived = opened.waive(
+        Waiver(
+            waived_by="steward@cinqcare.test",
+            reason="Payer confirmed a one-off enrollment freeze.",
+            granted_on=NOW.date(),
+            expires_on=NOW.date() + timedelta(days=30),
+        )
+    )
+    metadata.record_variance_event(
+        waived, actor_subject="steward@cinqcare.test", occurred_ts=NOW + timedelta(hours=1)
+    )
+    held = metadata.get_variance("VAR-1")
+    assert held.outcome is VarianceOutcome.WAIVED
+    assert held.waiver is not None
+    assert held.waiver.waived_by == "steward@cinqcare.test"
+
+    (listed,) = metadata.list_variances(batch_id="B-1244")
+    assert listed.outcome is VarianceOutcome.WAIVED
+
+
+def test_an_unrecorded_variance_is_a_missing_object(metadata: MetadataDbPort) -> None:
+    with pytest.raises(ObjectNotFoundError):
+        metadata.get_variance("VAR-nobody-opened")
+
+
+def test_the_variance_ledger_has_no_edit_path_for_anyone(metadata: MetadataDbPort) -> None:
+    for forbidden in ("update_variance", "delete_variance", "clear_variances"):
+        assert not hasattr(metadata, forbidden), f"metadata_db exposes {forbidden}"
 
 
 def test_every_audit_row_names_its_actor_type(metadata: MetadataDbPort) -> None:

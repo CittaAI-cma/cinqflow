@@ -28,6 +28,7 @@ from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import PlainTextResponse
 
 from cinqflow.adapters.mock.control_tables import MemStoreControlTables
 from cinqflow.api.audit import AuditLog
@@ -57,6 +58,8 @@ from cinqflow.api.schemas import (
     CanonicalFieldOut,
     CanonicalModelOut,
     CaseModel,
+    CertificationCheckOut,
+    CertificationOut,
     ChapterOut,
     ChecklistItemOut,
     ClaimOut,
@@ -67,6 +70,7 @@ from cinqflow.api.schemas import (
     ConsequenceOut,
     ContractOut,
     CorrectionOut,
+    CorrectVarianceIn,
     CounterOut,
     DateFormatOut,
     DeliveryOut,
@@ -77,6 +81,7 @@ from cinqflow.api.schemas import (
     DropExplanationOut,
     EvidencePackOut,
     ExampleOut,
+    ExplainVarianceIn,
     FailingRowOut,
     FailureOut,
     FeedIn,
@@ -156,16 +161,21 @@ from cinqflow.api.schemas import (
     TypeCandidateOut,
     UnknownImpactOut,
     UnknownOut,
+    VarianceIn,
+    VarianceOut,
     VersionDiffOut,
+    WaiveVarianceIn,
     WizardOut,
     WizardStepOut,
     WorkQueueOut,
 )
+from cinqflow.core import certification as batch_certification
 from cinqflow.core import delivery as delivery_core
 from cinqflow.core import lifecycle, onboarding, proposals, reliability, scheduling
 from cinqflow.core import mapping as mapping_core
 from cinqflow.core import operations as ops_board
 from cinqflow.core import rules as rules_core
+from cinqflow.core import variance as variances_core
 from cinqflow.core.agents.mapping_suggestion.graph import AGENT as MAPPING_SUGGESTION_AGENT
 from cinqflow.core.agents.phi_detection.graph import AGENT as PHI_DETECTION_AGENT
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
@@ -3298,6 +3308,251 @@ def create_app(
             citation=str(score.citation),
         )
 
+    # ── CF-V2-E13-03 · variance investigation, approval and waiver ────────
+
+    @app.post(
+        f"{API_PREFIX}/operations/batches/{{batch_id}}/variances",
+        response_model=VarianceOut,
+        tags=["operations"],
+    )
+    def open_variance(
+        batch_id: str,
+        body: VarianceIn,
+        control: Control,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.ACKNOWLEDGE))],
+    ) -> VarianceOut:
+        """A discrepancy, written down by whoever found it. The platform
+        computes the delta and the criticality — the finder declares the
+        numbers, never the verdict."""
+        batch = _batch_or_404(control, batch_id, principal)
+        try:
+            kind = variances_core.VarianceKind(body.kind)
+        except ValueError:
+            kinds = ", ".join(k.value for k in variances_core.VarianceKind)
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"{body.kind!r} is not a variance kind. This surface offers {kinds}.",
+            ) from None
+        now = datetime.now(UTC)
+        opened = variances_core.Variance(
+            variance_id=str(uuid4()),
+            batch_id=batch_id,
+            feed_id=batch.feed_id,
+            kind=kind,
+            expected=body.expected,
+            actual=body.actual,
+            tolerance=body.tolerance,
+            opened_by=principal.subject,
+            opened_ts=now,
+        )
+        metadata.record_variance_event(opened, actor_subject=principal.subject, occurred_ts=now)
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=batch.feed_id,
+            action="variance:opened",
+            actor=principal.as_actor(),
+            detail=f"{opened.variance_id} · {kind.value} · delta {opened.delta}",
+        )
+        return _variance_out(opened)
+
+    def _decide_variance(
+        variance_id: str,
+        metadata: MetadataDbPort,
+        principal: Principal,
+        audit: AuditLog,
+        decide: Callable[[variances_core.Variance], variances_core.Variance],
+        action_name: str,
+    ) -> VarianceOut:
+        """One decision: the core's own refusals carried to the wire, the
+        result a new ledger row, everything audited — including the refusal,
+        because 'no state change without the required approver' is only
+        provable from rows."""
+        try:
+            held = metadata.get_variance(variance_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        if not principal.scopes.covers_feed(held.feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        try:
+            decided = decide(held)
+        except variances_core.VarianceError as refused:
+            audit.record(
+                object_type=ObjectType.FEED,
+                object_id=held.feed_id,
+                action=f"refused:variance_{action_name}",
+                actor=principal.as_actor(),
+                detail=str(refused),
+            )
+            raise HTTPException(status.HTTP_409_CONFLICT, str(refused)) from None
+        now = datetime.now(UTC)
+        metadata.record_variance_event(decided, actor_subject=principal.subject, occurred_ts=now)
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=held.feed_id,
+            action=f"variance:{action_name}",
+            actor=principal.as_actor(),
+            detail=f"{variance_id} -> {decided.outcome.value}",
+        )
+        return _variance_out(decided)
+
+    @app.post(
+        f"{API_PREFIX}/variances/{{variance_id}}/waive",
+        response_model=VarianceOut,
+        tags=["operations"],
+    )
+    def waive_variance(
+        variance_id: str,
+        body: WaiveVarianceIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.WAIVE_VARIANCE))],
+    ) -> VarianceOut:
+        """Steward only, and the type does the rest: a critical variance
+        cannot be waived AT ALL, a blank (or 'n/a') reason is refused, the
+        author cannot waive their own finding, and the expiry is capped."""
+        granted = datetime.now(UTC).date()
+        waiver = variances_core.Waiver(
+            waived_by=principal.subject,
+            reason=body.reason,
+            granted_on=granted,
+            expires_on=body.expires_on or variances_core.default_expiry(granted),
+        )
+        return _decide_variance(
+            variance_id,
+            metadata,
+            principal,
+            audit,
+            lambda variance: variance.waive(waiver),
+            "waive",
+        )
+
+    @app.post(
+        f"{API_PREFIX}/variances/{{variance_id}}/correct",
+        response_model=VarianceOut,
+        tags=["operations"],
+    )
+    def correct_variance(
+        variance_id: str,
+        body: CorrectVarianceIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.ACKNOWLEDGE))],
+    ) -> VarianceOut:
+        """The $48,000 path: fixed via reprocess, closed with a note that says
+        what was corrected — publication proceeds because the variance is
+        CORRECTED, not because anyone forgave it."""
+        return _decide_variance(
+            variance_id,
+            metadata,
+            principal,
+            audit,
+            lambda variance: variance.correct(by=principal.subject, note=body.note),
+            "correct",
+        )
+
+    @app.post(
+        f"{API_PREFIX}/variances/{{variance_id}}/approve-with-explanation",
+        response_model=VarianceOut,
+        tags=["operations"],
+    )
+    def approve_variance(
+        variance_id: str,
+        body: ExplainVarianceIn,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.WAIVE_VARIANCE))],
+    ) -> VarianceOut:
+        """An explanation is not a fix — the core refuses it for a critical
+        variance, and this route just carries the sentence."""
+        return _decide_variance(
+            variance_id,
+            metadata,
+            principal,
+            audit,
+            lambda variance: variance.approve_with_explanation(
+                by=principal.subject, explanation=body.explanation
+            ),
+            "approve_with_explanation",
+        )
+
+    # ── CF-V2-E13-04 · certification derives; there is no button ──────────
+
+    @app.get(
+        f"{API_PREFIX}/operations/batches/{{batch_id}}/certification",
+        response_model=CertificationOut,
+        tags=["operations"],
+    )
+    def batch_certification_view(
+        batch_id: str,
+        control: Control,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> CertificationOut:
+        """Computed ON THIS READ from retained history — recon rows, rule
+        results, drift, the SLA cycle and the variance ledger. There is no
+        route that sets a certification status; the absence is the
+        acceptance criterion, and a test holds it over the OpenAPI document.
+        """
+        batch = _batch_or_404(control, batch_id, principal)
+        verdict = batch_certification.certify(
+            batch_id=batch_id,
+            feed_id=batch.feed_id,
+            checks=_certification_checks(control, batch),
+            variances=metadata.list_variances(batch_id=batch_id),
+            now=datetime.now(UTC),
+        )
+        return CertificationOut(
+            batch_id=verdict.batch_id,
+            feed_id=verdict.feed_id,
+            verdict=verdict.verdict.value,
+            publishable=verdict.publishable,
+            derived_ts=verdict.derived_ts,
+            checks=[
+                CertificationCheckOut(
+                    kind=check.kind.value,
+                    passed=check.passed,
+                    completed=check.completed,
+                    evidence=check.evidence,
+                )
+                for check in verdict.checks
+            ],
+            variances=[_variance_out(v) for v in verdict.variances],
+        )
+
+    @app.get(
+        f"{API_PREFIX}/operations/batches/{{batch_id}}/certification/export",
+        tags=["operations"],
+    )
+    def export_certification(
+        batch_id: str,
+        control: Control,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.CERTIFY_EXPORT))],
+    ) -> PlainTextResponse:
+        """The evidence document, plain text on purpose: byte-comparable, so
+        'identical to the day it was certified' is a string equality. The
+        verdict derives from retained history, so re-deriving it from that
+        history returns the same bytes — evidence never degrades."""
+        batch = _batch_or_404(control, batch_id, principal)
+        verdict = batch_certification.certify(
+            batch_id=batch_id,
+            feed_id=batch.feed_id,
+            checks=_certification_checks(control, batch),
+            variances=metadata.list_variances(batch_id=batch_id),
+            now=datetime.now(UTC),
+        )
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=batch.feed_id,
+            action="certification:exported",
+            actor=principal.as_actor(),
+            detail=f"{batch_id} · {verdict.verdict.value}",
+        )
+        return PlainTextResponse(batch_certification.evidence_document(verdict))
+
     # ── CF-V1-E7-04 · the technical review queue ─────────────────────────
 
     @app.get(
@@ -5870,6 +6125,132 @@ def _reliability_observations(
 
     # IDENTITY is deliberately absent until Wave 3 — unmeasured, never zero.
     return observations
+
+
+def _variance_out(variance: variances_core.Variance) -> VarianceOut:
+    waiver = variance.waiver
+    return VarianceOut(
+        variance_id=variance.variance_id,
+        batch_id=variance.batch_id,
+        feed_id=variance.feed_id,
+        kind=variance.kind.value,
+        expected=variance.expected,
+        actual=variance.actual,
+        delta=variance.delta,
+        tolerance=variance.tolerance,
+        critical=variance.critical,
+        outcome=variance.outcome.value,
+        opened_by=variance.opened_by,
+        opened_ts=variance.opened_ts,
+        explanation=variance.explanation,
+        waived_by=waiver.waived_by if waiver else "",
+        waiver_reason=waiver.reason if waiver else "",
+        waiver_expires_on=waiver.expires_on if waiver else None,
+        citation=str(variance.citation),
+    )
+
+
+def _certification_checks(
+    control: ControlTablesPort, batch: BatchControl
+) -> tuple[batch_certification.Check, ...]:
+    """Every check is a control-plane read — the same discipline as the
+    board's counters and the reliability score. A check with nothing recorded
+    yet is INCOMPLETE (the verdict goes PENDING), never assumed passed; the
+    SLA check is OMITTED when no cycle was owed, because rule 1 only demands
+    the mandatory set and a window nobody promised cannot be missed."""
+    checks: list[batch_certification.Check] = []
+    recons = control.get_reconciliation(batch.batch_id)
+    balanced = all(r.balances for r in recons)
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.BALANCE,
+            passed=bool(recons) and balanced,
+            completed=bool(recons),
+            evidence=(
+                f"rows_in == rows_out + quarantined + attributed_drops on {len(recons)} stage(s)"
+                if recons
+                else "no reconciliation recorded yet"
+            ),
+            citation=CitationId(kind=CitationKind.RECON, subject=batch.batch_id),
+        )
+    )
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.RECONCILIATION,
+            passed=bool(recons) and all(r.unexplained == 0 for r in recons),
+            completed=bool(recons),
+            evidence=(
+                f"{sum(r.unexplained for r in recons)} unexplained rows across "
+                f"{len(recons)} stage(s)"
+                if recons
+                else "no reconciliation recorded yet"
+            ),
+            citation=CitationId(kind=CitationKind.RECON, subject=batch.batch_id),
+        )
+    )
+    total_drops = sum(entry.record_count for recon in recons for entry in recon.drop_ledger)
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.DROP_LEDGER,
+            passed=bool(recons)
+            and all(
+                entry.rule_id not in {"other", "unknown", ""}
+                for recon in recons
+                for entry in recon.drop_ledger
+            ),
+            completed=bool(recons),
+            evidence=f"{total_drops} excluded row(s), every one attributed to a rule",
+            citation=CitationId(kind=CitationKind.RECON, subject=batch.batch_id),
+        )
+    )
+    results = control.rule_results(batch.batch_id)
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.DQ_RULES,
+            passed=bool(results),
+            completed=bool(results),
+            evidence=(
+                f"{len(results)} rule(s) recorded a verdict; "
+                f"{sum(r.failed for r in results)} row(s) flagged, all attributed"
+                if results
+                else "no rule verdicts recorded — silence is not a pass"
+            ),
+            citation=CitationId(kind=CitationKind.BATCH, subject=batch.batch_id),
+        )
+    )
+    drift = control.get_schema_drift(batch.batch_id)
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.SCHEMA_CONTRACT,
+            passed=not any(d.blocked_batch for d in drift),
+            completed=True,
+            evidence=(
+                f"{len(drift)} drift finding(s), none blocking"
+                if not any(d.blocked_batch for d in drift)
+                else f"blocking drift: {', '.join(d.column_name for d in drift if d.blocked_batch)}"
+            ),
+            citation=CitationId(kind=CitationKind.BATCH, subject=batch.batch_id),
+        )
+    )
+    owed = next(
+        (
+            cycle
+            for cycle in control.sla_history(batch.feed_id, days=90)
+            if cycle.batch_id == batch.batch_id
+        ),
+        None,
+    )
+    if owed is not None:
+        checks.append(
+            batch_certification.Check(
+                kind=batch_certification.CheckKind.SLA_WINDOW,
+                passed=owed.sla_status == "On-Time",
+                completed=True,
+                evidence=f"cycle {owed.cycle_date.isoformat()} was {owed.sla_status}",
+                citation=CitationId(kind=CitationKind.FEED, subject=batch.feed_id),
+            )
+        )
+    return tuple(checks)
 
 
 def _incident_for(
