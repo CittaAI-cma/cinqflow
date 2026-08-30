@@ -248,7 +248,7 @@ ERROR_ID_HASH = _p(
 FINGERPRINT = _p("fingerprint", ArgType.STRING, "The file's content fingerprint.", required=True)
 
 
-#: The sixteen. Adding a seventeenth means adding a row here and nothing
+#: The seventeen. Adding an eighteenth means adding a row here and nothing
 #: else — the schema, the audit row, the citation wrapping and the
 #: catalogue-wide guarantees all come from this declaration.
 CATALOGUE: dict[str, ToolSpec] = {
@@ -385,6 +385,13 @@ CATALOGUE: dict[str, ToolSpec] = {
             name="get_input_registry",
             answers="Files seen for a feed: accepted, rejected, parked, skipped as duplicates.",
             parameters=(FEED_ID, WINDOW),
+            reads=frozenset({"control.input_registry"}),
+            cites=(CitationKind.FILE,),
+        ),
+        ToolSpec(
+            name="list_batch_inputs",
+            answers="Files registered against one run: accepted, rejected, parked, duplicates.",
+            parameters=(BATCH_ID,),
             reads=frozenset({"control.input_registry"}),
             cites=(CitationKind.FILE,),
         ),

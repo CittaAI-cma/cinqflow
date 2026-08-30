@@ -398,6 +398,14 @@ class ControlTablesPort(Protocol):
 
     def get_input_registry(self, feed_id: str, limit: int = 50) -> Sequence[InputFile]: ...
 
+    def list_batch_inputs(self, batch_id: str) -> Sequence[InputFile]:
+        """Every file registered against ONE run — the batch drawer's Inputs
+        tab. Distinct from `get_input_registry`, which is a FEED's history
+        across every run; a drawer open on `batch:8842` has a batch_id, not a
+        feed_id, and must never be handed the wrong scope to make that work.
+        """
+        ...
+
     # ── the SLA clock — reads ─────────────────────────────────────────────────
     def feed_sla_configs(self, *, feed_ids: Sequence[str] = ()) -> Sequence[FeedSlaConfig]:
         """Every version on file, unfiltered by default. `feed_ids` narrows to

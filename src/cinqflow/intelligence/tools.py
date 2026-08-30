@@ -652,6 +652,30 @@ def _get_input_registry(context: ToolContext, args: dict[str, Any]) -> ToolResul
     )
 
 
+def _list_batch_inputs(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    batch_id = str(args["batch_id"])
+    files = context.control.list_batch_inputs(batch_id)
+    citations = tuple(CitationId(CitationKind.FILE, f.fingerprint) for f in files)
+    return ToolResult(
+        tool="list_batch_inputs",
+        rows=tuple(
+            {
+                "filename": f.filename,
+                "fingerprint": f.fingerprint,
+                "size_bytes": f.size_bytes,
+                "state": f.state.value,
+                "arrived_ts": f.arrived_ts.isoformat(),
+                "rejection_reason": f.rejection_reason,
+                "record_count": f.record_count,
+                "unexpected": f.is_unexpected,
+                "citation_id": f"file:{f.fingerprint}",
+            }
+            for f in files
+        ),
+        citations=citations,
+    )
+
+
 def _lookup_reference(context: ToolContext, args: dict[str, Any]) -> ToolResult:
     found = context.reference.search(str(args["query"]), limit=int(args.get("limit", 5)))
     return ToolResult(
@@ -677,6 +701,7 @@ _RUNNERS = {
     "get_error_by_hash": _get_error_by_hash,
     "get_quarantine_summary": _get_quarantine_summary,
     "get_input_registry": _get_input_registry,
+    "list_batch_inputs": _list_batch_inputs,
     "get_file_by_fingerprint": _get_file_by_fingerprint,
     "lookup_reference": _lookup_reference,
 }

@@ -469,6 +469,15 @@ class PostgresControlTables:
         )
         return tuple(_input(row) for row in rows)
 
+    def list_batch_inputs(self, batch_id: str) -> Sequence[InputFile]:
+        rows = self._db.fetch_all(
+            "SELECT batch_id, feed_id, file_key, filename, size_bytes, fingerprint, state, "
+            "arrived_ts, rejection_reason, record_count FROM control.input_registry "
+            "WHERE batch_id = %s ORDER BY arrived_ts",
+            (batch_id,),
+        )
+        return tuple(_input(row) for row in rows)
+
     def feed_sla_configs(self, *, feed_ids: Sequence[str] = ()) -> Sequence[FeedSlaConfig]:
         # The filter is always PRESENT in the SQL and always a placeholder —
         # never a clause assembled from a string, which is how a query stops

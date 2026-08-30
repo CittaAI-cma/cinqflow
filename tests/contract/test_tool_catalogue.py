@@ -6,9 +6,9 @@
     — CF-V0-E16-09, guardrail and measurable
 
 The canary test below is the one that matters. It seeds a plane whose member
-data contains a marker string, invokes ALL SIXTEEN tools with every plausible
+data contains a marker string, invokes ALL SEVENTEEN tools with every plausible
 argument, and asserts the marker never appears anywhere in any result. That is
-a test that makes the attempt; a review of sixteen implementations is not.
+a test that makes the attempt; a review of seventeen implementations is not.
 """
 
 from __future__ import annotations
@@ -190,8 +190,8 @@ def test_a_tool_declaring_a_data_layer_read_cannot_be_constructed() -> None:
 # ── the catalogue, as a surface ──────────────────────────────────────────────
 
 
-def test_there_are_exactly_sixteen_certified_tools() -> None:
-    assert len(CATALOGUE) == 16
+def test_there_are_exactly_seventeen_certified_tools() -> None:
+    assert len(CATALOGUE) == 17
     assert set(CATALOGUE) == set(READ_ONLY_WHITELIST)
 
 

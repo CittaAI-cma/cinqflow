@@ -176,6 +176,46 @@ def test_an_unexpected_file_is_registered_not_ignored(control: ControlTablesPort
     assert unexpected.is_unexpected is True
 
 
+def test_batch_inputs_are_scoped_to_the_batch_not_the_feed_s_whole_history(
+    opened: ControlTablesPort,
+) -> None:
+    """The batch drawer's Inputs tab has a batch_id, never a feed_id — it must
+    be answerable from that alone. A prior file from the SAME feed, landed
+    under a different batch, must not appear."""
+    opened.register_input_file(
+        InputFile(
+            batch_id=BATCH,
+            feed_id=FEED,
+            key="incoming/2026-08-01/roster.xlsx",
+            filename="roster.xlsx",
+            size_bytes=1024,
+            fingerprint="sha256-this-batch",
+            state=FileState.ACCEPTED,
+            arrived_ts=NOW,
+        )
+    )
+    opened.register_input_file(
+        InputFile(
+            batch_id="8841",
+            feed_id=FEED,
+            key="incoming/2026-07-25/roster.xlsx",
+            filename="roster.xlsx",
+            size_bytes=1024,
+            fingerprint="sha256-a-different-batch",
+            state=FileState.ACCEPTED,
+            arrived_ts=NOW - timedelta(days=7),
+        )
+    )
+    (found,) = opened.list_batch_inputs(BATCH)
+    assert found.fingerprint == "sha256-this-batch"
+
+
+def test_an_empty_or_unknown_batch_has_no_inputs_not_an_error(
+    control: ControlTablesPort,
+) -> None:
+    assert control.list_batch_inputs("no-such-batch") == ()
+
+
 def test_the_error_hash_makes_replay_idempotent_at_the_error_level(
     control: ControlTablesPort,
 ) -> None:

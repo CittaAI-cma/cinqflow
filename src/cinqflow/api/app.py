@@ -282,7 +282,7 @@ class BatchPanel(StrEnum):
 #: Each panel is one certified tool. The drawer has no private query.
 _PANEL_TOOLS: dict[BatchPanel, str] = {
     BatchPanel.STAGES: "get_stage_status",
-    BatchPanel.INPUTS: "get_input_registry",
+    BatchPanel.INPUTS: "list_batch_inputs",
     BatchPanel.ERRORS: "list_errors",
     BatchPanel.QUARANTINE: "get_quarantine_summary",
     BatchPanel.RECON: "get_reconciliation",

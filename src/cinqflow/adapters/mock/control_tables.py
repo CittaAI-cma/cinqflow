@@ -183,6 +183,10 @@ class MemStoreControlTables:
         found = [f for f in self._inputs.values() if f.feed_id == feed_id]
         return tuple(sorted(found, key=lambda f: f.arrived_ts, reverse=True)[:limit])
 
+    def list_batch_inputs(self, batch_id: str) -> Sequence[InputFile]:
+        found = [f for f in self._inputs.values() if f.batch_id == batch_id]
+        return tuple(sorted(found, key=lambda f: f.arrived_ts))
+
     def feed_sla_configs(self, *, feed_ids: Sequence[str] = ()) -> Sequence[FeedSlaConfig]:
         found = list(self._sla_configs.values())
         if feed_ids:
