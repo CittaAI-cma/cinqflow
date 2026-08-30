@@ -65,7 +65,7 @@ def _requested(
 
 
 def test_success_observed_becomes_verified_with_the_observation_in_words() -> None:
-    control, metadata, verifier = _plane(BatchState.COMPLETED)
+    _control, metadata, verifier = _plane(BatchState.COMPLETED)
     _requested(metadata, OpsAction.RETRY)
 
     row = verifier.verify_record("act-retry", now=NOW + timedelta(minutes=18))

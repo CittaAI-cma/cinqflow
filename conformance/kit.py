@@ -175,7 +175,20 @@ def _egress_check() -> Check:
     A local import: `conformance.checks.egress` imports `Check`/`Verdict` FROM
     this module, so importing it at module scope here would be a real cycle.
     Deferred exactly like `_law_checks()`'s own imports, for the same reason.
+
+    This module is also run directly (`python conformance/kit.py`, per
+    README.md, ci.yml and scripts/wave0-demo.sh) rather than only via
+    `python -m conformance.kit`. Run that way, Python puts THIS file's own
+    directory on `sys.path`, not its parent — so the `conformance` PACKAGE
+    (needed for the absolute import below) is not importable yet. Fix that
+    narrowly, here, rather than depending on the caller's invocation style.
     """
+    from pathlib import Path
+
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
     from conformance.checks.egress import check_egress
 
     return check_egress()

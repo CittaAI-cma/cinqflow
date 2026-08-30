@@ -246,7 +246,7 @@ class RuleResult:
 
     @property
     def pass_rate(self) -> float:
-        """0.0–1.0. An unevaluated rule has no rate — the caller filters on
+        """0.0-1.0. An unevaluated rule has no rate — the caller filters on
         `evaluated` first; answering 1.0 here would make a skipped rule look
         like a perfect one, which is the story's own don't."""
         if self.evaluated <= 0:
