@@ -304,6 +304,69 @@
   form.ask { display: flex; gap: var(--s-2); max-width: var(--measure); }
   form.ask input { flex: 1; }
 
+  /* A link that IS the action. Same geometry as button.primary, because a
+     person cannot see which of the two an element happens to be. */
+  a.action {
+    display: inline-flex; align-items: center; gap: var(--s-2);
+    background: var(--accent); border: 1px solid var(--accent);
+    color: var(--ink-inverse); border-radius: var(--radius-sm);
+    padding: var(--s-2) var(--s-4); font-weight: 600;
+    transition: background var(--dur-fast) var(--ease);
+  }
+  a.action:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  /* The reset zeroes p margins, so an action row leading a page runs into
+     the paragraph beneath it and reads as one block. */
+  .inline.action-row { margin-bottom: var(--s-4); }
+
+  /* ---- the delivery form (CF-V1-E3-05) ---- */
+  .field { display: flex; flex-direction: column; gap: var(--s-1);
+           max-width: var(--measure); margin-bottom: var(--s-4); }
+  .field > label, .field > summary { font-weight: 600; }
+  .field > input, .field > select { align-self: flex-start; min-width: 18ch; }
+  details.field > summary { cursor: pointer; margin-bottom: var(--s-2); }
+
+  .dropzone {
+    display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-2);
+    border: 1px dashed var(--line-strong); border-radius: var(--radius-md);
+    background: var(--surface-2); padding: var(--s-5) var(--s-4);
+    max-width: var(--measure); margin-bottom: var(--s-3);
+    transition: background var(--dur-fast) var(--ease),
+                border-color var(--dur-fast) var(--ease);
+  }
+  .dropzone > label { font-weight: 600; }
+  .dropzone[data-dragging="true"] { border-color: var(--accent); background: var(--accent-wash); }
+  .dropzone[data-picked="true"]   { border-style: solid; background: var(--surface); }
+
+  /* The pattern reading. It is ADVICE — hence no green tick and no red cross,
+     which would both read as a verdict the browser is not entitled to give. */
+  .verdict { max-width: var(--measure); margin-bottom: var(--s-4);
+             border-left: 2px solid var(--line-strong); padding-left: var(--s-3); }
+  .verdict[data-verdict="match"]    { border-left-color: var(--st-completed); }
+  .verdict[data-verdict="mismatch"] { border-left-color: var(--st-processing); }
+
+  /* ---- the landing decision ---- */
+  /* The reset zeroes every margin, so the panel sets its own rhythm — without
+     it the word, the gloss, the headline, the path and the next step run
+     together as one block of text at the exact moment somebody is scanning
+     for one fact. */
+  .outcome { display: flex; flex-direction: column; gap: var(--s-2);
+             border-left: 3px solid var(--line-strong); }
+  .outcome .outcome-word { display: block; letter-spacing: .04em; }
+  /* One short label beside one long path. The page-wide 190px label column
+     opens a gap that reads as a rendering fault at this width. */
+  .outcome .kv { grid-template-columns: auto minmax(0, 1fr); column-gap: var(--s-3); }
+  .outcome[data-outcome="ACCEPTED"]   { border-left-color: var(--st-completed); }
+  .outcome[data-outcome="ACCEPTED"]   .outcome-word { color: var(--st-completed); }
+  .outcome[data-outcome="UNEXPECTED"] { border-left-color: var(--st-processing); }
+  .outcome[data-outcome="UNEXPECTED"] .outcome-word { color: var(--st-processing); }
+  .outcome[data-outcome="REJECTED"]   { border-left-color: var(--st-needs-attention); }
+  .outcome[data-outcome="REJECTED"]   .outcome-word { color: var(--st-needs-attention); }
+  .outcome[data-outcome="REFUSED"]    { border-left-color: var(--st-needs-attention); }
+  .outcome[data-outcome="REFUSED"]    .outcome-word { color: var(--st-needs-attention); }
+  .outcome[data-outcome="SKIPPED"]    { border-left-color: var(--st-expected); }
+  .outcome[data-outcome="SKIPPED"]    .outcome-word { color: var(--st-expected); }
+  .outcome[data-outcome="NOT SENT"]   .outcome-word { color: var(--ink-3); }
+
   /* ---- metric tile ---- */
   .tile .label { color: var(--ink-3); font-size: var(--t-sm); }
   .tile .big { font-size: var(--t-xl); font-weight: 680; line-height: var(--lh-tight);

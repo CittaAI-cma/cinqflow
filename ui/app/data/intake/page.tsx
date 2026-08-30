@@ -37,6 +37,19 @@ export default async function DataIntake({
         What feeds exist, what should arrive, what arrived, and what is Missing.
       </p>
 
+      {/* CF-V1-E3-05. The wizard's first step is "Upload sample", and for as
+          long as the only way to reach it was through a feed's own page, the
+          screen named after intake offered no way to take anything IN. */}
+      <p className="inline action-row">
+        <Link className="action" href="/data/intake/deliver">
+          Deliver a file
+        </Link>
+        <span className="note">
+          Upload what a payer sent. It lands through the same controls as an SFTP poller&rsquo;s
+          fetch, and the platform tells you what it decided.
+        </span>
+      </p>
+
       <p className="note">
         <Link href="/data/canonical">The canonical model</Link> — what feeds map to ·{" "}
         <Link href="/data/intake/sources">Sources</Link> — who sends us data, and who to ring ·{" "}
@@ -88,6 +101,7 @@ export default async function DataIntake({
                 <th>Schedule</th>
                 <th>Version</th>
                 <th>Status</th>
+                <th>Deliver</th>
               </tr>
             </thead>
             <tbody>
@@ -108,6 +122,15 @@ export default async function DataIntake({
                   </td>
                   <td>
                     <Status word={feed.status} />
+                  </td>
+                  <td>
+                    {/* The feed's own delivery step, one click from the list.
+                        Named per row rather than as a bare "Upload", because a
+                        row action with no subject is unreadable to a screen
+                        reader hearing it out of context. */}
+                    <Link className="cited" href={`/data/intake/feed/${feed.feed_id}/deliver`}>
+                      Upload<span className="sr-only"> a file to {feed.feed_id}</span>
+                    </Link>
                   </td>
                 </tr>
               ))}

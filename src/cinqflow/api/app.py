@@ -3250,6 +3250,7 @@ def _delivery_out(outcome: DeliveryOutcome, principal: Principal) -> DeliveryOut
         feed_id=delivery.feed_id,
         filename=delivery.file.filename,
         key=delivery.file.key,
+        landed_key=outcome.landed_key or delivery.file.key,
         size_bytes=delivery.file.size_bytes,
         fingerprint=delivery.fingerprint,
         business_date=delivery.business_date,

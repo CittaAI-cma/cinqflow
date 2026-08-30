@@ -12,6 +12,7 @@ htmlcov/
 # Node / Next.js
 node_modules/
 ui/.next/
+ui/.next-test/
 ui/out/
 ui/next-env.d.ts
 

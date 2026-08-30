@@ -32,11 +32,11 @@ python -m venv .venv && . .venv/bin/activate
 pip install -r requirements/dev.txt && pip install -e . --no-deps
 
 ./scripts/wave0-demo.sh            # the whole wave, proving itself
-python conformance/kit.py          # 20 pins + 3 platform laws
+python conformance/kit.py          # 21 pins + 3 platform laws
 cinqflow ask "why did batch 8842 lose rows?"
 
 cd ui && npm install && npm run dev # http://localhost:3000/signin
-cd ui && npm test                   # 24 Playwright assertions
+cd ui && npm test                   # 69 Playwright assertions
 ```
 
 Nothing above needs a database, a container or a credential — that is rung 0.
@@ -46,6 +46,34 @@ For the real Postgres plane (rung 0.5, the default development socket):
 cp .env.example .env               # then fill in CINQFLOW_SECRET_PG_DSN
 cinqflow install --profile profiles/local.yaml
 ```
+
+## Getting a file in
+
+Files arrive through the **`connector` pin** — the only pin with a write verb
+into the landing zone. `storage` deliberately has none, so nothing else in the
+platform can put a file there: *there is no second door* (ADR-0011).
+
+```bash
+# a file, from the shell — the same path an SFTP poller takes
+cinqflow ingest --business-date 2026-10-01 --file ./_CINQDOWNSTATE_Member_Roster_20261001.xlsx
+
+# or from the workspace
+open http://127.0.0.1:3000/data/intake/deliver
+```
+
+Either way you get a **landing decision**, not "upload succeeded" — the bytes
+almost always arrive, and what matters is what the platform decided:
+
+| | | |
+|---|---|---|
+| `ACCEPTED` | → `processed/` | registered, then profiled by computation |
+| `UNEXPECTED` | → `parked/` | matched no pattern. Registered anyway, never discarded |
+| `REJECTED` | → `rejected/` | a named pre-flight check declined it |
+| `SKIPPED` | → `archive/` | the fingerprint is already in the input registry |
+
+An accepted file is profiled straight away — row counts, type readings, null
+counts, key candidates. **No model is called**, which is what makes every fact
+on the next screen citable and what the schema-inference agent grounds on.
 
 ## Layout
 
@@ -57,13 +85,15 @@ src/cinqflow/
     schema_spec/   11 control tables + 6 data schemas, declared once
     registry/      feed · contract · dq rules · execution-plane register
     compiler/      metadata -> IR -> execution
-    landing/ recon/ parsers/ security/ navigation.py
+    landing/       what happens to an arriving file: the four outcomes
+    delivery/      how one gets IN: the key layout, the name rule, the checksum
+    recon/ parsers/ security/ navigation.py
     prompts/       the fixed assembly order, owned by one function
     intelligence/  the six call stages, budgets, routing, schema subset
     tools/         16 certified tools, declared as data
     retrieval/     lexical index + a glossary generated from the vocabulary
     agents/        graphs as data — no runtime imported, ever
-  ports/         20 pins: a Protocol each, and ONE contract suite each
+  ports/         21 pins: a Protocol each, and ONE contract suite each
   adapters/      mock · local (Postgres, dotenv) · openai_compatible · replay
   intelligence/  the gateway, the tool executor, the agent, the eval gates
   api/           the BFF. Its OpenAPI document is the UI's contract.

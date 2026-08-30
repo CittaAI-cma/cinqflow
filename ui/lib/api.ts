@@ -41,13 +41,27 @@ export class Unreachable extends Error {
     readonly url: string,
     options?: { cause?: unknown },
   ) {
+    // The port comes from the URL that actually failed, not from a constant.
+    // It was hard-coded to 8000 while the Playwright stack runs the API on
+    // 8100 — so the one person most likely to read this message was told to
+    // start a server on a port nothing was looking at, beneath a line naming
+    // the port that was.
     super(
       `Could not reach the CINQFLOW API at ${url}. ` +
-        `Start it with:  cd cinqflow && PYTHONPATH=src .venv/bin/python -m cinqflow.api.dev --port 8000  ` +
+        `Start it with:  cd cinqflow && PYTHONPATH=src .venv/bin/python -m cinqflow.api.dev --port ${portOf(url)}  ` +
         `— or point CINQFLOW_API at wherever it is running.`,
       options,
     );
     this.name = "Unreachable";
+  }
+}
+
+/** The port we actually looked at, or the default when the URL is unreadable. */
+function portOf(url: string): string {
+  try {
+    return new URL(url).port || "8000";
+  } catch {
+    return "8000";
   }
 }
 

@@ -86,6 +86,45 @@ test("a read-only user may still read the mapping and the rules", async ({ page 
 });
 
 // ── CF-V1-E3-05 · the delivery step ─────────────────────────────────────────
+//
+// The route, the connector and the landing decision all had Python coverage
+// before any of this: 74 contract tests over three adapters, 21 over the route.
+// None of it proved the thing a person actually touches, and the form that
+// posted to that route reported `REJECTED — Error: NEXT_REDIRECT` for every
+// delivery it made, because `redirect()` throws and it was called inside the
+// try/catch that renders refusals. A green API contract does not make a
+// working product.
+
+/** Unique per run, so a fingerprint from an earlier run cannot make this SKIP. */
+function roster(): Buffer {
+  return Buffer.from(`MemberID,First_Name\nM${Date.now()},Ada\n`);
+}
+
+async function choose(page: Page, name: string, content: Buffer) {
+  await page.locator('input[type="file"]').setInputFiles({
+    name,
+    mimeType: "text/csv",
+    buffer: content,
+  });
+}
+
+test("Data Intake offers a way to take something in", async ({ page }) => {
+  // The screen is named for intake. For the whole of Wave 1 it had no control
+  // that put a file into the platform — the delivery step existed, two clicks
+  // deep, on a page you could only reach if you already knew where you were
+  // going.
+  await signIn(page);
+  await page.goto("/data/intake");
+  await expect(page.getByRole("link", { name: /deliver a file/i })).toBeVisible();
+});
+
+test("each registered feed offers its own upload from the list", async ({ page }) => {
+  await signIn(page);
+  await page.goto("/data/intake");
+  await page.getByRole("link", { name: new RegExp(`upload a file to ${FEED}`, "i") }).click();
+  await page.waitForURL(new RegExp(`/data/intake/feed/${FEED}/deliver$`));
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+});
 
 test("the feed page offers the upload step the wizard names", async ({ page }) => {
   await signIn(page);
@@ -114,11 +153,104 @@ test("the page says where a delivered file goes", async ({ page }) => {
   await expect(page.getByText(/skipped/i)).toBeVisible();
 });
 
-test("a reader is not offered the upload step as if it would work", async ({ page }) => {
-  // Delivering is EDIT_FEED. The route refuses at the server; what this
-  // asserts is that the page still renders rather than erroring, so a reader
-  // who follows a link sees an explanation instead of a stack trace.
+test("the Data Intake door asks which feed, because there the feed is the question", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.goto("/data/intake/deliver");
+  await expect(page.getByRole("heading", { name: /deliver a file/i })).toBeVisible();
+  await expect(page.getByLabel(/which feed/i)).toBeVisible();
+  await expect(page.locator('input[type="file"]')).toBeVisible();
+});
+
+test("a delivery reports the platform's decision, never the redirect", async ({ page }) => {
+  // The regression. `redirect()` works by THROWING; called inside the catch
+  // that renders refusals, it was caught and rendered AS one — so a file the
+  // platform had received, registered and parked came back to the person as
+  // `REJECTED — Error: NEXT_REDIRECT`. Every delivery through the only upload
+  // surface in the product reported a false rejection.
+  await signIn(page);
+  await page.goto(`/data/intake/feed/${FEED}/deliver`);
+  await choose(page, "payer_sent_the_wrong_thing.csv", roster());
+  await page.getByRole("button", { name: /^deliver$/i }).click();
+  await page.waitForURL(/outcome=/);
+  await page.getByRole("heading", { level: 1 }).waitFor();
+
+  const body = await page.locator("body").innerText();
+  expect(body, "a redirect is not a landing decision").not.toContain("NEXT_REDIRECT");
+  await expect(page.locator('[data-outcome="UNEXPECTED"]')).toBeVisible();
+});
+
+test("an unmatched file is reported as parked, not as lost", async ({ page }) => {
+  // ADR-0011: every arriving file is registered, INCLUDING the unexpected
+  // ones. A screen that said "rejected" and stopped would send somebody to ask
+  // the payer to resend a file the platform is already holding.
+  await signIn(page);
+  await page.goto(`/data/intake/feed/${FEED}/deliver`);
+  await choose(page, "nobody_registered_this.csv", roster());
+  await page.getByRole("button", { name: /^deliver$/i }).click();
+  await page.waitForURL(/outcome=/);
+  await expect(page.getByText(/parked/i).first()).toBeVisible();
+});
+
+test("delivering the same content twice is reported as already held", async ({ page }) => {
+  // Exactly-once ingestion, through the door a person uses. The second
+  // delivery is not a failure and must not read as one.
+  const content = roster();
+  await signIn(page);
+  for (const attempt of [1, 2]) {
+    await page.goto(`/data/intake/feed/${FEED}/deliver`);
+    await choose(page, "sent_again.csv", content);
+    await page.getByRole("button", { name: /^deliver$/i }).click();
+    await page.waitForURL(/outcome=/);
+    if (attempt === 2) await expect(page.locator('[data-outcome="SKIPPED"]')).toBeVisible();
+  }
+});
+
+test("an empty form is NOT reported as a landing decision", async ({ page }) => {
+  // Nothing left the browser, so no check ran, no row exists and nothing was
+  // decided. Rendering that as REJECTED would put a decision in somebody's
+  // head that no registry row anywhere records.
+  await signIn(page);
+  await page.goto("/data/intake/deliver");
+  // The file input is `required`, so the post is driven past the browser's own
+  // validation the way a scripted client would.
+  await page.locator("form").evaluate((form: HTMLFormElement) => form.noValidate = true);
+  await page.getByRole("button", { name: /^deliver$/i }).click();
+  await page.waitForURL(/outcome=/);
+  await expect(page.locator('[data-outcome="NOT SENT"]')).toBeVisible();
+  const body = await page.locator("body").innerText();
+  expect(body).not.toContain("REJECTED");
+});
+
+test("the browser reads the pattern as advice and never as a gate", async ({ page }) => {
+  // A browser that refused a file the platform had not seen would be a second
+  // door — worse than the one ADR-0011 forbids, because a file refused here
+  // leaves no registry row, no parked copy and no reason anybody can read.
+  await signIn(page);
+  await page.goto(`/data/intake/feed/${FEED}/deliver`);
+  await choose(page, "definitely_not_the_pattern.csv", roster());
+  await expect(page.locator('[data-verdict="mismatch"]')).toBeVisible();
+  await expect(page.getByText(/deliver it anyway/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /^deliver$/i })).toBeEnabled();
+});
+
+test("the browser confirms a name that DOES match, before anything is sent", async ({ page }) => {
+  await signIn(page);
+  await page.goto(`/data/intake/feed/${FEED}/deliver`);
+  await choose(page, "_CINQDOWNSTATE_Member_Roster_20261001.xlsx", roster());
+  await expect(page.locator('[data-verdict="match"]')).toBeVisible();
+});
+
+test("a reader is told they may not deliver, rather than handed a button that 403s", async ({
+  page,
+}) => {
+  // Delivering is EDIT_FEED — a reader who could deliver could put content
+  // into the estate. The route refuses at the server; this asserts the screen
+  // says so first, in a sentence, rather than rendering an inviting control.
   await signIn(page, "dev-analyst@cinqcare.test");
   const response = await page.goto(`/data/intake/feed/${FEED}/deliver`);
   expect(response?.status()).toBeLessThan(500);
+  await expect(page.getByRole("button", { name: /^deliver$/i })).toBeDisabled();
+  await expect(page.getByText(/edit_feed/)).toBeVisible();
 });

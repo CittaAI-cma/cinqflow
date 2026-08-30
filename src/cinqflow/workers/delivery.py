@@ -66,6 +66,15 @@ class DeliveryOutcome:
     #: this says WHICH PERSON pressed Upload, and is the subject an approver
     #: looks for when asking who put this content in the estate.
     requested_by: str = ""
+    #: WHERE THE FILE IS, after landing moved it. Distinct from
+    #: `delivery.file.key`, which is where the connector PUT it — always
+    #: `incoming/`, because a connector that could land into `processed/` would
+    #: be deciding a file was acceptable.
+    #:
+    #: Both are true and the receipt needs this one: a screen that showed the
+    #: delivered key told somebody their accepted file was in `incoming/` while
+    #: it was in `processed/`, and sent them to look in an empty directory.
+    landed_key: str = ""
     profile_id: str | None = None
     profile: FileProfile | None = None
 
@@ -195,20 +204,31 @@ class DeliveryWorker:
         decision = classify(file, feeds=(feed.for_landing(feed_version),), fingerprint_seen=seen)
         self._register(file, decision)
         self.storage.move(file.key, decision.move_to)
+        moved = self._moved_key(file.key, decision)
 
         if decision.outcome is not LandingOutcome.ACCEPTED or not profile_it:
-            return DeliveryOutcome(delivery=delivery, decision=decision, requested_by=requested_by)
+            return DeliveryOutcome(
+                delivery=delivery,
+                decision=decision,
+                requested_by=requested_by,
+                landed_key=moved,
+            )
 
-        moved = self._moved_key(file.key, decision)
         record = self._profile(
             feed.feed_id, moved, feed.file_format, requested_by or delivery.delivered_by
         )
         if record is None:
-            return DeliveryOutcome(delivery=delivery, decision=decision, requested_by=requested_by)
+            return DeliveryOutcome(
+                delivery=delivery,
+                decision=decision,
+                requested_by=requested_by,
+                landed_key=moved,
+            )
         return DeliveryOutcome(
             delivery=delivery,
             decision=decision,
             requested_by=requested_by,
+            landed_key=moved,
             profile_id=record.profile_id,
             profile=record.profile,
         )

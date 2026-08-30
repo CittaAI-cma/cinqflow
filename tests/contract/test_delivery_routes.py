@@ -110,6 +110,32 @@ def test_a_delivered_file_is_accepted_and_lands_under_the_layout(client: TestCli
     assert body["fingerprint"] == fingerprint_of(ROSTER)
 
 
+def test_the_receipt_says_where_the_file_is_now_not_where_it_was_put(
+    client: TestClient, landing: LocalFsStorage
+) -> None:
+    """Landing MOVES an accepted file out of `incoming/` before this returns.
+
+    A receipt naming the delivered key sent somebody to look in an empty
+    directory for a file the platform had already accepted — so the key a
+    person is shown is asserted against the filesystem, not against the
+    composition that produced it.
+    """
+    body = _upload(client).json()
+    assert body["landed_key"] == f"{FEED.landing_path}/processed/{DATE}/{GOOD_NAME}"
+    assert landing.exists(body["landed_key"])
+    assert not landing.exists(body["key"])
+
+
+def test_a_parked_file_is_reported_where_a_person_can_go_and_look_at_it(
+    client: TestClient, landing: LocalFsStorage
+) -> None:
+    """The unexpected ones matter most here — parked is only better than lost
+    if somebody can be told where the parking is."""
+    body = _upload(client, name="something_nobody_registered.csv").json()
+    assert "/parked/" in body["landed_key"]
+    assert landing.exists(body["landed_key"])
+
+
 def test_the_receipt_cites_the_file_so_the_explorer_can_open_it(client: TestClient) -> None:
     """No new citation kind was needed — a delivery IS a file."""
     body = _upload(client).json()

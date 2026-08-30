@@ -416,7 +416,10 @@ export interface Delivery {
   check_name: string | null;
   feed_id: string;
   filename: string;
+  /** Where the connector PUT it — always under `incoming/`. */
   key: string;
+  /** Where it IS, after landing moved it. This is the one to show a person. */
+  landed_key: string;
   size_bytes: number;
   fingerprint: string;
   business_date: string;

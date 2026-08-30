@@ -56,6 +56,20 @@ for (const [name, route] of DESTINATIONS) {
   });
 }
 
+test("the delivery form has no accessibility violations", async ({ page }) => {
+  // A form is where a11y bugs actually live — an unlabelled control, a
+  // required field announced to nobody, a status colour carrying meaning on
+  // its own. This is the only form in the intake stack a person fills in from
+  // scratch, and the drop zone it carries is custom.
+  await signIn(page, "dev-engineer@cinqcare.test");
+  await page.goto("/data/intake/deliver");
+  const { violations } = await new AxeBuilder({ page })
+    .withTags(TAGS)
+    .exclude("nextjs-portal")
+    .analyze();
+  expect(describe(violations)).toEqual([]);
+});
+
 test("Users & Roles has no accessibility violations", async ({ page }) => {
   await signIn(page, "dev-admin@cinqcare.test");
   await page.goto("/admin/users");

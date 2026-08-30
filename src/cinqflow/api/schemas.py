@@ -891,7 +891,12 @@ class DeliveryOut(BaseModel):
     check_name: str | None = None
     feed_id: str
     filename: str
+    #: Where the connector PUT it — always under `incoming/`.
     key: str
+    #: Where it IS, after landing moved it. Both are true, and this is the one
+    #: to show a person: a receipt that named the delivered key told somebody
+    #: their accepted file was in `incoming/` while it was in `processed/`.
+    landed_key: str
     size_bytes: int
     fingerprint: str
     business_date: str

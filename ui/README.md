@@ -48,10 +48,60 @@ npm run dev                 # http://127.0.0.1:3000/signin
 `CINQFLOW_API` defaults to `http://127.0.0.1:8000`; set it if the API is
 somewhere else. `npm test` needs neither shell — Playwright starts both itself.
 
+### Two stacks, and they must not touch
+
+`npm test` starts its **own** pair beside the one you are browsing. Everything
+about them is separate, and each separation is there because its absence broke
+something real:
+
+| | you browse | `npm test` |
+|---|---|---|
+| Next | `:3000` | `:3100` |
+| API | `:8000` | `:8100` |
+| build dir | `.next` | `.next-test` (`NEXT_DIST_DIR`) |
+| landing zone | `.cinqflow/landing` | `.cinqflow/test-landing` |
+
+Two dev servers rebuilding one `.next` corrupt each other's client-reference
+manifest, and the symptom is not a build error — the running app starts serving
+**500s for pages that are fine**, or sign-in silently stops setting its cookie.
+If you ever see `Invariant: Expected clientReferenceManifest to be defined`,
+that is what happened; the config now prevents it.
+
+The other half of that confusion: a "could not reach the API" page names the
+port **it actually tried**, so an error mentioning `:8100` is the *test* stack,
+not yours.
+
 The API's OpenAPI document is the contract. `lib/api.ts` is the only module
 that talks to it, and the only place that distinguishes a **refusal** (a
 decision the server made and recorded) from **unreachable** (a transport
-failure that reached nobody).
+failure that reached nobody). It exports two callers: `api()` for JSON and
+`upload()` for the one multipart request in the product — separate rather than
+a flag, because `upload()` must *omit* `content-type` so the runtime can set
+the multipart boundary it generated.
+
+## Getting a file in
+
+Two doors, **one** server action, one route — a second upload path would be a
+second place for the business date to be formatted differently or a refusal to
+be swallowed.
+
+| File | Its job |
+|---|---|
+| `app/data/intake/deliver/page.tsx` | intake's own door — here the feed is the *question* |
+| `app/data/intake/feed/[feedId]/deliver/page.tsx` | one feed's step; the feed is the *address*, so it is locked |
+| `app/data/intake/deliver/actions.ts` | the shared server action. `redirect()` is called **outside** the try/catch |
+| `components/DeliverForm.tsx` | drop zone, name echo, live pattern reading, pending state |
+| `components/DeliveryOutcome.tsx` | the landing decision — path, citation, link into the profile |
+
+Two rules these keep, both with tests behind them:
+
+- **The browser advises; it never gates.** The form reads the feed's pattern
+  and says what will happen, then lets you send it anyway. A file stopped in
+  the browser leaves no registry row, no parked copy and no reason anybody can
+  read — worse than the second door ADR-0011 forbids.
+- **`redirect()` throws.** Called inside the `catch` that renders refusals it
+  is caught *as* one, and every delivery reports
+  `REJECTED — Error: NEXT_REDIRECT` however well it actually went.
 
 ## The design system
 
