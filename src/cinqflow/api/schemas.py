@@ -11,7 +11,8 @@ convention the frontend is asked to remember.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -1372,3 +1373,625 @@ class MappingDiffOut(BaseModel):
     lines: list[MappingDiffLineOut] = Field(default_factory=list)
     fields_losing_their_source: list[str] = Field(default_factory=list)
     summary: str = ""
+
+
+# ── CF-V1-E4-01 · the five-step wizard ───────────────────────────────────────
+class ObstacleOut(BaseModel):
+    """One thing standing between the BA and done.
+
+    Three strings and a ROUTE. The route is `CitationId.route` — the platform's
+    own address space, already resolved server-side — so "one-click navigation
+    back to them" is a link the client renders rather than a mapping the client
+    has to know how to build.
+    """
+
+    key: str
+    what: str
+    why_it_matters: str
+    how_to_fix: str
+    citation: str | None = None
+    route: str = ""
+    blocking: bool = True
+
+
+class WizardStepOut(BaseModel):
+    """One of the five, as it actually is.
+
+    `state` and `status` are both here on purpose. `status` is one of the seven
+    words a user is ever shown; `state` is the richer machine the wizard needs
+    to decide which control to draw. The UI reads the word and never invents an
+    eighth.
+    """
+
+    step: str
+    ordinal: int
+    label: str
+    state: str
+    status: StatusWord
+    is_complete: bool
+    version: int | None = None
+    citation: str | None = None
+    obstacles: list[ObstacleOut] = Field(default_factory=list)
+
+
+class WizardOut(BaseModel):
+    """The single readiness view — what is complete, what is missing, what
+    needs somebody else."""
+
+    feed_id: str
+    steps: list[WizardStepOut] = Field(default_factory=list)
+    resume_at: str
+    is_publishable: bool
+    outstanding: list[ObstacleOut] = Field(default_factory=list)
+    gaps: list[ObstacleOut] = Field(default_factory=list)
+    #: CF-V1-E3-02's operational checklist, carried in the SAME view so a BA
+    #: sees one list rather than a wizard and a registry disagreeing about
+    #: whether the feed is ready.
+    operations_outstanding: list[str] = Field(default_factory=list)
+    explanation: str = ""
+
+
+# ── CF-V1-E4-02 · the evidence pack ──────────────────────────────────────────
+class RuleOutcomeOut(BaseModel):
+    """One rule's hit rate on the sample — including the rules that fired zero
+    times, because silence is data."""
+
+    rule_id: str
+    name: str
+    tested: int
+    flagged: int
+    hit_rate: float
+    quarantined: bool
+
+
+class DropExplanationOut(BaseModel):
+    rule_id: str
+    reason: str
+    record_count: int
+    columns: list[str] = Field(default_factory=list)
+
+
+class ExampleOut(BaseModel):
+    """One row before and after, with protected values already masked.
+
+    Masked in the PACK, not by this schema: the pack leaves the platform as a
+    document, and a masking policy applied only on the way out of an API is one
+    that stops applying the moment somebody exports.
+    """
+
+    row_number: int
+    before: dict[str, str] = Field(default_factory=dict)
+    after: dict[str, str] = Field(default_factory=dict)
+
+
+class GapOut(BaseModel):
+    key: str
+    what: str
+    why_it_is_acceptable: str
+    citation: str | None = None
+
+
+class FailureOut(BaseModel):
+    step: str
+    explanation: str
+    citation: str | None = None
+    route: str = ""
+
+
+class EvidencePackOut(BaseModel):
+    """What a reviewer receives, generated rather than assembled.
+
+    `markdown` is the whole artifact, so a reviewer without platform access
+    reads exactly what an approver saw — which is the story's own requirement
+    and the reason the document is not a rendering the client composes.
+    """
+
+    feed_id: str
+    fingerprint: str
+    produced_ts: datetime
+    rows_in: int
+    rows_loaded: int
+    rows_quarantined: int
+    balanced: bool
+    accounts_for_every_row: bool
+    partial: bool
+    summary: str
+    sample_filename: str = ""
+    drops: list[DropExplanationOut] = Field(default_factory=list)
+    rules: list[RuleOutcomeOut] = Field(default_factory=list)
+    examples: list[ExampleOut] = Field(default_factory=list)
+    gaps: list[GapOut] = Field(default_factory=list)
+    failure: FailureOut | None = None
+    markdown: str = ""
+
+
+# ── CF-V1-E4-03 · signatures and the narrative ───────────────────────────────
+class SignatureOut(BaseModel):
+    """One approver's act, and the configuration they were looking at.
+
+    `evidence_fingerprint` is on the signature rather than only on the release,
+    because two approvers who signed two different packs have approved two
+    different feeds — and that has to be visible, not inferred.
+    """
+
+    approval: str
+    question: str
+    actor_subject: str
+    actor_name: str
+    signed_ts: datetime
+    evidence_fingerprint: str
+    comment: str = ""
+
+
+class ReleasePacketOut(BaseModel):
+    feed_id: str
+    feed_version: int
+    author_subject: str
+    evidence_fingerprint: str
+    signatures: list[SignatureOut] = Field(default_factory=list)
+    outstanding: list[str] = Field(default_factory=list)
+    signatures_agree: bool = True
+    is_complete: bool = False
+    explanation: str = ""
+
+
+class ChapterOut(BaseModel):
+    occurred_ts: datetime
+    who: str
+    what: str
+    object_type: str
+    detail: str = ""
+
+
+class NarrativeOut(BaseModel):
+    """The whole journey, oldest first — built from the audit ledger, so an act
+    that produced no audit entry does not appear, which is correct."""
+
+    feed_id: str
+    chapters: list[ChapterOut] = Field(default_factory=list)
+    story: str = ""
+
+
+class SignIn(BaseModel):
+    approval: str
+    comment: str
+
+
+# ── CF-V1-E8-03 · dependencies and holds ─────────────────────────────────────
+class BlockerOut(BaseModel):
+    """One thing standing between a schedule and a run.
+
+    `chain` is the path that reached the root cause. An operator told only
+    "waiting on enrollment" goes and looks at a feed that is itself blameless.
+    """
+
+    reason: str
+    feed_id: str
+    business_date: str
+    batch_id: str | None = None
+    state: str | None = None
+    layer: str | None = None
+    chain: list[str] = Field(default_factory=list)
+    is_root: bool = True
+    explanation: str = ""
+
+
+class ReleaseDecisionOut(BaseModel):
+    """May this run start, and if not, why. Computed on every request — there
+    is no stored hold to go stale."""
+
+    feed_id: str
+    business_date: str
+    may_run: bool
+    batch_state: str
+    status: StatusWord
+    blockers: list[BlockerOut] = Field(default_factory=list)
+    chain: list[str] = Field(default_factory=list)
+    needs_notification: bool = False
+    explanation: str = ""
+
+
+class PictureNodeOut(BaseModel):
+    feed_id: str
+    business_date: str
+    batch_id: str | None = None
+    state: str | None = None
+    status: StatusWord
+    is_subject: bool = False
+    is_root_cause: bool = False
+
+
+class DependencyPictureOut(BaseModel):
+    """What Operations sees beside a held run — a structure, not a rendering.
+
+    `core/` says which feeds are in the picture and which is to blame; the UI
+    decides whether that is a graph, a list or a breadcrumb.
+    """
+
+    subject: str
+    business_date: str
+    nodes: list[PictureNodeOut] = Field(default_factory=list)
+    edges: list[list[str]] = Field(default_factory=list)
+    blast_radius: list[str] = Field(default_factory=list)
+    decision: ReleaseDecisionOut | None = None
+    is_self_explanatory: bool = True
+
+
+# ── CF-V1-E7-03 · rule severity, layer, threshold and effective dates ────────
+class RulePolicyIn(BaseModel):
+    """One rule's execution policy, as a steward configures it.
+
+    `on_failure` is the six-rung ladder and NOT the harvested `Severity`. The
+    two are different questions asked by different people — how much this
+    matters, and what the pipeline should do — and a client that could send
+    "critical" here would be answering the wrong one.
+    """
+
+    rule_id: str
+    layer: str
+    on_failure: str
+    threshold_percent: Decimal | None = None
+    execution_order: int = 100
+    effective_from: date | None = None
+    effective_to: date | None = None
+    alert_recipient: str = ""
+    owner: str = ""
+    rationale: str = ""
+
+
+class ConsequenceOut(BaseModel):
+    """One rung of the ladder, with the sentence shown AT SELECTION TIME.
+
+    Served rather than hard-coded in the client for the reason `core.persona`
+    serves home slots: what a consequence MEANS is a product fact, and a copy
+    of it in a dropdown is a copy that drifts.
+    """
+
+    value: str
+    rank: int
+    changes_the_batch: bool
+    needs_a_person: bool
+    in_plain_language: str
+
+
+class PolicyFindingOut(BaseModel):
+    key: str
+    rule_id: str
+    what: str
+    why_it_matters: str
+    how_to_fix: str
+    blocks: bool
+
+
+class RulePolicyOut(BaseModel):
+    rule_id: str
+    layer: str
+    on_failure: str
+    threshold_percent: Decimal | None = None
+    execution_order: int
+    effective_from: date | None = None
+    effective_to: date | None = None
+    alert_recipient: str = ""
+    owner: str = ""
+    rationale: str = ""
+    #: The line that appears on the feed profile.
+    describes: str = ""
+
+
+class RulePolicySetOut(BaseModel):
+    """A feed's configured rule policies, and what stands between them and an
+    approval."""
+
+    feed_id: str
+    version: int
+    lifecycle_state: str
+    policies: list[RulePolicyOut] = Field(default_factory=list)
+    findings: list[PolicyFindingOut] = Field(default_factory=list)
+    is_approvable: bool = False
+    #: Rules that got LESS strict than the previous version. Named rather than
+    #: refused — a softening is sometimes right; one nobody noticed is not.
+    softened: list[str] = Field(default_factory=list)
+    ladder: list[ConsequenceOut] = Field(default_factory=list)
+
+
+# ── CF-V1-E7-04 · the technical review queue ─────────────────────────────────
+class TechnicalReviewOut(BaseModel):
+    """One uncertain rule, waiting for a person.
+
+    `stated` and `machine_reading` are BOTH here and in that order — the BA's
+    sentence first, because a reviewer shown the machine's reading first
+    anchors on it and then checks whether the sentence agrees, which reliably
+    produces agreement.
+    """
+
+    review_id: str
+    feed_id: str
+    stated: str
+    machine_reading: str
+    reason: str
+    #: Plain language, for the BA. Never a code.
+    explained_to_author: str
+    confidence: float = 0.0
+    state: str
+    status: StatusWord
+    created_ts: datetime | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    reviewed_by: str | None = None
+    resolution_note: str = ""
+    engineering_item_id: str | None = None
+    citation: str | None = None
+
+
+class ReviewQueueOut(BaseModel):
+    """The reviewer's queue, plus the measurable that must stay empty.
+
+    `unrouted` is exposed rather than left to CI because a control only CI can
+    see is a control nobody maintains — "100% of below-threshold rules routed"
+    is answerable here, by anybody, at any time.
+    """
+
+    reviews: list[TechnicalReviewOut] = Field(default_factory=list)
+    open_count: int = 0
+    unrouted: list[str] = Field(default_factory=list)
+
+
+class CorrectReviewIn(BaseModel):
+    note: str
+    check: dict[str, Any]
+    rule_id: str | None = None
+
+
+class EscalateReviewIn(BaseModel):
+    note: str
+    item_id: str | None = None
+
+
+class EngineeringItemOut(BaseModel):
+    item_id: str
+    feed_id: str
+    review_id: str
+    title: str
+    stated: str
+    reason: str
+    machine_reading: str
+    raised_by: str
+    raised_ts: datetime
+    note: str = ""
+    #: What the BA is told happens next.
+    explained_to_author: str = ""
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── CF-V2-E12-01 · the operations home board ─────────────────────────────────
+class CounterOut(BaseModel):
+    """One number, and the query behind it. `derived_from` is never blank —
+    the type refuses to be built that way."""
+
+    label: str
+    value: int
+    derived_from: str
+
+
+class ArrivalRowOut(BaseModel):
+    feed_id: str
+    domain: str
+    business_date: str
+    condition: str
+    status: StatusWord
+    due_ts: datetime
+    minutes_late: int = 0
+    batch_id: str | None = None
+    headline: str = ""
+    citation: str | None = None
+    route: str = ""
+
+
+class AttentionItemOut(BaseModel):
+    """One thing requiring action today. `impact` and `why` travel together —
+    a ranking nobody can see the reasoning for is one operators override."""
+
+    feed_id: str
+    domain: str
+    headline: str
+    impact: int
+    why: str
+    status: StatusWord
+    citation: str
+    route: str
+
+
+class FreshnessOut(BaseModel):
+    as_of: datetime
+    may_be_stale: bool = False
+    banner: str = ""
+
+
+class BoardOut(BaseModel):
+    business_date: str
+    expected: int
+    received: int
+    missing: int
+    at_risk: int
+    counters: list[CounterOut] = Field(default_factory=list)
+    rows: list[ArrivalRowOut] = Field(default_factory=list)
+    attention: list[AttentionItemOut] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    freshness: FreshnessOut
+    explanation: str = ""
+
+
+# ── CF-V2-E12-02 · the batch and stage monitor ───────────────────────────────
+class StageViewOut(BaseModel):
+    layer: str
+    state: str
+    status: StatusWord
+    started_ts: datetime
+    completed_ts: datetime | None = None
+    duration_seconds: int | None = None
+    records_in: int = 0
+    records_out: int = 0
+    quarantined: int = 0
+    attributed_drops: int = 0
+    unexplained: int = 0
+    balances: bool = True
+    flow: str = ""
+
+
+class BatchErrorOut(BaseModel):
+    error_id_hash: str
+    stage: str
+    category: str
+    message: str
+    occurred_ts: datetime
+    rule_id: str | None = None
+    is_consequence: bool = False
+    caused_by: str | None = None
+    citation: str
+    route: str
+
+
+class BatchViewOut(BaseModel):
+    """Everything about one batch, in one response — because "two clicks"
+    means the second one has to find it all already here."""
+
+    batch_id: str
+    feed_id: str
+    business_date: str
+    state: str
+    status: StatusWord
+    started_ts: datetime
+    completed_ts: datetime | None = None
+    failed_at: str | None = None
+    rows_written: int = 0
+    balances: bool = True
+    sla: str = "unknown"
+    typical_duration_seconds: int | None = None
+    stages: list[StageViewOut] = Field(default_factory=list)
+    errors: list[BatchErrorOut] = Field(default_factory=list)
+    cascade_summary: str = ""
+    flow: list[str] = Field(default_factory=list)
+    explanation: str = ""
+    citation: str = ""
+    route: str = ""
+
+
+# ── CF-V2-E12-03 · the governed action surface ───────────────────────────────
+class ActionRequestIn(BaseModel):
+    """What an operator is asking for.
+
+    NOTE WHAT IS ABSENT: no `command`, no `sql`, no free-form `parameters`.
+    The don't says no free-form commands anywhere, and the way to mean it is a
+    request body with nowhere to put one.
+    """
+
+    action: str
+    reason: str = ""
+    approval_identifier: str = ""
+    assignee: str = ""
+    note: str = ""
+    resume_from: str | None = None
+
+
+class PreviewOut(BaseModel):
+    action: str
+    target: str
+    what_will_happen: str
+    scope_records: int = 0
+    scope_stages: list[str] = Field(default_factory=list)
+    estimated_minutes: int = 0
+    requires_approval_identifier: bool = False
+    explanation: str = ""
+
+
+class ActionRecordOut(BaseModel):
+    """`phase` is REQUESTED until somebody observed the outcome — 'retry
+    requested' is not 'retry succeeded'."""
+
+    action: str
+    target: str
+    actor_subject: str
+    requested_ts: datetime
+    phase: str
+    status: StatusWord
+    is_complete: bool = False
+    reason: str = ""
+    approval_identifier: str = ""
+    verified_ts: datetime | None = None
+    outcome: str = ""
+    explanation: str = ""
+
+
+class ActionSurfaceOut(BaseModel):
+    """What may be done here, right now. Exactly what `authorize` would
+    permit — a console that draws a button it would refuse teaches people that
+    refusals are noise."""
+
+    target: str
+    offered: list[str] = Field(default_factory=list)
+    previews: list[PreviewOut] = Field(default_factory=list)
+    environment: str = "development"
+
+
+class ActionRefusalOut(BaseModel):
+    """A declined operations action, recorded.
+
+    Named apart from the profiler's `RefusalOut` deliberately: a profiler
+    refusal is "we could not read your file", and an action refusal is "we
+    will not do that" — two different sentences to two different people, and
+    one shared name would have merged them on the first screen that showed
+    both.
+    """
+
+    action: str
+    reason: str
+    detail: str
+    target: str
+    notifies: bool = False
+    route: str = ""
+
+
+# ── CF-V2-E12-04 · fingerprinting and guide matching ─────────────────────────
+class PriorIncidentOut(BaseModel):
+    incident_id: str
+    occurred_ts: datetime
+    fix_minutes: int | None = None
+    batch_id: str | None = None
+    citation: str
+
+
+class GuideMatchOut(BaseModel):
+    """A matched guide WITH its evidence. The don't says a match may not be
+    claimed without showing the fingerprint."""
+
+    guide_id: str
+    title: str
+    steps: list[str] = Field(default_factory=list)
+    signature: str
+    matched_errors: list[str] = Field(default_factory=list)
+    occurrences: int = 0
+    mean_fix_minutes: int | None = None
+    remedy: str | None = None
+    stale: bool = False
+    priors: list[PriorIncidentOut] = Field(default_factory=list)
+    citations: list[str] = Field(default_factory=list)
+    explanation: str = ""
+
+
+class IncidentOut(BaseModel):
+    incident_id: str
+    batch_id: str
+    feed_id: str
+    opened_ts: datetime
+    kind: str
+    status: StatusWord
+    signature: str = ""
+    root_cause: BatchErrorOut | None = None
+    consequences: list[BatchErrorOut] = Field(default_factory=list)
+    match: GuideMatchOut | None = None
+    #: The action an operator would press — on the action surface, with its
+    #: approvals. Null for a novel failure and for a human-work fix.
+    proposed_remedy: str | None = None
+    evidence_bundle: dict[str, Any] = Field(default_factory=dict)
+    explanation: str = ""
+    citation: str = ""
+    route: str = ""

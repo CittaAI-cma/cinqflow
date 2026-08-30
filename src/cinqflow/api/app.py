@@ -19,9 +19,9 @@ that can only be tested the way production runs it.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum, unique
 from typing import Annotated, Any
@@ -34,39 +34,61 @@ from cinqflow.api.audit import AuditLog
 from cinqflow.api.deps import NOT_FOUND, CurrentPrincipal, Wiring, require
 from cinqflow.api.schemas import (
     AcceptanceOut,
+    ActionRecordOut,
+    ActionRefusalOut,
+    ActionRequestIn,
+    ActionSurfaceOut,
     AgentActionOut,
     ApproveProposalIn,
+    ArrivalRowOut,
     AskIn,
     AskOut,
+    AttentionItemOut,
     AuditOut,
     AuthorRulesIn,
+    BatchErrorOut,
     BatchOut,
+    BatchViewOut,
+    BlockerOut,
+    BoardOut,
     BudgetOut,
     CanonicalEntityOut,
     CanonicalFieldOut,
     CanonicalModelOut,
     CaseModel,
+    ChapterOut,
     ChecklistItemOut,
     ClaimOut,
     CloneFeedIn,
     CloneOut,
     ColumnProfileOut,
+    ConsequenceOut,
     ContractOut,
     CorrectionOut,
+    CounterOut,
     DateFormatOut,
+    DependencyPictureOut,
     DestinationOut,
     DetectPhiIn,
     DifferenceOut,
+    DropExplanationOut,
+    EvidencePackOut,
+    ExampleOut,
     FailingRowOut,
+    FailureOut,
     FeedIn,
     FeedOut,
     FileProfileOut,
     FileStructureOut,
     FindingOut,
+    FreshnessOut,
+    GapOut,
     GlossaryTermOut,
     GovernedOut,
+    GuideMatchOut,
     HomeSlotOut,
     ImpactPacketOut,
+    IncidentOut,
     InferSchemaIn,
     InheritedOut,
     KeyCandidateOut,
@@ -78,13 +100,19 @@ from cinqflow.api.schemas import (
     MappingLineModel,
     MappingOut,
     MaskingPolicyOut,
+    NarrativeOut,
     NavigationOut,
+    ObstacleOut,
     OperationsModel,
     OwnerModel,
     PauseFeedIn,
     PhiColumnOut,
     PhiRecallOut,
+    PictureNodeOut,
+    PolicyFindingOut,
+    PreviewOut,
     PrincipalOut,
+    PriorIncidentOut,
     ProfileIn,
     ProposalOut,
     ProposedColumnOut,
@@ -96,15 +124,23 @@ from cinqflow.api.schemas import (
     ReferencesOut,
     RefusalOut,
     RejectProposalIn,
+    ReleaseDecisionOut,
     ResumeFeedIn,
+    ReviewQueueOut,
     RowsOut,
+    RuleOutcomeOut,
+    RulePolicyIn,
+    RulePolicyOut,
+    RulePolicySetOut,
     RulePreviewOut,
     RulePreviewPackOut,
     SimilarFeedOut,
     SourceIn,
     SourceOut,
+    StageViewOut,
     SuspensionEventOut,
     SuspensionOut,
+    TechnicalReviewOut,
     ToolOut,
     TouchedOut,
     TraceStepOut,
@@ -114,16 +150,21 @@ from cinqflow.api.schemas import (
     UnknownImpactOut,
     UnknownOut,
     VersionDiffOut,
+    WizardOut,
+    WizardStepOut,
     WorkQueueOut,
 )
-from cinqflow.core import lifecycle, proposals
+from cinqflow.core import lifecycle, onboarding, proposals, scheduling
 from cinqflow.core import mapping as mapping_core
+from cinqflow.core import operations as ops_board
 from cinqflow.core import rules as rules_core
 from cinqflow.core.agents.mapping_suggestion.graph import AGENT as MAPPING_SUGGESTION_AGENT
 from cinqflow.core.agents.phi_detection.graph import AGENT as PHI_DETECTION_AGENT
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
+from cinqflow.core.agents.rule_authoring import graph as rule_authoring_graph
 from cinqflow.core.agents.rule_authoring.graph import AGENT as RULE_AUTHORING_AGENT
 from cinqflow.core.citations import CitationId, CitationKind
+from cinqflow.core.citations import parse as parse_citation
 from cinqflow.core.impact import ImpactPacket, ImpactUnknownError, Touched, build_packet
 from cinqflow.core.intelligence import Budget
 from cinqflow.core.mapping import versioning as mapping_versioning
@@ -134,23 +175,33 @@ from cinqflow.core.model.governed import (
     LifecycleViolationError,
     ObjectType,
 )
+from cinqflow.core.model.profile import Profile
+from cinqflow.core.model.vocabulary import Layer
 from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
+from cinqflow.core.onboarding import evidence
+from cinqflow.core.onboarding import release as onboarding_release
+from cinqflow.core.operations import actions as ops_actions
+from cinqflow.core.operations import fingerprint as fingerprinting
+from cinqflow.core.operations import monitor as ops_monitor
 from cinqflow.core.parsers import parse
 from cinqflow.core.persona import home_for
 from cinqflow.core.phi import Basis, ColumnClassification, PhiDowngradeRefusedError, reclassify
 from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
 from cinqflow.core.proposals import Proposal, ProposalState
-from cinqflow.core.registry import canonical, operations, suspension
+from cinqflow.core.registry import canonical, suspension
 from cinqflow.core.registry import clone as registry_clone
 from cinqflow.core.registry import contract as contract_registry
 from cinqflow.core.registry import feed as feed_registry
+from cinqflow.core.registry import operations as operations_registry
 from cinqflow.core.registry import search as registry_search
 from cinqflow.core.registry import source as source_registry
 from cinqflow.core.registry.contract import SchemaContract
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.core.registry.wave0 import wave_0_register
+from cinqflow.core.rules import policy as rule_policy
 from cinqflow.core.rules import preview as rule_preview
+from cinqflow.core.rules import review as rule_review
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.core.security import Action, may
 from cinqflow.core.tools import CATALOGUE, ToolError
@@ -161,7 +212,12 @@ from cinqflow.intelligence.agents.rule_authoring import RuleAuthoringAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.tools import ToolContext, ToolResult, all_dq_rule_entries, invoke
 from cinqflow.ports.authn import AuthnPort, Principal
-from cinqflow.ports.control_tables import BatchControl, ControlTablesPort
+from cinqflow.ports.control_tables import (
+    BatchControl,
+    BatchNotFoundError,
+    ControlTableError,
+    ControlTablesPort,
+)
 from cinqflow.ports.metadata_db import FileProfileRecord, MetadataDbPort, ObjectNotFoundError
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
@@ -265,6 +321,14 @@ Plane = Annotated[ExecutionPlaneRegister, Depends(_plane)]
 Directory = Annotated[AuthnPort, Depends(_authn)]
 
 
+def _connection_profile(request: Request) -> Profile | None:
+    """The profile this deployment was started with. CF-V2-E12-03 reads it."""
+    return request.app.state.profile  # type: ignore[no-any-return]
+
+
+ConnectionProfile = Annotated["Profile | None", Depends(_connection_profile)]
+
+
 def create_app(
     *,
     authn: AuthnPort,
@@ -278,6 +342,7 @@ def create_app(
     mapping_suggestion_factory: MappingSuggestionFactory | None = None,
     rule_authoring_factory: RuleAuthoringFactory | None = None,
     budget: Budget | None = None,
+    profile: Profile | None = None,
 ) -> FastAPI:
     """Build the app from PINS.
 
@@ -295,6 +360,12 @@ def create_app(
     app.state.wiring = Wiring(authn=authn, audit=AuditLog(metadata_db))
     app.state.metadata_db = metadata_db
     app.state.plane_register = plane_register or wave_0_register()
+    # CF-V2-E12-03 needs to know whether an approval identifier is required,
+    # and Law 3 says that difference lives in the connection profile. Held on
+    # app.state beside the other wiring rather than sniffed, so a deployment
+    # that forgot to pass one is DEVELOPMENT explicitly rather than by
+    # accident — see `_environment_of`.
+    app.state.profile = profile
     app.state.control_tables = control_tables or MemStoreControlTables()
     # No default. Unlike control tables, there is no in-memory landing zone
     # that would be honest here: a profiler pointed at an empty store would
@@ -375,7 +446,9 @@ def create_app(
             owner=owner,
             not_ready=not_ready,
         )
-        readiness = {obj.object_id: operations.readiness_of(obj).is_ready for obj in visible}
+        readiness = {
+            obj.object_id: operations_registry.readiness_of(obj).is_ready for obj in visible
+        }
         return [
             _feed_out(obj) for obj in registry_search.search(visible, criteria, readiness=readiness)
         ]
@@ -1565,6 +1638,102 @@ def create_app(
         rows = _sample_rows(metadata, request.app.state.storage, feed_id, body.profile_id)
         return _preview_pack_out(feed_id, rules, rows, _contract_of(metadata, feed_id))
 
+    # ── CF-V1-E7-03 · a tested sentence becomes executable policy ────────
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/rule-policies",
+        response_model=RulePolicySetOut,
+        tags=["rules"],
+    )
+    def read_rule_policies(
+        feed_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> RulePolicySetOut:
+        """This feed's rule configuration, and what stands between it and an
+        approval.
+
+        The LADDER travels with it. What a consequence means is a product fact
+        (`Consequence.in_plain_language`), and a copy of those sentences in a
+        dropdown is a copy that drifts from what the engine does.
+        """
+        try:
+            obj = metadata.get(ObjectType.DQ_RULE, feed_id)
+        except ObjectNotFoundError:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"feed {feed_id!r} has no rules yet — write some first",
+            ) from None
+        return _policy_set_out(metadata, obj)
+
+    @app.put(
+        f"{API_PREFIX}/feeds/{{feed_id}}/rule-policies",
+        response_model=RulePolicySetOut,
+        tags=["rules"],
+    )
+    def configure_rule_policies(
+        feed_id: str,
+        body: list[RulePolicyIn],
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.CONFIGURE_RULE_POLICY))],
+    ) -> RulePolicySetOut:
+        """Configure where each rule runs, what happens on failure, and when.
+
+        SAVE IS PERMISSIVE AND APPROVAL IS NOT — the same split CF-V1-E3-02
+        made for the feed envelope. Somebody configuring eleven rules over an
+        afternoon must be able to keep nine of them; what is refused is asking
+        another person to approve a set that cannot run. So the shape errors (a
+        layer the engine does not reach, a window that closes before it opens)
+        refuse HERE, because those are configurations that could never be
+        right, and the missing-evidence and unpaged-stop gates refuse at
+        APPROVE.
+
+        Amends by writing the NEXT version, never in place: a published rule
+        set stays exactly as it was approved.
+
+        WHO MAY CONFIGURE, AND WHY IT IS NOT ONLY THE STEWARD. The story reads
+        "the steward sets Silver Raw / Quarantine / threshold 1% and approves",
+        and taken literally that is one person authoring a change and then
+        signing it — which `GovernedObject.transition_to` refuses, for every
+        object type, by design. The refusal is right and the story's sentence
+        is a summary of an outcome rather than a specification of two acts.
+
+        So this route is open to whoever authors the rule set (BA, engineer)
+        AND to the steward, and the law is left exactly where it is: a steward
+        who configures a threshold becomes the author of that version and
+        needs a second approver. That is the correct outcome — a person who
+        changes what a failing row costs should not be the only one who read
+        the change — and there is a test that makes the attempt.
+        """
+        try:
+            current = metadata.get(ObjectType.DQ_RULE, feed_id)
+        except ObjectNotFoundError:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"feed {feed_id!r} has no rules yet — write some first",
+            ) from None
+
+        known = {rule.rule_id for rule in rules_core.rules_from_governed(current)}
+        try:
+            policies = [_policy_in(entry, known) for entry in body]
+        except rule_policy.PolicyError as refused:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(refused)) from None
+
+        amended = current.new_version(
+            rule_policy.with_policies(current.body, policies),
+            actor=principal.as_actor(),
+        )
+        stored = metadata.save(amended)
+        audit.record(
+            object_type=ObjectType.DQ_RULE,
+            object_id=feed_id,
+            action="configure:rule_policies",
+            actor=principal.as_actor(),
+            detail="; ".join(policy.describe() for policy in policies),
+        )
+        return _policy_set_out(metadata, stored)
+
     @app.get(
         f"{API_PREFIX}/proposals/{{proposal_id}}/recall",
         response_model=PhiRecallOut,
@@ -2030,6 +2199,25 @@ def create_app(
                 )
                 raise HTTPException(status.HTTP_403_FORBIDDEN, str(refused)) from None
 
+        # CF-V1-E7-03 adds a SIXTH, for rule sets only: no rule publishes
+        # untested, and a rule that can stop production must page a human.
+        # Checked here rather than inside `lifecycle.approve` for the reason
+        # the mapping gate is — it needs the stored evidence, which the
+        # lifecycle engine has no store to read — and BEFORE the act, so
+        # nothing is persisted by a refusal.
+        if object_type is ObjectType.DQ_RULE:
+            try:
+                _refuse_unapprovable_rules(metadata, object_id)
+            except rule_policy.PolicyError as refused:
+                audit.record(
+                    object_type=ObjectType.DQ_RULE,
+                    object_id=object_id,
+                    action="refused:rule_policy",
+                    actor=principal.as_actor(),
+                    detail=str(refused),
+                )
+                raise HTTPException(status.HTTP_403_FORBIDDEN, str(refused)) from None
+
         return _governance_act(
             "approve",
             object_type,
@@ -2045,6 +2233,190 @@ def create_app(
                 packet=_packet_for(metadata, obj),
             ),
         )
+
+    # ── CF-V1-E4-01/02/03 · the onboarding journey ───────────────────────
+    #
+    # Three GETs and one POST. Every one of them COMPUTES its answer from the
+    # governed objects on each request — there is no onboarding row, no
+    # `current_step`, and therefore nothing that can disagree with the
+    # lifecycle it is describing.
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/onboarding",
+        response_model=WizardOut,
+        tags=["onboarding"],
+    )
+    def onboarding_wizard(
+        feed_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> WizardOut:
+        """CF-V1-E4-01 — the single readiness view.
+
+        Scope-checked like every other feed route: a BA who cannot see this
+        feed gets 404 rather than a checklist that reveals which objects exist
+        for it. The obstacle list is as informative as the feed itself, so
+        leaking it would leak the feed.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        return _wizard_out(_wizard_for(metadata, feed_id))
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/evidence",
+        response_model=EvidencePackOut,
+        tags=["onboarding"],
+    )
+    def onboarding_evidence(
+        feed_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> EvidencePackOut:
+        """CF-V1-E4-02 — the generated pack, with its document.
+
+        404 when no test has been run, rather than an empty pack: an empty pack
+        rendered as a document is evidence that says nothing while looking like
+        evidence, and somebody would attach it to an approval.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        pack = _stored_pack(metadata, feed_id)
+        if pack is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"feed {feed_id!r} has no end-to-end test result yet. Run the test on your "
+                "sample file; the pack is generated from it.",
+            )
+        return _pack_out(pack)
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/narrative",
+        response_model=NarrativeOut,
+        tags=["onboarding"],
+    )
+    def onboarding_narrative(
+        feed_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> NarrativeOut:
+        """CF-V1-E4-03 — who drafted, tested, approved, published, and when.
+
+        Built from the AUDIT LEDGER across every object type for this feed, not
+        from the feed's own rows: the contract's approval and the mapping's
+        rejection are chapters of the same story, and a narrative that read
+        only feed events would omit most of it.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        # ONE call, because every object in a feed's onboarding shares the
+        # feed's id: the contract, the mapping and the rule set are all stored
+        # under `object_id = feed_id`. So the whole story is already one query,
+        # and filtering by type would be the thing that dropped chapters.
+        entries = list(metadata.read_audit(object_id=feed_id, limit=500))
+        chapters = onboarding_release.narrative(entries)
+        return NarrativeOut(
+            feed_id=feed_id,
+            chapters=[
+                ChapterOut(
+                    occurred_ts=chapter.occurred_ts,
+                    who=chapter.who,
+                    what=chapter.what,
+                    object_type=chapter.object_type.value,
+                    detail=chapter.detail,
+                )
+                for chapter in chapters
+            ],
+            story=onboarding_release.render_narrative(chapters),
+        )
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/onboarding/submit",
+        response_model=GovernedOut,
+        tags=["onboarding"],
+    )
+    def submit_onboarding(
+        feed_id: str,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.SUBMIT_FOR_REVIEW))],
+    ) -> GovernedOut:
+        """CF-V1-E4-03 — step 5, and the two refusals that make it mean
+        something.
+
+        A red checklist and stale evidence both refuse HERE, before the
+        lifecycle is touched, and both leave an audit row. The staleness check
+        is the wave's exit criterion: a mapping edited after the test blocks
+        submission, mechanically, because the fingerprint moved.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        try:
+            feed = metadata.get(ObjectType.FEED, feed_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+
+        pack = _stored_pack(metadata, feed_id)
+        if pack is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "the end-to-end sample test has not been run. Both approvers read the "
+                "evidence pack; without one they would be signing for a configuration "
+                "nobody has watched run.",
+            )
+        try:
+            moved, entry, _ = onboarding_release.submit_for_release(
+                feed,
+                view=_wizard_for(metadata, feed_id),
+                pack=pack,
+                configuration=_configuration_fingerprint(metadata, feed_id),
+                actor=principal.as_actor(),
+            )
+        except onboarding_release.ReleaseError as refused:
+            audit.record(
+                object_type=ObjectType.FEED,
+                object_id=feed_id,
+                action="refused:submit_onboarding",
+                actor=principal.as_actor(),
+                detail=str(refused),
+            )
+            raise HTTPException(status.HTTP_409_CONFLICT, str(refused)) from None
+        return _governed_out(metadata.record_transition(moved, entry))
+
+    # ── CF-V1-E8-03 · dependencies and holds ─────────────────────────────────
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/dependencies",
+        response_model=DependencyPictureOut,
+        tags=["operations"],
+    )
+    def feed_dependencies(
+        feed_id: str,
+        metadata: Store,
+        control: Control,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+        business_date: str | None = None,
+    ) -> DependencyPictureOut:
+        """CF-V1-E8-03 — the dependency picture, so a hold is self-explanatory.
+
+        Recomputed on every request, from the control rows as they are now.
+        That is not a performance choice: a stored hold is one somebody has to
+        clear, and held work nobody cleared is indistinguishable from work that
+        was never scheduled.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        graph = scheduling.DependencyGraph.from_feeds(metadata.list(ObjectType.FEED))
+        period = business_date or _latest_period(control, feed_id, graph)
+        batches = _batches_for(control, feed_id, graph)
+        drawn = scheduling.picture(
+            feed_id=feed_id,
+            business_date=period,
+            graph=graph,
+            batches=batches,
+            stages={b.batch_id: list(control.get_stages(b.batch_id)) for b in batches},
+            suspended=_suspended_feeds(metadata, graph),
+        )
+        return _picture_out(drawn)
 
     @app.get(
         f"{API_PREFIX}/feeds/{{feed_id}}/mapping/diff",
@@ -2288,6 +2660,242 @@ def create_app(
     ) -> list[BatchOut]:
         return [_batch_out(b) for b in control.list_batches(feed_id, limit)]
 
+    # ── CF-V2-E12-01 · the operations home board ─────────────────────────
+
+    @app.get(f"{API_PREFIX}/operations/board", response_model=BoardOut, tags=["operations"])
+    def operations_board(
+        control: Control,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+        business_date: str | None = None,
+        domain: str | None = None,
+    ) -> BoardOut:
+        """CF-V2-E12-01 — the morning question, answered from the control tables.
+
+        SCOPED, like every other feed surface: an operator sees the feeds their
+        scopes cover and no others. The counters are recomputed over what they
+        can see rather than filtered from a global total, because a header that
+        says twelve while the body lists two is a header people quote in
+        stand-up.
+
+        An unreachable plane returns the last numbers WITH a staleness banner
+        rather than zeros — zeros read as "nothing expected today", which on a
+        morning when the plane is down is the most dangerous thing this screen
+        could say.
+        """
+        day = business_date or datetime.now(UTC).date().isoformat()
+        try:
+            board = _board_for(metadata, control, principal, day)
+        except ControlTableError:
+            board = ops_board.stale_board(_EMPTY_BOARD(day), now=datetime.now(UTC))
+        if domain:
+            board = board.in_domain(domain)
+        return _board_out(board)
+
+    # ── CF-V2-E12-02 · the batch and stage monitor ───────────────────────
+
+    @app.get(
+        f"{API_PREFIX}/operations/batches/{{batch_id}}",
+        response_model=BatchViewOut,
+        tags=["operations"],
+    )
+    def batch_monitor(
+        batch_id: str,
+        control: Control,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> BatchViewOut:
+        """CF-V2-E12-02 — where exactly is this batch, and what happened.
+
+        ONE response carrying stages, errors and the cascade, because "two
+        clicks" means the second click has to find everything already here.
+        """
+        return _batch_view_out(_batch_view(control, batch_id, principal))
+
+    # ── CF-V2-E12-03 · the governed action surface ───────────────────────
+
+    @app.get(
+        f"{API_PREFIX}/operations/batches/{{batch_id}}/actions",
+        response_model=ActionSurfaceOut,
+        tags=["operations"],
+    )
+    def action_surface(
+        batch_id: str,
+        control: Control,
+        metadata: Store,
+        profile: ConnectionProfile,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> ActionSurfaceOut:
+        """CF-V2-E12-03 — exactly the actions the surface would permit.
+
+        A console that draws a button and then refuses it teaches people that
+        refusals are noise, so this and the POST read the same matrix.
+        """
+        batch = _batch_or_404(control, batch_id, principal)
+        environment = _environment_of(profile)
+        paused = metadata.current_suspension(batch.feed_id).is_active_at(datetime.now(UTC))
+        available = ops_actions.offered(batch_state=batch.state, feed_paused=paused)
+        return ActionSurfaceOut(
+            target=batch_id,
+            offered=[action.value for action in available],
+            previews=[
+                _preview_out(
+                    ops_actions.preview(
+                        ops_actions.ActionRequest(
+                            action=action, target=batch_id, actor=principal.as_actor()
+                        ),
+                        environment=environment,
+                    )
+                )
+                for action in available
+            ],
+            environment=environment.value,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/operations/batches/{{batch_id}}/actions",
+        response_model=ActionRecordOut,
+        tags=["operations"],
+    )
+    def act_on_batch(
+        batch_id: str,
+        body: ActionRequestIn,
+        control: Control,
+        metadata: Store,
+        audit: Audit,
+        profile: ConnectionProfile,
+        principal: Annotated[Principal, Depends(require(Action.RETRY_BATCH))],
+    ) -> ActionRecordOut:
+        """CF-V2-E12-03 — see, decide, act, all audited, in one place.
+
+        The record returned is REQUESTED, never complete: 'retry requested' is
+        not 'retry succeeded', and the outcome is written by whatever observed
+        it. A screen that showed a tick here would be the console this story
+        exists to replace.
+
+        Every refusal leaves a row — the guardrail says the system refuses,
+        notifies a human and RECORDS the refusal, and a surface that logged its
+        successes and swallowed its refusals is one where "I clicked retry and
+        nothing happened" is unanswerable.
+        """
+        batch = _batch_or_404(control, batch_id, principal)
+        try:
+            action = ops_actions.OpsAction(body.action)
+        except ValueError:
+            offered_now = ", ".join(a.value for a in ops_actions.OpsAction)
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"{body.action!r} is not an operations action. This surface offers "
+                f"{offered_now} — and nothing free-form.",
+            ) from None
+
+        suspension = metadata.current_suspension(batch.feed_id)
+        now = datetime.now(UTC)
+        request = ops_actions.ActionRequest(
+            action=action,
+            target=batch_id,
+            actor=principal.as_actor(),
+            reason=body.reason,
+            approval_identifier=body.approval_identifier,
+            assignee=body.assignee,
+            note=body.note,
+            resume_from=Layer(body.resume_from) if body.resume_from else None,
+        )
+        try:
+            ops_actions.authorize(
+                request,
+                environment=_environment_of(profile),
+                batch_state=batch.state,
+                feed_paused=suspension.is_active_at(now),
+                paused_reason=suspension.reason,
+                pause_citation=CitationId(kind=CitationKind.FEED, subject=batch.feed_id),
+                now=now,
+            )
+        except ops_actions.RefusedError as refused:
+            audit.record(
+                object_type=ObjectType.FEED,
+                object_id=batch.feed_id,
+                action=f"refused:{refused.refusal.action.value}",
+                actor=principal.as_actor(),
+                detail=refused.refusal.explain(),
+            )
+            raise HTTPException(status.HTTP_409_CONFLICT, refused.refusal.explain()) from None
+
+        record = ops_actions.request_action(request, now=now)
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=batch.feed_id,
+            action=f"operations:{action.value}",
+            actor=principal.as_actor(),
+            detail=record.explain(),
+        )
+        return _action_record_out(record)
+
+    # ── CF-V2-E12-04 · fingerprinting and guide matching ─────────────────
+
+    @app.get(
+        f"{API_PREFIX}/operations/batches/{{batch_id}}/incident",
+        response_model=IncidentOut,
+        tags=["operations"],
+    )
+    def batch_incident(
+        batch_id: str,
+        control: Control,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> IncidentOut:
+        """CF-V2-E12-04 — the incident, computed.
+
+        NO MODEL IS CALLED on this route. The signature is a deterministic
+        normalisation of the errors the engine already logged and the match is
+        an exact lookup, so the answer is the same on every machine and the
+        precision gate measures the normalisation rather than a model's mood.
+        """
+        batch = _batch_or_404(control, batch_id, principal)
+        errors = list(control.list_errors(batch_id=batch_id))
+        guides = _recovery_guides(metadata)
+        incident = fingerprinting.fingerprint_batch(
+            batch_id=batch_id,
+            feed_id=batch.feed_id,
+            errors=errors,
+            guides=guides,
+            history=_priors_for(control, metadata, batch, guides, errors),
+            now=datetime.now(UTC),
+        )
+        return _incident_out(incident)
+
+    # ── CF-V1-E7-04 · the technical review queue ─────────────────────────
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/rule-reviews",
+        response_model=ReviewQueueOut,
+        tags=["rules"],
+    )
+    def rule_reviews(
+        feed_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> ReviewQueueOut:
+        """CF-V1-E7-04 — uncertain logic, routed, with the measurable attached.
+
+        `unrouted` must always be empty, and it is served rather than left to
+        CI because a control only CI can see is a control nobody maintains.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        candidates = _review_candidates(metadata, feed_id)
+        reviews = rule_review.route(
+            candidates, feed_id=feed_id, floor=rule_authoring_graph.CONFIDENCE_FLOOR
+        )
+        return ReviewQueueOut(
+            reviews=[_review_out(review) for review in reviews],
+            open_count=len(rule_review.awaiting_review(reviews)),
+            unrouted=list(
+                rule_review.unrouted(
+                    candidates, reviews, floor=rule_authoring_graph.CONFIDENCE_FLOOR
+                )
+            ),
+        )
+
     @app.get(
         f"{API_PREFIX}/batches/{{batch_id}}/{{panel}}",
         response_model=RowsOut,
@@ -2522,13 +3130,13 @@ def _operations_body(body: FeedIn) -> dict[str, Any]:
     if body.operations is None:
         return {}
     try:
-        return operations.FeedOperations.from_body(body.operations.model_dump()).as_body()
-    except (operations.OperationsValidationError, ValueError) as invalid:
+        return operations_registry.FeedOperations.from_body(body.operations.model_dump()).as_body()
+    except (operations_registry.OperationsValidationError, ValueError) as invalid:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(invalid)) from None
 
 
 def _readiness_out(obj: GovernedObject) -> ReadinessOut:
-    ready = operations.readiness_of(obj)
+    ready = operations_registry.readiness_of(obj)
     return ReadinessOut(
         feed_id=obj.object_id,
         is_ready=ready.is_ready,
@@ -2564,7 +3172,7 @@ def _feed_out(obj: GovernedObject) -> FeedOut:
         citation_id=str(citation),
         route=citation.route,
         operations=OperationsModel(
-            **operations.FeedOperations.from_body(body.get("operations")).as_body()
+            **operations_registry.FeedOperations.from_body(body.get("operations")).as_body()
         ),
         # Sent with every feed, so the form's checklist and the lifecycle's
         # refusal are the same computation. A screen showing green while the
@@ -2606,8 +3214,8 @@ def _source_from(body: SourceIn) -> source_registry.SourceRecord:
             line_of_business=tuple(body.line_of_business),
             states=tuple(body.states),
             owners=tuple(
-                operations.Owner(
-                    role=operations.OwnerRole(o.role),
+                operations_registry.Owner(
+                    role=operations_registry.OwnerRole(o.role),
                     subject=o.subject,
                     display_name=o.display_name,
                 )
@@ -3883,4 +4491,984 @@ def _rows_out(result: ToolResult) -> RowsOut:
         out_of_scope=result.out_of_scope,
         marker=result.marker,
         note=result.note,
+    )
+
+
+# ── CF-V1-E4-01/02/03 · onboarding helpers ───────────────────────────────────
+#
+# Every one of these ASSEMBLES what `core.onboarding` needs and then asks it.
+# None of them decides anything: "is this step complete?" is answered in core,
+# once, by the same function the wizard's own tests exercise — which is what
+# stops the screen showing green while submit returns 409.
+
+#: Where CF-V1-E4-02's pack is kept between the test run and the approval.
+#:
+#: On the FEED's governed body rather than in a table of its own. The pack is
+#: not a governed object — nothing approves it, and it has no lifecycle — but
+#: it must version WITH the feed, because "which evidence did this version
+#: publish on?" is the question the whole staleness gate exists to answer. A
+#: separate table would answer it with a join and a timestamp; a body key
+#: answers it by construction, since a new feed version carries the body it was
+#: created with.
+EVIDENCE_KEY = "evidence_pack"
+
+
+def _wizard_for(metadata: MetadataDbPort, feed_id: str) -> onboarding.Wizard:
+    """Gather every governed object for one feed and compute the checklist."""
+    objects = tuple(
+        obj
+        for object_type in (
+            ObjectType.FEED,
+            ObjectType.CONTRACT,
+            ObjectType.MAPPING,
+            ObjectType.DQ_RULE,
+        )
+        for obj in metadata.history(object_type, feed_id)
+    )
+    feed = next(
+        (o for o in objects if o.object_type is ObjectType.FEED),
+        None,
+    )
+    pack = _stored_pack(metadata, feed_id)
+    return onboarding.wizard(
+        onboarding.OnboardingInputs(
+            feed_id=feed_id,
+            objects=objects,
+            sample_profile_ids=tuple(
+                record.profile_id for record in metadata.list_profiles(feed_id=feed_id)
+            ),
+            model=_canonical_of(metadata),
+            evidence_fingerprint=pack.fingerprint if pack else None,
+            configuration_fingerprint=_configuration_fingerprint(metadata, feed_id),
+            operations=(
+                operations_registry.FeedOperations.from_body(feed.body.get("operations"))
+                if feed
+                else None
+            ),
+        )
+    )
+
+
+def _configuration_objects(metadata: MetadataDbPort, feed_id: str) -> tuple[GovernedObject, ...]:
+    """The three objects a run consumes, at their LATEST versions.
+
+    Latest rather than published: a BA tests her draft, and fingerprinting the
+    published set would compare the evidence against a configuration she is not
+    submitting.
+    """
+    found: list[GovernedObject] = []
+    for object_type in (ObjectType.CONTRACT, ObjectType.MAPPING, ObjectType.DQ_RULE):
+        history = list(metadata.history(object_type, feed_id))
+        if history:
+            found.append(max(history, key=lambda o: o.version))
+    return tuple(found)
+
+
+def _configuration_fingerprint(metadata: MetadataDbPort, feed_id: str) -> str:
+    return evidence.configuration_fingerprint(_configuration_objects(metadata, feed_id))
+
+
+def _stored_pack(metadata: MetadataDbPort, feed_id: str) -> evidence.EvidencePack | None:
+    """Read the pack off the feed's body, or None when no test has been run."""
+    try:
+        feed = metadata.get(ObjectType.FEED, feed_id)
+    except ObjectNotFoundError:
+        return None
+    raw = feed.body.get(EVIDENCE_KEY)
+    return _pack_from_body(raw) if isinstance(raw, dict) and raw else None
+
+
+def _pack_from_body(raw: dict[str, Any]) -> evidence.EvidencePack:
+    """Rebuild the pack from JSONB.
+
+    Only the fields the API and the gates read. The MARKDOWN is re-rendered
+    from them rather than stored: a stored document and the numbers beside it
+    are two copies of one fact, and the day they disagree is the day somebody
+    approves the document.
+    """
+    failure = raw.get("failure")
+    return evidence.EvidencePack(
+        feed_id=str(raw.get("feed_id", "")),
+        fingerprint=str(raw.get("fingerprint", "")),
+        produced_ts=_ts(raw.get("produced_ts")),
+        rows_in=int(raw.get("rows_in", 0)),
+        rows_loaded=int(raw.get("rows_loaded", 0)),
+        rows_quarantined=int(raw.get("rows_quarantined", 0)),
+        drops=tuple(
+            evidence.DropExplanation(
+                rule_id=str(d.get("rule_id", "")),
+                reason=str(d.get("reason", "")),
+                record_count=int(d.get("record_count", 0)),
+                columns=tuple(d.get("columns", ())),
+            )
+            for d in raw.get("drops", ())
+        ),
+        examples=tuple(
+            evidence.Example(
+                row_number=int(e.get("row_number", 0)),
+                before=dict(e.get("before", {})),
+                after=dict(e.get("after", {})),
+            )
+            for e in raw.get("examples", ())
+        ),
+        rules=tuple(
+            evidence.RuleOutcome(
+                rule_id=str(r.get("rule_id", "")),
+                name=str(r.get("name", "")),
+                tested=int(r.get("tested", 0)),
+                flagged=int(r.get("flagged", 0)),
+                quarantined=bool(r.get("quarantined", False)),
+            )
+            for r in raw.get("rules", ())
+        ),
+        gaps=tuple(
+            evidence.Gap(
+                key=str(g.get("key", "")),
+                what=str(g.get("what", "")),
+                why_it_is_acceptable=str(g.get("why_it_is_acceptable", "")),
+            )
+            for g in raw.get("gaps", ())
+        ),
+        failure=(
+            evidence.Failure(
+                step=str(failure.get("step", "")),
+                explanation=str(failure.get("explanation", "")),
+                citation=parse_citation(str(failure["citation"]))
+                if failure.get("citation")
+                else None,
+            )
+            if isinstance(failure, dict) and failure
+            else None
+        ),
+        balanced=bool(raw.get("balanced", True)),
+        sample_filename=str(raw.get("sample_filename", "")),
+    )
+
+
+def _ts(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return datetime.now(UTC)
+
+
+def _obstacle_out(obstacle: onboarding.Obstacle) -> ObstacleOut:
+    return ObstacleOut(
+        key=obstacle.key,
+        what=obstacle.what,
+        why_it_matters=obstacle.why_it_matters,
+        how_to_fix=obstacle.how_to_fix,
+        citation=str(obstacle.citation) if obstacle.citation else None,
+        route=obstacle.route,
+        blocking=obstacle.blocking,
+    )
+
+
+def _wizard_out(view: onboarding.Wizard) -> WizardOut:
+    return WizardOut(
+        feed_id=view.feed_id,
+        steps=[
+            WizardStepOut(
+                step=status.step.value,
+                ordinal=status.step.ordinal,
+                label=status.step.label,
+                state=status.state.value,
+                status=status.state.status_word,
+                is_complete=status.is_complete,
+                version=status.version,
+                citation=str(status.citation) if status.citation else None,
+                obstacles=[_obstacle_out(o) for o in status.obstacles],
+            )
+            for status in view.steps
+        ],
+        resume_at=view.resume_at.value,
+        is_publishable=view.is_publishable,
+        outstanding=[_obstacle_out(o) for o in view.outstanding],
+        gaps=[_obstacle_out(o) for o in view.gaps],
+        operations_outstanding=[item.question for item in view.operations.outstanding],
+        explanation=view.explain(),
+    )
+
+
+def _pack_out(pack: evidence.EvidencePack) -> EvidencePackOut:
+    return EvidencePackOut(
+        feed_id=pack.feed_id,
+        fingerprint=pack.fingerprint,
+        produced_ts=pack.produced_ts,
+        rows_in=pack.rows_in,
+        rows_loaded=pack.rows_loaded,
+        rows_quarantined=pack.rows_quarantined,
+        balanced=pack.balanced,
+        accounts_for_every_row=pack.accounts_for_every_row,
+        partial=pack.partial,
+        summary=pack.summary(),
+        sample_filename=pack.sample_filename,
+        drops=[
+            DropExplanationOut(
+                rule_id=drop.rule_id,
+                reason=drop.reason,
+                record_count=drop.record_count,
+                columns=list(drop.columns),
+            )
+            for drop in pack.drops
+        ],
+        rules=[
+            RuleOutcomeOut(
+                rule_id=rule.rule_id,
+                name=rule.name,
+                tested=rule.tested,
+                flagged=rule.flagged,
+                hit_rate=rule.hit_rate,
+                quarantined=rule.quarantined,
+            )
+            for rule in pack.rules
+        ],
+        examples=[
+            ExampleOut(row_number=e.row_number, before=e.before, after=e.after)
+            for e in pack.examples
+        ],
+        gaps=[
+            GapOut(
+                key=gap.key,
+                what=gap.what,
+                why_it_is_acceptable=gap.why_it_is_acceptable,
+                citation=str(gap.citation) if gap.citation else None,
+            )
+            for gap in pack.gaps
+        ],
+        failure=(
+            FailureOut(
+                step=pack.failure.step,
+                explanation=pack.failure.explanation,
+                citation=str(pack.failure.citation) if pack.failure.citation else None,
+                route=pack.failure.route,
+            )
+            if pack.failure
+            else None
+        ),
+        markdown=pack.render_markdown(),
+    )
+
+
+# ── CF-V1-E8-03 · dependency helpers ─────────────────────────────────────────
+def _related_feeds(feed_id: str, graph: scheduling.DependencyGraph) -> tuple[str, ...]:
+    """The subject and everything it transitively waits for.
+
+    Upstreams only. The blast radius is computed from the GRAPH and needs no
+    batches, so pulling downstream feeds' control rows would be reading rows to
+    display nothing.
+    """
+    reached = [feed_id]
+    frontier = [feed_id]
+    while frontier:
+        current = frontier.pop(0)
+        for parent in graph.upstream_of(current):
+            if parent not in reached:
+                reached.append(parent)
+                frontier.append(parent)
+    return tuple(reached)
+
+
+def _batches_for(
+    control: ControlTablesPort, feed_id: str, graph: scheduling.DependencyGraph
+) -> list[BatchControl]:
+    return [
+        batch for name in _related_feeds(feed_id, graph) for batch in control.list_batches(name)
+    ]
+
+
+def _latest_period(
+    control: ControlTablesPort, feed_id: str, graph: scheduling.DependencyGraph
+) -> str:
+    """The period to explain when the caller did not name one.
+
+    The newest business date ANY feed in the picture has a batch for — not the
+    subject's own newest, because the interesting case is precisely the one
+    where the subject has no batch BECAUSE it is held, and defaulting to its
+    own history would explain last month instead of the hold.
+    """
+    periods = sorted({batch.business_date for batch in _batches_for(control, feed_id, graph)})
+    return periods[-1] if periods else datetime.now(UTC).date().isoformat()
+
+
+def _suspended_feeds(metadata: MetadataDbPort, graph: scheduling.DependencyGraph) -> frozenset[str]:
+    """Which feeds in the graph are paused right now. CF-V1-E3-04's axis,
+    folded from the ledger by the pin that owns it."""
+    now = datetime.now(UTC)
+    return frozenset(
+        feed_id
+        for feed_id in graph.order()
+        if metadata.current_suspension(feed_id).is_active_at(now)
+    )
+
+
+def _decision_out(decision: scheduling.ReleaseDecision) -> ReleaseDecisionOut:
+    return ReleaseDecisionOut(
+        feed_id=decision.feed_id,
+        business_date=decision.business_date,
+        may_run=decision.may_run,
+        batch_state=decision.batch_state.value,
+        status=decision.status_word,
+        blockers=[
+            BlockerOut(
+                reason=blocker.reason.value,
+                feed_id=blocker.feed_id,
+                business_date=blocker.business_date,
+                batch_id=blocker.batch_id,
+                state=blocker.state.value if blocker.state else None,
+                layer=blocker.layer.value if blocker.layer else None,
+                chain=list(blocker.chain),
+                is_root=blocker.is_root,
+                explanation=blocker.explain(),
+            )
+            for blocker in decision.blockers
+        ],
+        chain=list(decision.chain),
+        needs_notification=decision.needs_notification,
+        explanation=decision.explain(),
+    )
+
+
+def _picture_out(drawn: scheduling.DependencyPicture) -> DependencyPictureOut:
+    return DependencyPictureOut(
+        subject=drawn.subject,
+        business_date=drawn.business_date,
+        nodes=[
+            PictureNodeOut(
+                feed_id=node.feed_id,
+                business_date=node.business_date,
+                batch_id=node.batch_id,
+                state=node.state.value if node.state else None,
+                status=node.status_word,
+                is_subject=node.is_subject,
+                is_root_cause=node.is_root_cause,
+            )
+            for node in drawn.nodes
+        ],
+        edges=[[parent, child] for parent, child in drawn.edges],
+        blast_radius=list(drawn.blast_radius),
+        decision=_decision_out(drawn.decision) if drawn.decision else None,
+        is_self_explanatory=drawn.is_self_explanatory,
+    )
+
+
+# ── CF-V1-E7-03 · rule policy helpers ────────────────────────────────────────
+def _policy_in(entry: RulePolicyIn, known: set[str]) -> rule_policy.RulePolicy:
+    """One posted policy, validated against the vocabulary AND the rule set.
+
+    A policy for a rule this feed does not have is refused rather than stored:
+    it would sit in the body forever, never match a spec, and read on the feed
+    profile as protection that does not exist.
+    """
+    if entry.rule_id not in known:
+        raise rule_policy.PolicyError(
+            f"{entry.rule_id!r} is not a rule of this feed. A policy for a rule that does "
+            "not exist would read on the feed profile as protection that is not there."
+        )
+    try:
+        layer = Layer(entry.layer)
+    except ValueError:
+        runnable = ", ".join(layer.value for layer in rule_policy.RUNNABLE_LAYERS)
+        raise rule_policy.PolicyError(
+            f"{entry.layer!r} is not a layer. Rules run at {runnable}."
+        ) from None
+    try:
+        consequence = rule_policy.Consequence(entry.on_failure)
+    except ValueError:
+        ladder = " -> ".join(c.value for c in rule_policy.Consequence)
+        raise rule_policy.PolicyError(
+            f"{entry.on_failure!r} is not one of the six outcomes. The ladder is {ladder}."
+        ) from None
+
+    return rule_policy.RulePolicy(
+        rule_id=entry.rule_id,
+        layer=layer,
+        on_failure=consequence,
+        threshold_percent=entry.threshold_percent,
+        execution_order=entry.execution_order,
+        effective_from=entry.effective_from,
+        effective_to=entry.effective_to,
+        alert_recipient=entry.alert_recipient,
+        owner=entry.owner,
+        rationale=entry.rationale,
+    )
+
+
+def _policy_out(policy: rule_policy.RulePolicy) -> RulePolicyOut:
+    return RulePolicyOut(
+        rule_id=policy.rule_id,
+        layer=policy.layer.value,
+        on_failure=policy.on_failure.value,
+        threshold_percent=policy.threshold_percent,
+        execution_order=policy.execution_order,
+        effective_from=policy.effective_from,
+        effective_to=policy.effective_to,
+        alert_recipient=policy.alert_recipient,
+        owner=policy.owner,
+        rationale=policy.rationale,
+        describes=policy.describe(),
+    )
+
+
+def _rule_evidence(obj: GovernedObject) -> dict[str, Any] | None:
+    """CF-V1-E7-02's saved preview, from the rule set's own body.
+
+    Stored beside the rules it is evidence about, for the same reason the
+    onboarding pack lives on the feed: it must version WITH them, so "which
+    evidence did this rule set approve on?" needs no join and no timestamp.
+    """
+    stored = obj.body.get(RULE_EVIDENCE_KEY)
+    return stored if isinstance(stored, dict) and stored else None
+
+
+#: Where CF-V1-E7-02's saved preview lives on the DQ_RULE body.
+RULE_EVIDENCE_KEY = "test_evidence"
+
+
+def _policy_set_out(metadata: MetadataDbPort, obj: GovernedObject) -> RulePolicySetOut:
+    policies = rule_policy.policies_from_body(obj.body)
+    findings = rule_policy.findings_for(policies, evidence=_rule_evidence(obj))
+    history = list(metadata.history(ObjectType.DQ_RULE, obj.object_id))
+    previous = [o for o in history if o.version == obj.version - 1]
+    softened = (
+        rule_policy.refuse_silent_softening(
+            rule_policy.policies_from_body(previous[0].body), policies
+        )
+        if previous
+        else ()
+    )
+    return RulePolicySetOut(
+        feed_id=obj.object_id,
+        version=obj.version,
+        lifecycle_state=obj.lifecycle_state.value,
+        policies=[_policy_out(policy) for policy in policies],
+        findings=[
+            PolicyFindingOut(
+                key=finding.key,
+                rule_id=finding.rule_id,
+                what=finding.what,
+                why_it_matters=finding.why_it_matters,
+                how_to_fix=finding.how_to_fix,
+                blocks=finding.blocks,
+            )
+            for finding in findings
+        ],
+        is_approvable=bool(policies) and not rule_policy.blocking(findings),
+        softened=list(softened),
+        ladder=[
+            ConsequenceOut(
+                value=rung.value,
+                rank=rung.rank,
+                changes_the_batch=rung.changes_the_batch,
+                needs_a_person=rung.needs_a_person,
+                in_plain_language=rung.in_plain_language,
+            )
+            for rung in rule_policy.Consequence
+        ],
+    )
+
+
+def _refuse_unapprovable_rules(metadata: MetadataDbPort, feed_id: str) -> None:
+    """CF-V1-E7-03's two gates, at the approval seam.
+
+    A rule set with NO policies configured is allowed through. That is
+    deliberate and it is not a hole: a spec with no policy does not run —
+    `rule_policy.runnable_at` will not return it — so approving the sentences
+    before configuring where they run is a legitimate order of work, and
+    refusing it would force a steward to configure eleven rules before anyone
+    had agreed the eleven sentences were right.
+    """
+    try:
+        obj = metadata.get(ObjectType.DQ_RULE, feed_id)
+    except ObjectNotFoundError:  # pragma: no cover - the act itself would 404
+        return
+    policies = rule_policy.policies_from_body(obj.body)
+    if not policies:
+        return
+    rule_policy.refuse_unapprovable(policies, evidence=_rule_evidence(obj))
+
+
+# ── CF-V2-E12-01/02/03/04 · operations helpers ───────────────────────────────
+#
+# Every one of these ASSEMBLES what `core.operations` needs and then asks it.
+# None decides anything: "is this feed missing?", "is this batch stuck?", "may
+# this action run?" are answered in core, once, by the same functions the unit
+# tests exercise — which is what stops a screen and a gate disagreeing.
+
+#: Where the environment comes from. Law 3 puts all environment difference in
+#: the connection profile, so this reads the profile's rung rather than
+#: sniffing anything: rungs 3 and 4 are the client's own tenancy, where real
+#: member data can exist and a change record is required.
+_PRODUCTION_RUNGS = frozenset({3, 4})
+
+
+def _environment_of(profile: Profile | None) -> ops_actions.Environment:
+    """Development or production, read from the connection profile.
+
+    NO PROFILE MEANS DEVELOPMENT, and that is safe in exactly one direction:
+    a missing profile can only ever REMOVE the approval-identifier
+    requirement, never add one — so the failure mode is a development
+    deployment asking for a change record it did not need, not a production
+    one skipping it.
+
+    Which is why this is a wired dependency and not a `getattr` on whatever
+    object happened to be in scope: a lookup that silently returned None in
+    production would disable the requirement precisely where it exists.
+    `cinqflow serve` passes the profile it was started with, and
+    `test_production_is_read_from_the_profile_not_guessed` fails if this stops
+    reading it.
+    """
+    rung = getattr(profile, "rung", None)
+    if rung in _PRODUCTION_RUNGS:
+        return ops_actions.Environment.PRODUCTION
+    return ops_actions.Environment.DEVELOPMENT
+
+
+def _EMPTY_BOARD(day: str) -> ops_board.Board:  # noqa: N802 - a named constant-like builder
+    """The board shown when nothing could be read.
+
+    Its counters still name their source, because a zero with no provenance is
+    exactly the figure this screen exists to abolish.
+    """
+    return ops_board.build_board(
+        business_date=day, expectations=[], batches=[], now=datetime.now(UTC)
+    )
+
+
+def _visible_feeds(metadata: MetadataDbPort, principal: Principal) -> tuple[GovernedObject, ...]:
+    return tuple(
+        obj for obj in metadata.list(ObjectType.FEED) if principal.scopes.covers_feed(obj.object_id)
+    )
+
+
+def _board_for(
+    metadata: MetadataDbPort,
+    control: ControlTablesPort,
+    principal: Principal,
+    business_date: str,
+) -> ops_board.Board:
+    """Assemble today's expectations and ask core what the morning looks like."""
+    now = datetime.now(UTC)
+    feeds = _visible_feeds(metadata, principal)
+    expectations: list[ops_board.Expectation] = []
+    batches: list[BatchControl] = []
+
+    for feed in feeds:
+        envelope = operations_registry.FeedOperations.from_body(feed.body.get("operations"))
+        service_level = envelope.service_level
+        if service_level is None:
+            # A feed with no declared SLA is not expected at a time, so it
+            # cannot be late. Counting it as expected would put a row on the
+            # board that can never leave it.
+            continue
+        expectations.append(
+            ops_board.Expectation.from_service_level(
+                feed_id=feed.object_id,
+                domain=str(feed.body.get("domain") or "—"),
+                business_date=business_date,
+                service_level=service_level,
+                due_ts=_due_ts(business_date, service_level, now),
+            )
+        )
+        batches.extend(control.list_batches(feed.object_id, 20))
+
+    return ops_board.build_board(
+        business_date=business_date,
+        expectations=expectations,
+        batches=batches,
+        graph=scheduling.DependencyGraph.from_feeds(feeds),
+        now=now,
+    )
+
+
+def _due_ts(business_date: str, service_level: Any, now: datetime) -> datetime:
+    """When today's delivery was due, in UTC.
+
+    The offset is resolved from the IANA name with the standard library's own
+    timezone database — which is exactly where `core.ops_board.resolve_due`
+    says this belongs, because `core/` performs no I/O and the offset for a
+    given date is a fact about that date rather than about the string.
+    """
+    from zoneinfo import ZoneInfo
+
+    try:
+        day = datetime.fromisoformat(business_date).replace(tzinfo=UTC)
+    except ValueError:
+        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        zone = ZoneInfo(service_level.timezone)
+        offset = day.replace(tzinfo=zone).utcoffset() or timedelta(0)
+    except Exception:
+        offset = timedelta(0)
+    return ops_board.resolve_due(
+        business_day=day,
+        expected_by_local_time=service_level.expected_by_local_time,
+        offset=offset,
+    )
+
+
+def _counter_out(counter: ops_board.Counter) -> CounterOut:
+    return CounterOut(label=counter.label, value=counter.value, derived_from=counter.derived_from)
+
+
+def _board_out(board: ops_board.Board) -> BoardOut:
+    expected, received, missing, at_risk = board.totals
+    return BoardOut(
+        business_date=board.business_date,
+        expected=expected,
+        received=received,
+        missing=missing,
+        at_risk=at_risk,
+        counters=[_counter_out(counter) for counter in board.counters],
+        rows=[
+            ArrivalRowOut(
+                feed_id=row.feed_id,
+                domain=row.domain,
+                business_date=row.business_date,
+                condition=row.condition.value,
+                status=row.status,
+                due_ts=row.due_ts,
+                minutes_late=row.minutes_late,
+                batch_id=row.batch_id,
+                headline=row.headline(),
+                citation=str(row.citation),
+                route=row.citation.route,
+            )
+            for row in board.rows
+        ],
+        attention=[
+            AttentionItemOut(
+                feed_id=item.feed_id,
+                domain=item.domain,
+                headline=item.headline,
+                impact=item.impact,
+                why=item.why,
+                status=item.status,
+                citation=str(item.citation),
+                route=item.route,
+            )
+            for item in board.attention
+        ],
+        domains=list(ops_board.domains(board)),
+        freshness=FreshnessOut(
+            as_of=board.freshness.as_of,
+            may_be_stale=board.freshness.may_be_stale,
+            banner=board.freshness.banner(datetime.now(UTC)),
+        ),
+        explanation=board.explain(),
+    )
+
+
+def _batch_or_404(control: ControlTablesPort, batch_id: str, principal: Principal) -> BatchControl:
+    try:
+        batch = control.get_batch(batch_id)
+    except (BatchNotFoundError, ControlTableError):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+    if not principal.scopes.covers_feed(batch.feed_id):
+        # Deliberately the same shape as "not found". An out-of-scope batch
+        # must not be distinguishable from one that does not exist.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+    return batch
+
+
+def _batch_view(
+    control: ControlTablesPort, batch_id: str, principal: Principal
+) -> ops_monitor.BatchView:
+    batch = _batch_or_404(control, batch_id, principal)
+    return ops_monitor.build_batch_view(
+        batch,
+        stages=list(control.get_stages(batch_id)),
+        errors=list(control.list_errors(batch_id=batch_id)),
+        history=list(control.list_batches(batch.feed_id, 50)),
+        now=datetime.now(UTC),
+    )
+
+
+def _error_out(error: ops_monitor.ErrorView) -> BatchErrorOut:
+    return BatchErrorOut(
+        error_id_hash=error.error_id_hash,
+        stage=error.stage.value,
+        category=error.category.value,
+        message=error.message,
+        occurred_ts=error.occurred_ts,
+        rule_id=error.rule_id,
+        is_consequence=error.is_consequence,
+        caused_by=error.caused_by,
+        citation=str(error.citation),
+        route=error.route,
+    )
+
+
+def _batch_view_out(view: ops_monitor.BatchView) -> BatchViewOut:
+    return BatchViewOut(
+        batch_id=view.batch_id,
+        feed_id=view.feed_id,
+        business_date=view.business_date,
+        state=view.state.value,
+        status=view.status,
+        started_ts=view.started_ts,
+        completed_ts=view.completed_ts,
+        failed_at=view.failed_at.value if view.failed_at else None,
+        rows_written=view.rows_written,
+        balances=view.balances,
+        sla=view.sla.value,
+        typical_duration_seconds=(
+            int(view.typical_duration.total_seconds()) if view.typical_duration else None
+        ),
+        stages=[
+            StageViewOut(
+                layer=stage.layer.value,
+                state=stage.state.value,
+                status=stage.status,
+                started_ts=stage.started_ts,
+                completed_ts=stage.completed_ts,
+                duration_seconds=(int(stage.duration.total_seconds()) if stage.duration else None),
+                records_in=stage.records_in,
+                records_out=stage.records_out,
+                quarantined=stage.quarantined,
+                attributed_drops=stage.attributed_drops,
+                unexplained=stage.unexplained,
+                balances=stage.balances,
+                flow=stage.flow(),
+            )
+            for stage in view.stages
+        ],
+        errors=[_error_out(error) for error in view.cascade.all],
+        cascade_summary=view.cascade.explain(),
+        flow=list(view.flow()),
+        explanation=view.explain(),
+        citation=str(view.citation),
+        route=view.citation.route,
+    )
+
+
+def _preview_out(shown: ops_actions.Preview) -> PreviewOut:
+    return PreviewOut(
+        action=shown.action.value,
+        target=shown.target,
+        what_will_happen=shown.what_will_happen,
+        scope_records=shown.scope_records,
+        scope_stages=[layer.value for layer in shown.scope_stages],
+        estimated_minutes=shown.estimated_minutes,
+        requires_approval_identifier=shown.requires_approval_identifier,
+        explanation=shown.explain(),
+    )
+
+
+def _action_record_out(record: ops_actions.ActionRecord) -> ActionRecordOut:
+    return ActionRecordOut(
+        action=record.action.value,
+        target=record.target,
+        actor_subject=record.actor.subject,
+        requested_ts=record.requested_ts,
+        phase=record.phase.value,
+        status=record.status,
+        is_complete=record.is_complete,
+        reason=record.reason,
+        approval_identifier=record.approval_identifier,
+        verified_ts=record.verified_ts,
+        outcome=record.outcome,
+        explanation=record.explain(),
+    )
+
+
+def _action_refusal_out(refusal: ops_actions.Refusal) -> ActionRefusalOut:
+    return ActionRefusalOut(
+        action=refusal.action.value,
+        reason=refusal.reason.value,
+        detail=refusal.detail,
+        target=refusal.target,
+        notifies=refusal.notifies,
+        route=refusal.route,
+    )
+
+
+def _recovery_guides(metadata: MetadataDbPort) -> tuple[fingerprinting.RecoveryGuide, ...]:
+    """The recovery library, from PUBLISHED runbooks.
+
+    Published only: a draft guide is one person's account of what worked once,
+    and offering it at 3 AM as the known fix is how a wrong answer becomes the
+    recommended one. CF-V2-E16-07 is what keeps them current.
+    """
+    return tuple(
+        fingerprinting.RecoveryGuide(
+            guide_id=obj.object_id,
+            title=str(obj.body.get("title") or obj.object_id),
+            signatures=frozenset(str(s) for s in obj.body.get("signatures", ())),
+            steps=tuple(str(step) for step in obj.body.get("steps", ())),
+            remedy=(
+                ops_actions.OpsAction(obj.body["remedy"])
+                if obj.body.get("remedy") in set(ops_actions.OpsAction)
+                else None
+            ),
+            is_transient=bool(obj.body.get("is_transient", False)),
+            stale=bool(obj.body.get("stale", False)),
+        )
+        for obj in metadata.list(ObjectType.RUNBOOK)
+        if obj.lifecycle_state is LifecycleState.PUBLISHED
+    )
+
+
+def _priors_for(
+    control: ControlTablesPort,
+    metadata: MetadataDbPort,
+    batch: BatchControl,
+    guides: tuple[fingerprinting.RecoveryGuide, ...],
+    errors: Sequence[Any],
+) -> tuple[fingerprinting.PriorIncident, ...]:
+    """How often this exact failure has happened on this feed before.
+
+    Computed from the control tables rather than a curated count, so "14 prior
+    occurrences" is a query somebody can run rather than a number in a
+    spreadsheet — the same discipline the board's counters are held to.
+    """
+    cascade = ops_monitor.separate_cascade(errors)
+    root = cascade.first
+    if root is None:
+        return ()
+    found = fingerprinting.signature(
+        stage=root.stage,
+        category=root.category,
+        message=root.message,
+        rule_id=root.rule_id,
+    )
+    _ = guides, metadata
+    priors: list[fingerprinting.PriorIncident] = []
+    for prior in control.list_batches(batch.feed_id, 200):
+        if prior.batch_id == batch.batch_id:
+            continue
+        prior_errors = list(control.list_errors(batch_id=prior.batch_id))
+        prior_root = ops_monitor.separate_cascade(prior_errors).first
+        if prior_root is None:
+            continue
+        if (
+            fingerprinting.signature(
+                stage=prior_root.stage,
+                category=prior_root.category,
+                message=prior_root.message,
+                rule_id=prior_root.rule_id,
+            )
+            != found
+        ):
+            continue
+        priors.append(
+            fingerprinting.PriorIncident(
+                incident_id=f"INC-{prior.batch_id}",
+                occurred_ts=prior.started_ts,
+                fix_minutes=(
+                    int((prior.completed_ts - prior.started_ts).total_seconds() // 60)
+                    if prior.completed_ts
+                    else None
+                ),
+                batch_id=prior.batch_id,
+            )
+        )
+    return tuple(priors)
+
+
+def _incident_out(incident: fingerprinting.Incident) -> IncidentOut:
+    match = incident.match
+    return IncidentOut(
+        incident_id=incident.incident_id,
+        batch_id=incident.batch_id,
+        feed_id=incident.feed_id,
+        opened_ts=incident.opened_ts,
+        kind=incident.kind.value,
+        status=incident.status,
+        signature=incident.signature,
+        root_cause=_error_out(incident.root_cause) if incident.root_cause else None,
+        consequences=[_error_out(e) for e in incident.cascade.consequences],
+        match=(
+            GuideMatchOut(
+                guide_id=match.guide.guide_id,
+                title=match.guide.title,
+                steps=list(match.guide.steps),
+                signature=match.signature,
+                matched_errors=list(match.matched_errors),
+                occurrences=match.occurrences,
+                mean_fix_minutes=match.mean_fix_minutes,
+                remedy=match.guide.remedy.value if match.guide.remedy else None,
+                stale=match.guide.stale,
+                priors=[
+                    PriorIncidentOut(
+                        incident_id=prior.incident_id,
+                        occurred_ts=prior.occurred_ts,
+                        fix_minutes=prior.fix_minutes,
+                        batch_id=prior.batch_id,
+                        citation=str(prior.citation),
+                    )
+                    for prior in match.priors
+                ],
+                citations=[str(c) for c in match.citations],
+                explanation=match.explain(),
+            )
+            if match
+            else None
+        ),
+        proposed_remedy=(incident.proposed_remedy.value if incident.proposed_remedy else None),
+        evidence_bundle=incident.evidence_bundle(),
+        explanation=incident.explain(),
+        citation=str(incident.citation),
+        route=incident.citation.route,
+    )
+
+
+# ── CF-V1-E7-04 · the technical review queue ─────────────────────────────────
+def _review_candidates(metadata: MetadataDbPort, feed_id: str) -> tuple[rule_review.Candidate, ...]:
+    """The agent's latest rule-authoring output, as routing candidates.
+
+    Read from the PROPOSAL rather than from a queue table: the agent already
+    writes every authored rule and every `NeedsTechnicalReview` into
+    `proposals.proposal`, and a second store would be a second answer to "what
+    did the agent say" — with the queue and the proposal free to disagree about
+    a rule nobody has looked at yet.
+    """
+    proposals = [
+        proposal
+        for proposal in metadata.list_proposals(feed_id=feed_id)
+        if proposal.agent == rule_authoring_graph.AGENT
+    ]
+    if not proposals:
+        return ()
+    latest = max(proposals, key=lambda p: p.created_ts)
+    found: list[rule_review.Candidate] = []
+    for record in latest.payload.get("records", ()):
+        if not isinstance(record, dict):
+            continue
+        raw_rule = record.get("rule")
+        found.append(
+            rule_review.Candidate(
+                stated=str(record.get("stated", "")),
+                confidence=float(record.get("confidence") or 0.0),
+                check=(
+                    rules_core.check_from_dict(raw_rule["check"])
+                    if isinstance(raw_rule, dict) and isinstance(raw_rule.get("check"), dict)
+                    else None
+                ),
+                machine_reading=str(record.get("explanation", "")),
+                unsupported_reason=str(record.get("unsupported_reason") or ""),
+            )
+        )
+    return tuple(candidate for candidate in found if candidate.stated.strip())
+
+
+def _review_out(review: rule_review.TechnicalReview) -> TechnicalReviewOut:
+    return TechnicalReviewOut(
+        review_id=review.review_id,
+        feed_id=review.feed_id,
+        stated=review.stated,
+        machine_reading=review.machine_reading,
+        reason=review.reason.value,
+        explained_to_author=review.explain_to_author(),
+        confidence=review.confidence,
+        state=review.state.value,
+        status=review.state.status_word,
+        created_ts=review.created_ts,
+        evidence=dict(review.evidence),
+        reviewed_by=review.reviewed_by.subject if review.reviewed_by else None,
+        resolution_note=review.resolution_note,
+        engineering_item_id=review.engineering_item_id,
+        citation=str(review.citation),
     )
