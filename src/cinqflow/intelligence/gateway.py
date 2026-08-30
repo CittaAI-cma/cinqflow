@@ -1,4 +1,4 @@
-"""CF-V0-E16-01 — the one door to a model.
+"""CF-V0-E16-01 / CF-V1-E16-05 — the one door to a model.
 
     "no model credentials exist outside the LLM gateway"
     "every model call is logged with prompt hash, model version, cost and
@@ -7,12 +7,24 @@
     "PHI is scrubbed before ANY prompt"
     — docs/architecture/INVARIANTS.md, intelligence
 
-The six stages run in `CALL_PIPELINE` order, and the order is CHECKED at
-runtime by `_Stages`, not merely implied by the sequence of statements below.
-That indirection buys one specific thing: a future refactor that moves prompt
-assembly above the scrub raises `PipelineOrderError` on the first call instead
-of quietly disclosing PHI. The ordering also has its own test, asserted without
-reference to what either component does.
+`LlmGateway` has two public entry points, `complete()` and `embed()`, and they
+are deliberately NOT the same shape. `complete()` runs six stages — context,
+scrub, assemble, call, validate, act — because a prompt is assembled fresh
+each time and might carry PHI until it is scrubbed. `embed()` has no prompt to
+assemble and no schema to validate; per ADR-0007 its input is chunk text a
+caller already PHI-verified upstream (Presidio's refusal gate, not this
+module's mask-and-continue scrub — see `EmbeddingFailedError` and `embed()`'s
+own docstring for why the two stay separate). What both share, and what makes
+either one a GOVERNED call rather than a bare SDK call, is the same `Budget`
+instance checked before spending and the same `_store.append_agent_action`
+ledger recording every attempt, refused or not.
+
+The six stages `complete()` runs are in `CALL_PIPELINE` order, and the order
+is CHECKED at runtime by `_Stages`, not merely implied by the sequence of
+statements below. That indirection buys one specific thing: a future refactor
+that moves prompt assembly above the scrub raises `PipelineOrderError` on the
+first call instead of quietly disclosing PHI. The ordering also has its own
+test, asserted without reference to what either component does.
 
 What this module deliberately does NOT do:
 
@@ -21,7 +33,10 @@ What this module deliberately does NOT do:
   • decide what a tool may do — the action gateway holds a whitelist, and at
     R0 that whitelist contains read tools only;
   • hold a credential — the adapter behind the `llm` pin does, and it is
-    reachable only from here.
+    reachable only from here;
+  • scrub or PHI-verify anything passed to `embed()` — that discipline lives
+    upstream of this call, per ADR-0007, and is a different gate with
+    different failure semantics from `complete()`'s own `phi_scrub` stage.
 """
 
 from __future__ import annotations
@@ -41,9 +56,10 @@ from cinqflow.core.model.llm import (
     BudgetExhaustedError,
     Completion,
     CompletionFailedError,
+    Embedding,
     LlmError,
 )
-from cinqflow.core.prompts import AssembledPrompt, assemble, executable
+from cinqflow.core.prompts import AssembledPrompt, assemble, executable, hash_prompt
 from cinqflow.ports.llm import LlmPort
 from cinqflow.ports.metadata_db import MetadataDbPort
 from cinqflow.ports.observability import ObservabilityPort
@@ -69,6 +85,25 @@ class ManualPathRequiredError(LlmError):
     same for a schema failure that survives the one bounded repair. A caller
     does not need to know which of the three happened to do the right thing
     next — only `outcome` on the audit row does.
+
+    NOT raised by `embed()`. See `EmbeddingFailedError`.
+    """
+
+
+class EmbeddingFailedError(LlmError):
+    """A chunk's vector could not be computed — budget refused it, or the
+    transport failed.
+
+    Deliberately its own type, not a reuse of `ManualPathRequiredError`.
+    That name means "the FEATURE degrades to a human reading a fallback
+    answer" — and a completion has one: the manual path is the feature
+    working without the model. An embedding has no such sibling; there is no
+    hand-computed stand-in for a vector, so there is nothing to name "the
+    manual path" here. What a caller CAN sensibly do is skip the one chunk
+    that failed and keep indexing the rest of the batch — which is exactly
+    what a distinct, literally-named exception lets the knowledge-pipeline's
+    embed stage (a later slab) catch without also swallowing every other
+    `LlmError` it did not mean to.
     """
 
 
@@ -132,11 +167,12 @@ class _Spend:
 
 
 class LlmGateway:
-    """The only place a prompt becomes a model call.
+    """The only place a prompt becomes a model call, or chunk text becomes a
+    vector.
 
     Constructed with pins, never with an SDK. A caller holding this object can
-    ask for a completion; it cannot reach an endpoint, name a model, or spend
-    past a cap.
+    ask for a completion or an embedding; it cannot reach an endpoint, name a
+    model, or spend past a cap.
     """
 
     def __init__(
@@ -247,6 +283,112 @@ class LlmGateway:
             repairs=repairs,
             stages=stages.order,
         )
+
+    # ── embeddings — a second, simpler door ─────────────────────────────────
+
+    def embed(
+        self,
+        *,
+        agent: str,
+        run_id: str,
+        caller: Actor,
+        texts: tuple[str, ...],
+    ) -> tuple[Embedding, ...]:
+        """Turn already-verified chunk text into vectors.
+
+        This is NOT `complete()` shrunk down. There is no prompt template to
+        assemble, no `response_schema` to validate, and no repair loop — a
+        vector either comes back or it does not. What it DOES share with
+        `complete()` is the two things that make a model call governed rather
+        than a bare SDK call: the budget is checked before the call
+        (`Budget.check`, the same instance, the same per-agent-per-day and
+        per-run ledger), and every attempt — completed or refused — is
+        written to `audit.agent_action` via the same `_store`, under
+        `action="llm:embed"` so the ledger's own "100% of model calls carry
+        prompt hash, model version, cost and caller identity" check
+        (`AgentAction.__post_init__`) applies to an embed call exactly as it
+        does to a completion. `prompt_hash` holds the hash of the JOINED
+        input texts — there is no prompt, but the field's role ("what,
+        exactly, was sent") transfers unchanged.
+
+        THE CALLING CONTRACT (ADR-0007): callers PHI-verify each chunk's text
+        BEFORE calling this method. `complete()`'s `phi_scrub` stage is a
+        mask-and-continue discipline built for PROMPT text flowing to a
+        completion; the knowledge pipeline's own PHI-verify is a Presidio
+        REFUSAL gate over chunk text with different failure semantics
+        entirely (uncertainty refuses the chunk rather than masking and
+        continuing). Reusing `phi_scrub` here — or running both over the same
+        text — would blur two disciplines that need to stay distinguishable
+        in the audit trail. So this method scrubs NOTHING and verifies
+        NOTHING: it trusts the caller. Handing it raw, unverified document
+        text is a caller defect that this method has no way to catch, exactly
+        as `LlmPort.complete` trusts its `prompt` argument arrives already
+        assembled and already scrubbed.
+
+        Raises `EmbeddingFailedError` — never `ManualPathRequiredError` — on
+        a budget refusal or a transport failure; see that type's docstring
+        for why the two must not share a name. `texts=()` is a no-op: nothing
+        was asked of the model, so nothing is checked, spent or recorded.
+        """
+        if not texts:
+            return ()
+
+        now = self._clock()
+        day = now.date().isoformat()
+        text_hash = hash_prompt("\n".join(texts))
+
+        try:
+            self._budget.check(
+                agent=agent,
+                spent_today=self._spend.today(agent, day),
+                spent_this_run=self._spend.run(run_id),
+                estimated=self._estimate,
+            )
+        except BudgetExhaustedError as exhausted:
+            self._record_embed(
+                agent=agent,
+                run_id=run_id,
+                caller=caller,
+                text_hash=text_hash,
+                outcome=ActionOutcome.REFUSED_BUDGET,
+                now=now,
+                detail=str(exhausted),
+            )
+            self._obs.metric("llm.embed.budget.refused", 1.0, agent=agent)
+            raise EmbeddingFailedError(
+                f"{agent}'s budget is exhausted — {exhausted}. {len(texts)} chunk(s) were "
+                "not embedded."
+            ) from exhausted
+
+        try:
+            embeddings = self._llm.embed(texts)
+        except CompletionFailedError as failed:
+            self._record_embed(
+                agent=agent,
+                run_id=run_id,
+                caller=caller,
+                text_hash=text_hash,
+                outcome=ActionOutcome.FAILED_COMPLETION,
+                now=now,
+                detail=str(failed),
+            )
+            self._obs.metric("llm.embed.failed", 1.0, agent=agent)
+            raise EmbeddingFailedError(
+                f"{agent}'s embed call failed — {failed}. {len(texts)} chunk(s) were not embedded."
+            ) from failed
+
+        total_cost = sum((embedding.cost_usd for embedding in embeddings), Decimal("0"))
+        self._spend.add(agent=agent, day=day, run_id=run_id, amount=total_cost)
+        self._record_embed(
+            agent=agent,
+            run_id=run_id,
+            caller=caller,
+            text_hash=text_hash,
+            outcome=ActionOutcome.COMPLETED,
+            now=now,
+            embeddings=embeddings,
+        )
+        return embeddings
 
     # ── stage 4 ──────────────────────────────────────────────────────────────
 
@@ -451,6 +593,38 @@ class LlmGateway:
                 completion_tokens=completion.completion_tokens if completion else 0,
                 cost_usd=completion.cost_usd if completion else Decimal("0"),
                 latency_ms=completion.latency_ms if completion else 0,
+                detail=detail,
+            )
+        )
+
+    def _record_embed(
+        self,
+        *,
+        agent: str,
+        run_id: str,
+        caller: Actor,
+        text_hash: str,
+        outcome: ActionOutcome,
+        now: datetime,
+        embeddings: tuple[Embedding, ...] = (),
+        detail: str = "",
+    ) -> None:
+        """`embed()`'s ledger row. Not a call to `_record`: that method takes
+        an `AssembledPrompt`, and there is no prompt here — only texts and,
+        on success, the vectors they produced."""
+        first = embeddings[0] if embeddings else None
+        self._store.append_agent_action(
+            AgentAction(
+                run_id=run_id,
+                agent=agent,
+                action="llm:embed",
+                outcome=outcome,
+                actor=caller,
+                occurred_ts=now,
+                prompt_hash=text_hash,
+                model=first.model if first else "",
+                model_version=first.model_version if first else "",
+                cost_usd=sum((e.cost_usd for e in embeddings), Decimal("0")),
                 detail=detail,
             )
         )

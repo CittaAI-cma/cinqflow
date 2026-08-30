@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
@@ -33,7 +34,7 @@ from cinqflow.core.model.agent_action import ActionOutcome
 from cinqflow.core.model.governed import Actor, LifecycleState
 from cinqflow.core.model.vocabulary import ActorType
 from cinqflow.core.prompts import PromptSection, PromptTemplate
-from cinqflow.intelligence.gateway import LlmGateway, ManualPathRequiredError
+from cinqflow.intelligence.gateway import EmbeddingFailedError, LlmGateway, ManualPathRequiredError
 from cinqflow.ports.agent_runtime import AgentRuntimeError, AgentRuntimePort, Edge, GraphSpec
 from cinqflow.ports.llm import (
     Completion,
@@ -128,6 +129,39 @@ def test_a_schema_constrained_response_is_shape_valid_but_content_free(llm: LlmP
     assert parsed == {"claims": [], "confidence": 0}
 
 
+# ── embed — the other verb this pin declares, W1-24 ─────────────────────────
+#
+#     `grep -rn "\.embed(" src/cinqflow tests` returned ZERO hits before this
+#     slab: `LlmPort.embed` and its real adapter existed since Wave 0, fully
+#     wired, and nothing anywhere ever called it.
+
+
+def test_embed_returns_what_audit_and_metering_require(llm: LlmPort) -> None:
+    """The embedding analogue of
+    `test_every_completion_carries_what_audit_and_metering_require` — a model
+    name, a version and a Decimal cost, on the return value rather than left
+    for a caller to reconstruct."""
+    (embedding,) = llm.embed(("a chunk of runbook text",))
+    assert embedding.model
+    assert embedding.model_version
+    assert isinstance(embedding.cost_usd, Decimal)
+    assert len(embedding.vector) > 0
+
+
+def test_embed_returns_one_vector_per_text_in_the_order_given(llm: LlmPort) -> None:
+    result = llm.embed(("first", "second", "third"))
+    assert len(result) == 3
+
+
+def test_the_same_text_gives_the_same_embedding(llm: LlmPort) -> None:
+    """Determinism a LATER idempotency check can lean on: re-embedding a
+    chunk whose text has not changed must not silently drift the vector it
+    already has in the store."""
+    first = llm.embed(("stable chunk text",))
+    second = llm.embed(("stable chunk text",))
+    assert first[0].vector == second[0].vector
+
+
 # ── the gateway degrades, it does not crash ─────────────────────────────────
 #
 #     W2-37 — a timed-out or unaffordable model call used to CRASH every
@@ -180,7 +214,8 @@ class _RaisingLlm:
         raise self._to_raise
 
     def embed(self, texts: tuple[str, ...]) -> tuple[Embedding, ...]:
-        raise NotImplementedError
+        self.calls += 1
+        raise self._to_raise
 
     def declared_endpoints(self) -> frozenset[str]:
         return frozenset({"mock://scripted"})
@@ -274,6 +309,105 @@ def test_an_undeclared_endpoint_still_propagates_unchanged_through_the_gateway()
             caller=_GATEWAY_TEST_BA,
             input_text="hello",
         )
+
+
+# ── embed() has its own budget/audit discipline, and its own failure type ───
+#
+#     W1-24 — `embed()` shares `complete()`'s `Budget.check` and its
+#     `_store.append_agent_action` ledger, but NOT its failure type: there is
+#     no "manual path" for a vector, so a refused or failed embed call raises
+#     `EmbeddingFailedError`, never `ManualPathRequiredError`. These tests use
+#     `_store_with_gateway_test_template`'s store even though `embed()` never
+#     reads a prompt template — it is just a convenient store to assert audit
+#     rows against.
+
+
+def test_embed_returns_real_embeddings_with_a_ledger_row() -> None:
+    store = _store_with_gateway_test_template()
+    gateway = _gateway(ScriptedLlm(), store)
+
+    result = gateway.embed(
+        agent="test-agent",
+        run_id="R-embed-ok",
+        caller=_GATEWAY_TEST_BA,
+        texts=("first chunk", "second chunk"),
+    )
+
+    assert len(result) == 2
+    assert all(isinstance(embedding, Embedding) for embedding in result)
+
+    (row,) = store.read_agent_actions(run_id="R-embed-ok")
+    assert row.outcome is ActionOutcome.COMPLETED
+    assert row.action == "llm:embed"
+    assert row.prompt_hash, "the hash of what was sent — same field, same role, no prompt"
+    assert row.model and row.model_version
+    assert row.actor.subject == _GATEWAY_TEST_BA.subject
+
+
+def test_embed_with_no_texts_is_a_no_op() -> None:
+    """Nothing was asked of the model, so nothing is checked, spent or
+    recorded — not even an empty ledger row."""
+    store = _store_with_gateway_test_template()
+    gateway = _gateway(ScriptedLlm(), store)
+
+    assert (
+        gateway.embed(agent="test-agent", run_id="R-embed-empty", caller=_GATEWAY_TEST_BA, texts=())
+        == ()
+    )
+    assert store.read_agent_actions(run_id="R-embed-empty") == ()
+
+
+def test_an_embed_budget_exhaustion_degrades_and_is_recorded() -> None:
+    """Mirrors `test_a_budget_exhaustion_degrades_to_the_manual_path_not_bare_budget_exhausted`
+    for `embed()` — except the degrade target is `EmbeddingFailedError`, not
+    `ManualPathRequiredError`: there is no manual path for a vector."""
+    store = _store_with_gateway_test_template()
+    llm = _RaisingLlm(AssertionError("the model must not be called once the budget refuses"))
+    gateway = _gateway(llm, store, per_run_usd="0.001")
+
+    with pytest.raises(EmbeddingFailedError, match="budget is exhausted"):
+        gateway.embed(
+            agent="test-agent", run_id="R-embed-budget", caller=_GATEWAY_TEST_BA, texts=("chunk",)
+        )
+
+    assert llm.calls == 0
+    actions = store.read_agent_actions(run_id="R-embed-budget")
+    assert any(a.outcome is ActionOutcome.REFUSED_BUDGET for a in actions)
+
+
+def test_an_embed_transport_failure_degrades_and_is_recorded() -> None:
+    """Mirrors `test_a_transport_failure_degrades_to_the_manual_path` for
+    `embed()`. The failure still must not crash the caller — it must degrade
+    to something a chunk-at-a-time pipeline stage can catch and skip past."""
+    store = _store_with_gateway_test_template()
+    llm = _RaisingLlm(CompletionFailedError("simulated network timeout"))
+    gateway = _gateway(llm, store)
+
+    with pytest.raises(EmbeddingFailedError, match="embed call failed"):
+        gateway.embed(
+            agent="test-agent",
+            run_id="R-embed-transport",
+            caller=_GATEWAY_TEST_BA,
+            texts=("chunk",),
+        )
+
+    actions = store.read_agent_actions(run_id="R-embed-transport")
+    assert any(a.outcome is ActionOutcome.FAILED_COMPLETION for a in actions)
+
+
+def test_an_embed_failure_is_never_manual_path_required() -> None:
+    """`EmbeddingFailedError` and `ManualPathRequiredError` are SIBLINGS under
+    `LlmError`, neither a subclass of the other — a caller written for one
+    must not accidentally also catch the other."""
+    store = _store_with_gateway_test_template()
+    llm = _RaisingLlm(CompletionFailedError("simulated network timeout"))
+    gateway = _gateway(llm, store)
+
+    with pytest.raises(EmbeddingFailedError) as excinfo:
+        gateway.embed(
+            agent="test-agent", run_id="R-embed-shape", caller=_GATEWAY_TEST_BA, texts=("chunk",)
+        )
+    assert not isinstance(excinfo.value, ManualPathRequiredError)
 
 
 # ── phi_scrub ────────────────────────────────────────────────────────────────
