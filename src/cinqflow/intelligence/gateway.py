@@ -37,7 +37,12 @@ from cinqflow.core.intelligence import CALL_PIPELINE, Budget, CallStage, Pipelin
 from cinqflow.core.intelligence.validate import validate
 from cinqflow.core.model.agent_action import ActionOutcome, AgentAction
 from cinqflow.core.model.governed import Actor, ObjectType
-from cinqflow.core.model.llm import BudgetExhaustedError, Completion, LlmError
+from cinqflow.core.model.llm import (
+    BudgetExhaustedError,
+    Completion,
+    CompletionFailedError,
+    LlmError,
+)
 from cinqflow.core.prompts import AssembledPrompt, assemble, executable
 from cinqflow.ports.llm import LlmPort
 from cinqflow.ports.metadata_db import MetadataDbPort
@@ -50,12 +55,20 @@ MAX_REPAIRS = 1
 
 
 class ManualPathRequiredError(LlmError):
-    """The model could not produce a valid response. The feature degrades.
+    """The model could not be reached, could not be afforded, or could not
+    produce a valid response. Either way, the feature degrades.
 
         "the feature degrades to its manual path, and Operations sees the
          event — never a silent hang or a surprise bill."
 
     Named for what the user does next, not for what the model did wrong.
+    THE ONE exception every calling agent catches: `_call` normalises a
+    caught `BudgetExhaustedError` (the call was refused before it was made)
+    and a caught `CompletionFailedError` (the call was made and the
+    transport failed) into this same type, and `_parse_or_repair` does the
+    same for a schema failure that survives the one bounded repair. A caller
+    does not need to know which of the three happened to do the right thing
+    next — only `outcome` on the audit row does.
     """
 
 
@@ -268,15 +281,48 @@ class LlmGateway:
                 detail=str(exhausted),
             )
             self._obs.metric("llm.budget.refused", 1.0, agent=agent)
-            raise
+            # Re-raised as the ONE thing every caller already catches — a
+            # bare `BudgetExhaustedError` here would be a sibling of
+            # `ManualPathRequiredError`, not that error itself, and every
+            # `except ManualPathRequiredError` in mapping_suggestion,
+            # fingerprint_match and alert_enrichment would let it through
+            # uncaught. Budget exhaustion is DESIGNED FOR, not a freak
+            # accident — it degrades exactly like a schema failure.
+            raise ManualPathRequiredError(
+                f"{agent}'s budget is exhausted — {exhausted}. The manual path is unaffected."
+            ) from exhausted
 
-        completion = self._llm.complete(
-            prompt=prompt.text,
-            task_class=prompt.task_class,
-            response_schema=prompt.response_schema,
-            max_tokens=prompt.max_tokens,
-            temperature=prompt.temperature,
-        )
+        try:
+            completion = self._llm.complete(
+                prompt=prompt.text,
+                task_class=prompt.task_class,
+                response_schema=prompt.response_schema,
+                max_tokens=prompt.max_tokens,
+                temperature=prompt.temperature,
+            )
+        except CompletionFailedError as failed:
+            # The call itself failed — a timeout, a dropped connection, a
+            # rate limit — as opposed to a bad ANSWER (schema_validation's
+            # job) or an exhausted budget (above). Same degrade, same
+            # single exception type every caller already catches.
+            # `UndeclaredEndpointError` is a THIRD sibling of `LlmError` and
+            # is deliberately NOT caught here: a misconfigured endpoint is
+            # not something to degrade past, and must keep failing loudly.
+            self._record(
+                agent=agent,
+                run_id=run_id,
+                caller=caller,
+                prompt=prompt,
+                completion=None,
+                outcome=ActionOutcome.FAILED_COMPLETION,
+                now=now,
+                detail=str(failed),
+            )
+            self._obs.metric("llm.completion.failed", 1.0, agent=agent)
+            raise ManualPathRequiredError(
+                f"{agent}'s completion call failed — {failed}. The manual path is unaffected."
+            ) from failed
+
         self._spend.add(agent=agent, day=day, run_id=run_id, amount=completion.cost_usd)
         return completion
 
@@ -324,17 +370,39 @@ class LlmGateway:
             # UNGOVERNED repair string, rather than added to the versioned
             # PromptTemplate — that would change every prompt's hash and
             # Lane-2 cassette key for a fix that only the repair path needs.
-            completion = self._llm.complete(
-                prompt=f"{prompt.text}\n\n# repair\n"
-                f"The previous response was rejected:\n- "
-                + "\n- ".join(problems)
-                + "\nReturn only JSON matching this exact schema — no other keys, no wrapper "
-                "object:\n" + json.dumps(prompt.response_schema),
-                task_class=prompt.task_class,
-                response_schema=prompt.response_schema,
-                max_tokens=prompt.max_tokens,
-                temperature=prompt.temperature,
-            )
+            try:
+                completion = self._llm.complete(
+                    prompt=f"{prompt.text}\n\n# repair\n"
+                    f"The previous response was rejected:\n- "
+                    + "\n- ".join(problems)
+                    + "\nReturn only JSON matching this exact schema — no other keys, no wrapper "
+                    "object:\n" + json.dumps(prompt.response_schema),
+                    task_class=prompt.task_class,
+                    response_schema=prompt.response_schema,
+                    max_tokens=prompt.max_tokens,
+                    temperature=prompt.temperature,
+                )
+            except CompletionFailedError as failed:
+                # The ONE bounded repair attempt is a second, easily-missed
+                # call site with the identical bug: the completion above this
+                # loop is guarded by `_call`, but this one is made directly,
+                # and a transport failure here must degrade exactly the same
+                # way — never crash a run that a schema retry was already
+                # trying to save.
+                self._record(
+                    agent=agent,
+                    run_id=run_id,
+                    caller=caller,
+                    prompt=prompt,
+                    completion=completion,
+                    outcome=ActionOutcome.FAILED_COMPLETION,
+                    now=now,
+                    detail=str(failed),
+                )
+                self._obs.metric("llm.completion.failed", 1.0, agent=agent)
+                raise ManualPathRequiredError(
+                    f"{agent}'s repair call failed — {failed}. The manual path is unaffected."
+                ) from failed
             self._spend.add(agent=agent, day=day, run_id=run_id, amount=completion.cost_usd)
 
         self._record(

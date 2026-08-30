@@ -83,3 +83,15 @@ class BudgetExhaustedError(LlmError):
      hang or a surprise bill."
     — CF-V0-E16-01, exception
     """
+
+
+class CompletionFailedError(LlmError):
+    """The call itself failed — a timeout, a dropped connection, a rate
+    limit — as opposed to a bad answer (schema failure) or an exhausted
+    budget (the call was never attempted).
+
+    Raised by an adapter translating a vendor SDK's own exception at the
+    port boundary — "a vendor's specific exception types should not leak
+    past its adapter" — so nothing above the port ever needs to know that
+    `openai.APIError` (or any other vendor's transport exception) exists.
+    """

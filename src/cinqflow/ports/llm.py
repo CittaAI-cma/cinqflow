@@ -28,6 +28,7 @@ from typing import Any, Protocol, runtime_checkable
 from cinqflow.core.model.llm import (
     BudgetExhaustedError,
     Completion,
+    CompletionFailedError,
     Embedding,
     LlmError,
     TaskClass,
@@ -37,6 +38,7 @@ from cinqflow.core.model.llm import (
 __all__ = [
     "BudgetExhaustedError",
     "Completion",
+    "CompletionFailedError",
     "Embedding",
     "LlmError",
     "LlmPort",

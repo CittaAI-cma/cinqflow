@@ -33,6 +33,7 @@ class ActionOutcome(StrEnum):
     REFUSED_NOT_WHITELISTED = "refused_not_whitelisted"
     REFUSED_UNDECLARED_ENDPOINT = "refused_undeclared_endpoint"
     FAILED_SCHEMA = "failed_schema"
+    FAILED_COMPLETION = "failed_completion"
     ESCALATED_TO_MANUAL = "escalated_to_manual"
 
     @property

@@ -21,7 +21,13 @@ import pytest
 from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.openai_compatible.llm import OpenAiCompatibleLlm
 from cinqflow.adapters.replay.llm import CassetteKey, CassetteLlm, CassetteMissError
-from cinqflow.core.model.llm import Completion, LlmError, TaskClass, UndeclaredEndpointError
+from cinqflow.core.model.llm import (
+    Completion,
+    CompletionFailedError,
+    LlmError,
+    TaskClass,
+    UndeclaredEndpointError,
+)
 from cinqflow.core.prompts import hash_prompt
 from cinqflow.ports import fitted
 from cinqflow.ports.llm import LlmPort
@@ -109,6 +115,43 @@ def test_the_real_adapter_opens_no_socket_until_it_is_called() -> None:
     )
     assert adapter._client is None
     assert adapter.declared_endpoints() == DECLARED
+
+
+def test_a_vendor_transport_failure_is_translated_at_the_adapter_boundary() -> None:
+    """ "a vendor's specific exception types should not leak past its
+    adapter" — W2-37. A real `openai.APITimeoutError` (the same base,
+    `openai.APIError`, also covers `APIConnectionError` and
+    `RateLimitError`) must never reach a caller as itself; this is the ONE
+    layer that can see the vendor exception at all, and it translates it
+    into the platform's own `CompletionFailedError`."""
+    import httpx
+    import openai
+
+    adapter = OpenAiCompatibleLlm(
+        endpoint="https://api.example.test/v1",
+        api_key="k",
+        models=MODELS,
+        prices=PRICES,
+        declared_endpoints=DECLARED,
+    )
+
+    class _FailingCompletions:
+        def create(self, **kwargs: object) -> object:
+            request = httpx.Request("POST", "https://api.example.test/v1/chat/completions")
+            raise openai.APITimeoutError(request=request)
+
+    class _FailingChat:
+        completions = _FailingCompletions()
+
+    class _FailingClient:
+        chat = _FailingChat()
+
+    # Bypasses `_sdk()`'s real construction entirely — Lane 1 holds no
+    # credential and must not need a socket to prove this translation.
+    adapter._client = _FailingClient()
+
+    with pytest.raises(CompletionFailedError, match="small-model"):
+        adapter.complete(prompt="p", task_class=TaskClass.SMALL)
 
 
 # ── Lane 2: cassettes at the PORT boundary ───────────────────────────────────

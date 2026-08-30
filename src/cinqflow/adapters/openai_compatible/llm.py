@@ -33,6 +33,7 @@ from typing import Any
 
 from cinqflow.core.model.llm import (
     Completion,
+    CompletionFailedError,
     Embedding,
     LlmError,
     TaskClass,
@@ -110,31 +111,42 @@ class OpenAiCompatibleLlm:
     ) -> Completion:
         model = self._models[task_class]
         started = time.monotonic()
-        response = self._sdk().chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=max_tokens,
-            timeout=self._timeout,
-            # The reasoning family (gpt-5·o1·o3·o4) serves ONE temperature — its
-            # own default — and 400s on any explicit value, including the 0.0
-            # every schema-bound prompt asks for (core/prompts: temperature != 0
-            # with a response_schema is refused before this adapter is even
-            # reached). Omitting the parameter here, rather than sending it and
-            # catching the 400, keeps the refusal in core doing the only
-            # thing it can verify statically — that determinism was ASKED
-            # for — while the adapter absorbs the one vendor fact that
-            # request shape differs by model family.
-            **({} if _is_reasoning_model(model) else {"temperature": temperature}),
-            # Same family: reasoning tokens are billed and counted against
-            # `max_completion_tokens` but never appear in `.content` — a prompt
-            # budgeted for a short cited answer can be entirely consumed by
-            # invisible reasoning, returning empty text with
-            # finish_reason="length". "minimal" is the smallest reasoning
-            # budget the API offers, which is what a temperature=0,
-            # schema-bound, cited-facts-only prompt is already asking for.
-            **({"reasoning_effort": "minimal"} if _is_reasoning_model(model) else {}),
-            **({"response_format": {"type": "json_object"}} if response_schema else {}),
-        )
+        try:
+            response = self._sdk().chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=max_tokens,
+                timeout=self._timeout,
+                # The reasoning family (gpt-5·o1·o3·o4) serves ONE temperature —
+                # its own default — and 400s on any explicit value, including
+                # the 0.0 every schema-bound prompt asks for (core/prompts:
+                # temperature != 0 with a response_schema is refused before
+                # this adapter is even reached). Omitting the parameter here,
+                # rather than sending it and catching the 400, keeps the
+                # refusal in core doing the only thing it can verify
+                # statically — that determinism was ASKED for — while the
+                # adapter absorbs the one vendor fact that request shape
+                # differs by model family.
+                **({} if _is_reasoning_model(model) else {"temperature": temperature}),
+                # Same family: reasoning tokens are billed and counted against
+                # `max_completion_tokens` but never appear in `.content` — a
+                # prompt budgeted for a short cited answer can be entirely
+                # consumed by invisible reasoning, returning empty text with
+                # finish_reason="length". "minimal" is the smallest reasoning
+                # budget the API offers, which is what a temperature=0,
+                # schema-bound, cited-facts-only prompt is already asking for.
+                **({"reasoning_effort": "minimal"} if _is_reasoning_model(model) else {}),
+                **({"response_format": {"type": "json_object"}} if response_schema else {}),
+            )
+        except self._vendor_transport_error() as failed:
+            # "a vendor's specific exception types should not leak past its
+            # adapter" — a timeout, a dropped connection or a rate limit all
+            # share `openai.APIError` as their base, and none of them is a
+            # bad answer or an exhausted budget, so none of them is the
+            # gateway's or a caller's exception type to catch.
+            raise CompletionFailedError(
+                f"the completion call to {model!r} failed: {failed}"
+            ) from failed
         latency_ms = int((time.monotonic() - started) * 1000)
 
         choice = response.choices[0]
@@ -196,3 +208,12 @@ class OpenAiCompatibleLlm:
                 base_url=self._endpoint, api_key=self._api_key, timeout=self._timeout
             )
         return self._client
+
+    def _vendor_transport_error(self) -> type[Exception]:
+        """`openai.APIError` — the common base of `APITimeoutError`,
+        `APIConnectionError`, `RateLimitError` and every other failure of the
+        call itself. Imported lazily for the same reason `_sdk` is: Lanes 1
+        and 2 must not need the package installed to run."""
+        from openai import APIError
+
+        return APIError

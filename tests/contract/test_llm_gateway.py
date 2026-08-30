@@ -27,7 +27,7 @@ from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
 from cinqflow.core.intelligence import CALL_PIPELINE, Budget, CallStage, Routing
 from cinqflow.core.model.agent_action import ActionOutcome
 from cinqflow.core.model.governed import Actor, LifecycleState
-from cinqflow.core.model.llm import BudgetExhaustedError, TaskClass
+from cinqflow.core.model.llm import TaskClass
 from cinqflow.core.model.vocabulary import ActorType
 from cinqflow.core.prompts import PromptSection, PromptTemplate
 from cinqflow.intelligence.gateway import LlmGateway, ManualPathRequiredError
@@ -228,7 +228,11 @@ def test_the_budget_is_checked_before_the_call_not_after() -> None:
         budget=Budget(per_run_usd=Decimal("0.02"), per_agent_per_day_usd=Decimal("5")),
         estimate=Decimal("0.03"),
     )
-    with pytest.raises(BudgetExhaustedError, match="per-run cap"):
+    # W2-37: a budget refusal degrades to the SAME `ManualPathRequiredError`
+    # every calling agent already catches — not the bare `BudgetExhaustedError`
+    # sibling, which every `except ManualPathRequiredError` let straight
+    # through.
+    with pytest.raises(ManualPathRequiredError, match="per-run cap"):
         gateway.complete(
             agent="pipeline-insight", run_id="run-1", prompt_id="insight.answer", caller=CALLER
         )
@@ -244,7 +248,7 @@ def test_a_budget_refusal_is_recorded_so_operations_can_see_it() -> None:
         budget=Budget(per_run_usd=Decimal("0.02"), per_agent_per_day_usd=Decimal("5")),
         estimate=Decimal("0.03"),
     )
-    with pytest.raises(BudgetExhaustedError):
+    with pytest.raises(ManualPathRequiredError):  # W2-37: see above
         gateway.complete(
             agent="pipeline-insight", run_id="run-1", prompt_id="insight.answer", caller=CALLER
         )

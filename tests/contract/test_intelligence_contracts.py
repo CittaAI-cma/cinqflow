@@ -17,14 +17,32 @@ as negatives: the attempt is made, and the refusal is asserted.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
+from cinqflow.adapters.mock.metadata_db import MemMetadataDb
+from cinqflow.adapters.mock.observability import NoopObservability
+from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
 from cinqflow.core.citations import CitationId, CitationKind
+from cinqflow.core.intelligence import Budget, Routing
+from cinqflow.core.model.agent_action import ActionOutcome
+from cinqflow.core.model.governed import Actor, LifecycleState
+from cinqflow.core.model.vocabulary import ActorType
+from cinqflow.core.prompts import PromptSection, PromptTemplate
+from cinqflow.intelligence.gateway import LlmGateway, ManualPathRequiredError
 from cinqflow.ports.agent_runtime import AgentRuntimeError, AgentRuntimePort, Edge, GraphSpec
-from cinqflow.ports.llm import LlmPort, TaskClass
+from cinqflow.ports.llm import (
+    Completion,
+    CompletionFailedError,
+    Embedding,
+    LlmPort,
+    TaskClass,
+    UndeclaredEndpointError,
+)
 from cinqflow.ports.phi_scrub import PhiScrubPort
 from cinqflow.ports.vector import Chunk, VectorPort
 
@@ -108,6 +126,154 @@ def test_a_schema_constrained_response_is_shape_valid_but_content_free(llm: LlmP
     completion = llm.complete(prompt="p", task_class=TaskClass.LARGE, response_schema=schema)
     parsed = json.loads(completion.text)
     assert parsed == {"claims": [], "confidence": 0}
+
+
+# ── the gateway degrades, it does not crash ─────────────────────────────────
+#
+#     W2-37 — a timed-out or unaffordable model call used to CRASH every
+#     calling agent instead of taking the manual path. `_call` wrapped only
+#     the budget PRE-CHECK in try/except, and re-raised `BudgetExhaustedError`
+#     bare — a sibling of `ManualPathRequiredError`, not that error itself —
+#     and the actual `.complete()` call (both in `_call` and in the one
+#     bounded repair attempt) had NO try/except at all. Every calling agent
+#     (mapping_suggestion, fingerprint_match, alert_enrichment) catches only
+#     `ManualPathRequiredError`, so both failures propagated straight through
+#     them.
+
+
+_GATEWAY_TEST_BA = Actor(subject="dev-ops@cinqcare.test", actor_type=ActorType.HUMAN)
+_GATEWAY_TEST_NOW = datetime(2026, 8, 30, 7, 0, tzinfo=UTC)
+
+_GATEWAY_TEST_TEMPLATE = PromptTemplate(
+    prompt_id="test.gateway-degrade",
+    version=1,
+    task_class=TaskClass.SMALL,
+    sections={
+        PromptSection.IDENTITY: "You are a test prompt used only by the gateway contract suite.",
+        PromptSection.TASK: "Say hello.",
+        PromptSection.CONSTRAINTS: "Never fabricate a citation.",
+    },
+)
+
+
+class _RaisingLlm:
+    """A fake `llm` port whose `.complete()` always raises the given
+    exception — the shape a FIXED adapter takes once it has translated a
+    vendor failure at the boundary (Part 1 of W2-37's fix). Used here to
+    prove the gateway's own normalisation (Part 2) in isolation, with no
+    vendor SDK involved."""
+
+    def __init__(self, to_raise: Exception) -> None:
+        self._to_raise = to_raise
+        self.calls = 0
+
+    def complete(
+        self,
+        *,
+        prompt: str,
+        task_class: TaskClass,
+        response_schema: dict[str, Any] | None = None,
+        max_tokens: int = 2048,
+        temperature: float = 0.0,
+    ) -> Completion:
+        self.calls += 1
+        raise self._to_raise
+
+    def embed(self, texts: tuple[str, ...]) -> tuple[Embedding, ...]:
+        raise NotImplementedError
+
+    def declared_endpoints(self) -> frozenset[str]:
+        return frozenset({"mock://scripted"})
+
+
+def _store_with_gateway_test_template() -> MemMetadataDb:
+    store = MemMetadataDb()
+    published = replace(
+        _GATEWAY_TEST_TEMPLATE.as_governed(author=_GATEWAY_TEST_BA, now=_GATEWAY_TEST_NOW),
+        lifecycle_state=LifecycleState.PUBLISHED,
+        approved_by=_GATEWAY_TEST_BA,
+        approved_ts=_GATEWAY_TEST_NOW,
+    )
+    store.save(published)
+    return store
+
+
+def _gateway(llm: LlmPort, store: MemMetadataDb, *, per_run_usd: str = "0.25") -> LlmGateway:
+    return LlmGateway(
+        llm=llm,
+        phi_scrub=PatternPhiScrub(),
+        metadata_db=store,
+        observability=NoopObservability(),
+        budget=Budget(per_run_usd=Decimal(per_run_usd), per_agent_per_day_usd=Decimal("5")),
+        routing=Routing(small="small-model", large="large-model"),
+        clock=lambda: _GATEWAY_TEST_NOW,
+    )
+
+
+def test_a_transport_failure_degrades_to_the_manual_path() -> None:
+    """A timeout or connection failure translated by the adapter into
+    `CompletionFailedError` must reach the caller as `ManualPathRequiredError`
+    — never as the raw transport exception, which no calling agent catches."""
+    store = _store_with_gateway_test_template()
+    llm = _RaisingLlm(CompletionFailedError("simulated network timeout"))
+    gateway = _gateway(llm, store)
+
+    with pytest.raises(ManualPathRequiredError):
+        gateway.complete(
+            agent="test-agent",
+            run_id="R-transport",
+            prompt_id="test.gateway-degrade",
+            caller=_GATEWAY_TEST_BA,
+            input_text="hello",
+        )
+
+    actions = store.read_agent_actions(agent="test-agent")
+    assert any(a.outcome is ActionOutcome.FAILED_COMPLETION for a in actions), (
+        "a transport failure must leave an audit row Operations can query, distinct "
+        "from a budget refusal or a schema failure"
+    )
+
+
+def test_a_budget_exhaustion_degrades_to_the_manual_path_not_bare_budget_exhausted() -> None:
+    """`BudgetExhaustedError` is DESIGNED FOR, not a freak accident — it must
+    degrade exactly like a transport failure or a schema failure, not
+    propagate as itself past every `except ManualPathRequiredError`."""
+    store = _store_with_gateway_test_template()
+    llm = _RaisingLlm(AssertionError("the model must not be called once the budget refuses"))
+    # per_run_usd deliberately below the gateway's own default estimate_usd
+    # (0.01), so the very FIRST call is refused before it is even made.
+    gateway = _gateway(llm, store, per_run_usd="0.001")
+
+    with pytest.raises(ManualPathRequiredError):
+        gateway.complete(
+            agent="test-agent",
+            run_id="R-budget",
+            prompt_id="test.gateway-degrade",
+            caller=_GATEWAY_TEST_BA,
+            input_text="hello",
+        )
+
+    assert llm.calls == 0
+    actions = store.read_agent_actions(agent="test-agent")
+    assert any(a.outcome is ActionOutcome.REFUSED_BUDGET for a in actions)
+
+
+def test_an_undeclared_endpoint_still_propagates_unchanged_through_the_gateway() -> None:
+    """The third sibling of `LlmError` is a genuine misconfiguration, not
+    something to degrade past — it must keep failing loudly, exactly as
+    today, rather than being folded into `ManualPathRequiredError`."""
+    store = _store_with_gateway_test_template()
+    llm = _RaisingLlm(UndeclaredEndpointError("https://not-declared.example.test/v1"))
+    gateway = _gateway(llm, store)
+
+    with pytest.raises(UndeclaredEndpointError):
+        gateway.complete(
+            agent="test-agent",
+            run_id="R-endpoint",
+            prompt_id="test.gateway-degrade",
+            caller=_GATEWAY_TEST_BA,
+            input_text="hello",
+        )
 
 
 # ── phi_scrub ────────────────────────────────────────────────────────────────

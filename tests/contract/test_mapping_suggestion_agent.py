@@ -30,6 +30,7 @@ from cinqflow.core.agents.mapping_suggestion.prompts import TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.mapping import FeedMapping, LineStatus, MappingLine
 from cinqflow.core.model.governed import Actor, LifecycleState, ObjectType
+from cinqflow.core.model.llm import CompletionFailedError, TaskClass
 from cinqflow.core.model.vocabulary import ActorType, RiskClass
 from cinqflow.core.proposals import ProposalState
 from cinqflow.core.registry.canonical import build
@@ -655,6 +656,84 @@ def test_a_failed_run_never_reads_as_a_careful_one(store: MemMetadataDb) -> None
 def test_a_healthy_run_reports_no_manual_path(store: MemMetadataDb) -> None:
     result = _propose(store, ScriptedLlm(lambda p, t: _answer()))
     assert result.manual_path is False
+
+
+class _RaisingLlm:
+    """A fake `llm` port whose `.complete()` always raises the given
+    exception — the shape the gateway is handed once Part 1 of W2-37's fix
+    has translated a real vendor failure at the adapter boundary."""
+
+    def __init__(self, to_raise: Exception) -> None:
+        self._to_raise = to_raise
+        self.calls: list[tuple[str, TaskClass]] = []
+
+    def complete(
+        self,
+        *,
+        prompt,
+        task_class,
+        response_schema=None,
+        max_tokens=2048,
+        temperature=0.0,
+    ):
+        self.calls.append((prompt, task_class))
+        raise self._to_raise
+
+    def embed(self, texts):
+        raise NotImplementedError
+
+    def declared_endpoints(self):
+        return frozenset({"mock://scripted"})
+
+
+def test_a_transport_failure_also_reads_as_a_failed_run_not_a_crash(
+    store: MemMetadataDb,
+) -> None:
+    """W2-37 — the identical defect `test_a_failed_run_never_reads_as_a_careful_one`
+    guards for a schema failure, for the OTHER way `_suggest`'s own call can
+    fail: the call is made and fails in flight. This module is untouched by
+    the fix — `_suggest` already catches `ManualPathRequiredError` per batch;
+    the gateway now hands it that exception instead of letting a raw
+    transport failure propagate past it."""
+    _seed_contract(store)
+    result = _propose(store, _RaisingLlm(CompletionFailedError("simulated network timeout")))
+
+    assert result.manual_path is True
+    assert any("could not be reached" in refusal for refusal in result.refusals)
+    declined = next(line for line in result.lines if line.source_column == "SUBSCR_REL_CD")
+    assert "FAILED RUN" in declined.line.unmapped_reason
+
+
+def test_a_budget_exhaustion_also_reads_as_a_failed_run_not_a_crash(
+    store: MemMetadataDb,
+) -> None:
+    """Same defect, the DESIGNED-FOR trigger: a per-run budget exhausted on
+    the very first call must read as a failed run exactly like a transport
+    failure or a schema failure, not propagate as a bare
+    `BudgetExhaustedError` past every `except ManualPathRequiredError`."""
+    _seed_contract(store)
+    llm = _RaisingLlm(AssertionError("must not be called once the budget refuses"))
+    gateway = LlmGateway(
+        llm=llm,
+        phi_scrub=PatternPhiScrub(),
+        metadata_db=store,
+        observability=NoopObservability(),
+        # Deliberately below the gateway's own default `estimate_usd`
+        # (0.01), so the very FIRST call is refused before it is made.
+        budget=Budget(per_run_usd=Decimal("0.001"), per_agent_per_day_usd=Decimal("5")),
+        routing=Routing(small="small-model", large="large-model"),
+        clock=lambda: NOW,
+    )
+    agent = MappingSuggestionAgent(llm=gateway, metadata=store)
+
+    result = agent.propose(
+        CONTRACT, feed_id=FEED, glossary=GLOSSARY, model=MODEL, caller=BA, now=NOW
+    )
+
+    assert result.manual_path is True
+    assert llm.calls == []
+    declined = next(line for line in result.lines if line.source_column == "SUBSCR_REL_CD")
+    assert "FAILED RUN" in declined.line.unmapped_reason
 
 
 # ── the number is the answer ─────────────────────────────────────────────────

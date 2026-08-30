@@ -47,7 +47,7 @@ from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.model.agent_action import ActionOutcome
 from cinqflow.core.model.governed import Actor, LifecycleState
 from cinqflow.core.model.identity import Principal, Scopes
-from cinqflow.core.model.llm import TaskClass
+from cinqflow.core.model.llm import CompletionFailedError, TaskClass
 from cinqflow.core.model.vocabulary import ActorType
 from cinqflow.intelligence.action_gateway import ActionGateway
 from cinqflow.intelligence.agents.alert_enrichment import AlertEnrichmentAgent
@@ -309,6 +309,86 @@ def test_hypothesise_failing_still_produces_a_complete_answer(
     assert result.cause == CAUSE_UNDER_INVESTIGATION
     assert result.cause_citations == ()
     assert any("could not produce a valid cause hypothesis" in r for r in result.refusals)
+
+
+class _RaisingLlm:
+    """A fake `llm` port whose `.complete()` always raises the given
+    exception — the shape the gateway is handed once Part 1 of W2-37's fix
+    has translated a real vendor failure at the adapter boundary. Used here
+    to prove the AGENT degrades correctly, not just the gateway in
+    isolation."""
+
+    def __init__(self, to_raise: Exception) -> None:
+        self._to_raise = to_raise
+        self.calls: list[tuple[str, TaskClass]] = []
+
+    def complete(
+        self,
+        *,
+        prompt,
+        task_class,
+        response_schema=None,
+        max_tokens=2048,
+        temperature=0.0,
+    ):
+        self.calls.append((prompt, task_class))
+        raise self._to_raise
+
+    def embed(self, texts):
+        raise NotImplementedError
+
+    def declared_endpoints(self):
+        return frozenset({"mock://scripted"})
+
+
+def test_a_transport_failure_and_a_budget_exhaustion_both_still_degrade_the_alert(
+    store: MemMetadataDb, control: MemStoreControlTables
+) -> None:
+    """W2-37 — THE BUG THIS REGRESSION GUARDS: a real network timeout, or a
+    per-run budget exhausted on the very first call, used to CRASH
+    `enrich()` with the raw transport exception or a bare
+    `BudgetExhaustedError` instead of taking the manual path — because the
+    gateway caught neither and re-raised the budget refusal as itself, a
+    SIBLING of `ManualPathRequiredError`, not that error. Both must now
+    degrade exactly like the schema failure `test_hypothesise_failing_
+    still_produces_a_complete_answer` already guards."""
+    _seed_sla_history(control, FEED_A, breached=5, total=10)
+    alert = _alert(FEED_A)
+
+    # -- a transport failure: the call is made, and fails in flight ---------
+    transport_llm = _RaisingLlm(CompletionFailedError("simulated network timeout"))
+    transport_result = _agent(store, control, transport_llm).enrich(
+        alert.group_key, (alert,), caller=BA, run_id="R-transport", now=NOW
+    )
+    assert transport_result.model_called is True
+    assert transport_result.manual_path is True
+    assert transport_result.cause == CAUSE_UNDER_INVESTIGATION
+    assert transport_result.cause_citations == ()
+    assert any("could not produce a valid cause hypothesis" in r for r in transport_result.refusals)
+
+    # -- a budget exhaustion: refused before the call is ever made ----------
+    budget_llm = _RaisingLlm(AssertionError("must not be called once the budget refuses"))
+    budget_gateway = LlmGateway(
+        llm=budget_llm,
+        phi_scrub=PatternPhiScrub(),
+        metadata_db=store,
+        observability=NoopObservability(),
+        # Deliberately below the gateway's own default `estimate_usd`
+        # (0.01), so the very FIRST call is refused before it is made.
+        budget=Budget(per_run_usd=Decimal("0.001"), per_agent_per_day_usd=Decimal("5")),
+        routing=Routing(small="small-model", large="large-model"),
+        clock=lambda: NOW,
+    )
+    budget_agent = AlertEnrichmentAgent(
+        llm=budget_gateway, tools=_tools(store, control), runtime=InProcAgentRuntime()
+    )
+    budget_result = budget_agent.enrich(
+        alert.group_key, (alert,), caller=BA, run_id="R-budget", now=NOW
+    )
+    assert budget_result.model_called is True
+    assert budget_result.manual_path is True
+    assert budget_result.cause == CAUSE_UNDER_INVESTIGATION
+    assert budget_llm.calls == []
 
 
 def test_a_blank_cause_from_the_model_still_falls_back(

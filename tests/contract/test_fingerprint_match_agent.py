@@ -42,7 +42,7 @@ from cinqflow.core.agents.fingerprint_match.prompts import TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.model.governed import Actor, LifecycleState, ObjectType
 from cinqflow.core.model.identity import Principal, Scopes
-from cinqflow.core.model.llm import TaskClass
+from cinqflow.core.model.llm import CompletionFailedError, TaskClass
 from cinqflow.core.model.vocabulary import ActorType, BatchState, ErrorCategory, Layer, RiskClass
 from cinqflow.core.operations import fingerprint as fingerprinting
 from cinqflow.core.proposals import ProposalState
@@ -483,6 +483,81 @@ def test_draft_failing_reports_no_proposal_rather_than_an_empty_one(
     assert result.model_called is True
     assert result.manual_path is True
     assert store.list_proposals(feed_id=FEED) == ()
+
+
+class _RaisingLlm:
+    """A fake `llm` port whose `.complete()` always raises the given
+    exception — the shape the gateway is handed once Part 1 of W2-37's fix
+    has translated a real vendor failure at the adapter boundary. Used here
+    to prove the AGENT degrades correctly, not just the gateway in
+    isolation."""
+
+    def __init__(self, to_raise: Exception) -> None:
+        self._to_raise = to_raise
+        self.calls: list[tuple[str, TaskClass]] = []
+
+    def complete(
+        self,
+        *,
+        prompt,
+        task_class,
+        response_schema=None,
+        max_tokens=2048,
+        temperature=0.0,
+    ):
+        self.calls.append((prompt, task_class))
+        raise self._to_raise
+
+    def embed(self, texts):
+        raise NotImplementedError
+
+    def declared_endpoints(self):
+        return frozenset({"mock://scripted"})
+
+
+def test_a_transport_failure_and_a_budget_exhaustion_both_report_no_proposal(
+    store: MemMetadataDb, control: MemStoreControlTables
+) -> None:
+    """W2-37 — THE BUG THIS REGRESSION GUARDS: `draft`'s own call is the ONE
+    call site allowed to propagate `ManualPathRequiredError` to `propose` —
+    see `_draft`'s own comment — but a raw transport failure or a bare
+    `BudgetExhaustedError` used to propagate PAST `propose`'s
+    `except ManualPathRequiredError` instead, crashing the run exactly like
+    `test_draft_failing_reports_no_proposal_rather_than_an_empty_one` already
+    guards for a schema failure."""
+    incident = _novel_incident()
+
+    # -- a transport failure: the call is made, and fails in flight ---------
+    transport_llm = _RaisingLlm(CompletionFailedError("simulated network timeout"))
+    transport_result = _agent(store, control, transport_llm).propose(
+        incident, caller=BA, run_id="R-transport", now=NOW
+    )
+    assert transport_result.proposal is None
+    assert transport_result.model_called is True
+    assert transport_result.manual_path is True
+    assert store.list_proposals(feed_id=FEED) == ()
+
+    # -- a budget exhaustion: refused before the call is ever made ----------
+    budget_llm = _RaisingLlm(AssertionError("must not be called once the budget refuses"))
+    budget_gateway = LlmGateway(
+        llm=budget_llm,
+        phi_scrub=PatternPhiScrub(),
+        metadata_db=store,
+        observability=NoopObservability(),
+        # Deliberately below the gateway's own default `estimate_usd`
+        # (0.01), so the very FIRST call is refused before it is made.
+        budget=Budget(per_run_usd=Decimal("0.001"), per_agent_per_day_usd=Decimal("5")),
+        routing=Routing(small="small-model", large="large-model"),
+        clock=lambda: NOW,
+    )
+    budget_agent = FingerprintMatchAgent(
+        llm=budget_gateway, tools=_tools(store, control), runtime=InProcAgentRuntime()
+    )
+    budget_result = budget_agent.propose(incident, caller=BA, run_id="R-budget", now=NOW)
+    assert budget_result.proposal is None
+    assert budget_result.model_called is True
+    assert budget_result.manual_path is True
+    assert budget_llm.calls == []
 
 
 # ── the whole loop: propose -> approve -> a REAL governed RUNBOOK ───────────
