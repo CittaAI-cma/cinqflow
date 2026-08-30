@@ -40,3 +40,8 @@ ui/next-env.d.ts
 compose/secrets/*
 !compose/secrets/README.md
 test-results/
+
+# ── stray manual-test deliveries at the repo root ────────────────────────────
+# Roster samples dropped here while exercising the deliver form; the platform
+# reads deliveries from the landing zone, never from the repo root.
+/_CINQDOWNSTATE_*
