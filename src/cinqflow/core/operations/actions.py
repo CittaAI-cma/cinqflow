@@ -44,7 +44,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum, unique
 
 from cinqflow.core.citations import CitationId, CitationKind
@@ -54,6 +55,17 @@ from cinqflow.core.model.vocabulary import ActorType, BatchState, Layer, StatusW
 
 class ActionError(RuntimeError):
     """An operations action that will not happen."""
+
+
+class DoubleLoadError(ActionError):
+    """A recovery whose plan would load rows twice.
+
+    Raised from `RecoveryPlan.prove_idempotent()` BEFORE anything executes.
+    This is the don't with the sharpest teeth in Wave 2, and it is a
+    PRECONDITION rather than a post-check on purpose: a double load detected
+    afterwards is a data-correction project, and the incumbent platform ran
+    several of them.
+    """
 
 
 class RefusedError(ActionError):
@@ -94,9 +106,15 @@ class Environment(StrEnum):
 class OpsAction(StrEnum):
     """The whole vocabulary of what an operator may do from a screen.
 
-    Six, closed, and each one costs a row in `ALLOWED_STATES`, a branch in
-    `preview` and a line in the permission matrix. That toll is what stops a
-    seventh arriving as a text box.
+    Ten, closed, and each one costs a row in `ALLOWED_STATES`, a branch in
+    `preview` and a line in the permission matrix. That toll is what stops an
+    eleventh arriving as a text box.
+
+    The four recovery members are CF-V2-E8-04's toolkit, and they are members
+    of THIS enum rather than a parallel vocabulary of their own. A second
+    action type would need a second allowed-state matrix, a second refusal
+    path and a second audit shape — and the day they disagreed, the recovery
+    surface would be the one without the guardrails.
     """
 
     #: "I have seen this." Changes nothing about the data.
@@ -110,18 +128,42 @@ class OpsAction(StrEnum):
     RESUME = "resume"
     #: The one that touches the pipeline.
     RETRY = "retry"
+    #: CF-V2-E8-04 — the recovery toolkit. Every one of these re-enters data,
+    #: which is why they all answer `reloads_data` and every one of them has
+    #: to prove idempotency before it runs.
+    RESTART_FROM_STAGE = "restart_from_stage"
+    REPROCESS_BATCH = "reprocess_batch"
+    REPROCESS_FAILED_ONLY = "reprocess_failed_only"
+    BACKDATE = "backdate"
 
     @property
     def mutates_production(self) -> bool:
         """Whether this changes what the platform DOES, rather than what it
         knows about who is handling something.
 
-        Acknowledging and assigning are bookkeeping. Pausing stops work,
-        resuming starts it, retrying runs it — those three need an approval
+        Acknowledging, assigning and noting are bookkeeping. Everything else
+        stops work, starts it or re-runs it — those need an approval
         identifier in production, and the other three would make the
         requirement meaningless if they did.
         """
-        return self in {OpsAction.PAUSE, OpsAction.RESUME, OpsAction.RETRY}
+        return self not in {OpsAction.ACKNOWLEDGE, OpsAction.ASSIGN, OpsAction.NOTE}
+
+    @property
+    def reloads_data(self) -> bool:
+        """Whether this action puts records back through the spine.
+
+        The gate for `prove_idempotent`. Pausing a feed changes what happens
+        next and needs an approval; it cannot double-load anything, and
+        demanding an idempotency proof for it would teach people that the
+        proof is ceremony.
+        """
+        return self in {
+            OpsAction.RETRY,
+            OpsAction.RESTART_FROM_STAGE,
+            OpsAction.REPROCESS_BATCH,
+            OpsAction.REPROCESS_FAILED_ONLY,
+            OpsAction.BACKDATE,
+        }
 
     @property
     def needs_reason(self) -> bool:
@@ -151,6 +193,18 @@ ALLOWED_STATES: dict[OpsAction, frozenset[BatchState]] = {
     # batch is how two writers end up in the same target table, and retrying a
     # completed one is how a month gets loaded twice.
     OpsAction.RETRY: frozenset({BatchState.FAILED, BatchState.BLOCKED}),
+    # Same argument as retry: resume the spine on something that stopped.
+    OpsAction.RESTART_FROM_STAGE: frozenset({BatchState.FAILED, BatchState.BLOCKED}),
+    # Reprocessing is the one you reach for AFTER a fix, so a COMPLETED batch
+    # is the ordinary case — the mapping was wrong and the output has to be
+    # rebuilt. IN_PROGRESS is excluded: you would race the run that is
+    # happening.
+    OpsAction.REPROCESS_BATCH: frozenset({BatchState.COMPLETED, BatchState.FAILED}),
+    OpsAction.REPROCESS_FAILED_ONLY: frozenset({BatchState.COMPLETED, BatchState.FAILED}),
+    # Not gated on THIS batch's state, and that is not an oversight. A backdate
+    # is about a business PERIOD — it may not have a batch at all, which is
+    # frequently the whole reason somebody is running one.
+    OpsAction.BACKDATE: frozenset(),
 }
 
 
@@ -259,10 +313,18 @@ class ActionRequest:
     #: this platform does not own the client's change system and pretending to
     #: validate its identifiers would be a second source of truth about them.
     approval_identifier: str = ""
-    #: RETRY only. Where to resume from; None means the last completed stage.
+    #: RETRY and RESTART_FROM_STAGE. Where to resume from; None means the last
+    #: completed stage.
     resume_from: Layer | None = None
     assignee: str = ""
     note: str = ""
+    #: BACKDATE only. The business period being (re)processed — a typed date
+    #: rather than a string, so "which month" cannot arrive as free text.
+    business_date: date | None = None
+    #: BACKDATE only. The operator has SEEN the overlapping batches and decided
+    #: to supersede them. Defaulting to False is the point: silence is not
+    #: consent, and `prove_idempotent` refuses until this is explicitly set.
+    supersede_acknowledged: bool = False
 
     @property
     def citation(self) -> CitationId:
@@ -289,15 +351,32 @@ class Preview:
     scope_stages: tuple[Layer, ...] = ()
     estimated_minutes: int = 0
     requires_approval_identifier: bool = False
+    #: CF-V2-E8-04's exception path: "shows precisely which existing batches
+    #: overlap and requires an explicit supersede decision — no accidental
+    #: double-count." Empty means nothing overlaps; non-empty means the
+    #: operator has a decision to make before the button does anything.
+    overlaps: tuple[str, ...] = ()
+    #: Money, not minutes. An operator deciding whether to reprocess 22 million
+    #: rows to fix 200 is making a cost decision, and minutes do not tell them
+    #: what it costs.
+    estimated_cost_usd: Decimal = Decimal("0")
+
+    @property
+    def requires_supersede_decision(self) -> bool:
+        return bool(self.overlaps)
 
     def explain(self) -> str:
         parts = [self.what_will_happen]
         if self.scope_records:
-            parts.append(f"about {self.scope_records:,} record(s)")
+            parts.append(f"{self.scope_records:,} rows re-enter")
         if self.scope_stages:
             parts.append("stages: " + ", ".join(layer.value for layer in self.scope_stages))
         if self.estimated_minutes:
             parts.append(f"roughly {self.estimated_minutes} minute(s)")
+        if self.estimated_cost_usd:
+            parts.append(f"est. ${self.estimated_cost_usd:.2f}")
+        if self.overlaps:
+            parts.append("overlaps batches " + ", ".join(self.overlaps) + " — supersede required")
         if self.requires_approval_identifier:
             parts.append("an approval identifier is required")
         return " · ".join(parts)
@@ -305,16 +384,23 @@ class Preview:
 
 @unique
 class ActionPhase(StrEnum):
-    """REQUESTED -> VERIFIED | FAILED. Three, and the first is not success.
+    """REQUESTED -> VERIFIED | FAILED, or REFUSED before any of it.
 
     "'retry requested' is not 'retry succeeded'" is the whole reason this is a
     phase rather than a boolean. A record that stops at REQUESTED is one nobody
     checked, and the screen says so rather than showing a green tick.
+
+    REFUSED is a phase rather than an absence because "every refusal is a row".
+    An action declined at the gate never becomes a `RECORD` if refusal is only
+    an exception — and the refusals are exactly what a reviewer needs six weeks
+    later, when the question is why nobody retried the batch that was failing
+    all night.
     """
 
     REQUESTED = "requested"
     VERIFIED = "verified"
     FAILED = "failed"
+    REFUSED = "refused"
 
     @property
     def status_word(self) -> StatusWord:
@@ -322,6 +408,7 @@ class ActionPhase(StrEnum):
             ActionPhase.REQUESTED: StatusWord.PROCESSING,
             ActionPhase.VERIFIED: StatusWord.COMPLETED,
             ActionPhase.FAILED: StatusWord.NEEDS_ATTENTION,
+            ActionPhase.REFUSED: StatusWord.NEEDS_ATTENTION,
         }[self]
 
 
@@ -343,6 +430,10 @@ class ActionRecord:
     phase: ActionPhase = ActionPhase.REQUESTED
     verified_ts: datetime | None = None
     outcome: str = ""
+    #: What the control tables said when the outcome was checked. `None` until
+    #: somebody looked — which is a different fact from "the batch has no
+    #: state", and the screen renders them differently.
+    observed_state: BatchState | None = None
 
     @property
     def is_complete(self) -> bool:
@@ -372,15 +463,42 @@ class ActionRecord:
                     f"{who} requested {self.action.value} on {self.target} and it did not "
                     f"succeed: {self.outcome}"
                 )
+            case ActionPhase.REFUSED:
+                return (
+                    f"{who} asked to {self.action.value} {self.target} and the platform "
+                    f"refused: {self.outcome}"
+                )
 
 
-def verify(record: ActionRecord, *, outcome: str, now: datetime | None = None) -> ActionRecord:
-    """Record what was OBSERVED after the action ran.
+def verify(
+    record: ActionRecord,
+    *,
+    observed_state: BatchState | None,
+    expected: frozenset[BatchState],
+    outcome: str,
+    now: datetime | None = None,
+) -> ActionRecord:
+    """Re-read the control tables and say what ACTUALLY happened.
 
-    `outcome` is required and must say something. "Succeeded" with no detail is
-    the green tick this module exists to refuse — the useful verification is
-    "resumed from silver_raw, 9,992 rows loaded", which is a fact somebody
-    checked rather than a status somebody assumed.
+        "Verify and display the action's outcome — 'retry requested' is not
+         'retry succeeded'."
+        "Treat 'retry requested' as 'retry succeeded'." — the documented don't
+
+    TWO THINGS ARE REQUIRED, AND NEITHER SUBSTITUTES FOR THE OTHER.
+
+    `observed_state` is what the platform read back, checked MECHANICALLY
+    against `expected`. A verification that only carried prose would let an
+    operator type "looks fine" over a batch that is still FAILED, which is the
+    green tick with extra steps.
+
+    `outcome` is what a person can read six weeks later. "Succeeded" with no
+    detail is refused; the useful verification is "resumed from silver_raw,
+    9,992 rows loaded", which is a fact somebody checked rather than a status
+    somebody assumed.
+
+    `expected` is supplied PER CALL because success differs by action: a retry
+    expects COMPLETED, a pause expects the FEED paused and the batch's state is
+    irrelevant. One hard-coded success state would make one of those two lie.
     """
     if record.phase is not ActionPhase.REQUESTED:
         raise ActionError(
@@ -391,10 +509,18 @@ def verify(record: ActionRecord, *, outcome: str, now: datetime | None = None) -
             "a verification must say what was observed. 'Succeeded' with no detail is the "
             "green tick this surface exists to refuse."
         )
+    if not expected:
+        raise ActionError(
+            f"verifying {record.action.value} on {record.target} without an expected state "
+            "would accept any outcome as success. Say what success looks like for this "
+            "action, or the verification is decoration."
+        )
+    worked = observed_state is not None and observed_state in expected
     return replace(
         record,
-        phase=ActionPhase.VERIFIED,
+        phase=ActionPhase.VERIFIED if worked else ActionPhase.FAILED,
         verified_ts=now or datetime.now(UTC),
+        observed_state=observed_state,
         outcome=outcome.strip(),
     )
 
@@ -449,7 +575,7 @@ def offered(
     for action in OpsAction:
         if open_breaker and action.mutates_production:
             continue
-        if feed_paused and action in {OpsAction.PAUSE, OpsAction.RETRY}:
+        if feed_paused and (action is OpsAction.PAUSE or action.reloads_data):
             continue
         if not feed_paused and action is OpsAction.RESUME:
             continue
@@ -582,6 +708,30 @@ def request_action(request: ActionRequest, *, now: datetime | None = None) -> Ac
     )
 
 
+def refused_action(
+    request: ActionRequest, refusal: Refusal, *, now: datetime | None = None
+) -> ActionRecord:
+    """A refusal, as a ROW rather than an exception that vanished.
+
+        "the system refuses, notifies a human, and RECORDS THE REFUSAL"
+        — CF-V2-E8-04's guardrail, and E12-03's
+
+    The caller still gets the exception — every call site must handle it. This
+    is what it writes down afterwards, so "why did nobody retry the batch that
+    was failing all night" has an answer that is not a shrug.
+    """
+    return ActionRecord(
+        action=request.action,
+        target=request.target,
+        actor=request.actor,
+        requested_ts=now or datetime.now(UTC),
+        reason=request.reason.strip(),
+        approval_identifier=request.approval_identifier.strip(),
+        phase=ActionPhase.REFUSED,
+        outcome=refusal.detail,
+    )
+
+
 def preview(
     request: ActionRequest,
     *,
@@ -590,19 +740,45 @@ def preview(
     scope_stages: Sequence[Layer] = (),
     estimated_minutes: int = 0,
 ) -> Preview:
-    """What this would do, in the operator's language, before they confirm."""
-    what = {
-        OpsAction.ACKNOWLEDGE: f"Mark {request.target} as seen by you.",
-        OpsAction.ASSIGN: f"Assign {request.target} to {request.assignee or 'somebody'}.",
-        OpsAction.NOTE: f"Add a note to {request.target}.",
-        OpsAction.PAUSE: (f"Stop new work on {request.target}. Anything already running finishes."),
-        OpsAction.RESUME: f"Allow new work on {request.target} again.",
-        OpsAction.RETRY: (
-            f"Re-run {request.target} from "
-            + (request.resume_from.value if request.resume_from else "its last completed stage")
-            + "."
-        ),
-    }[request.action]
+    """What this would do, in the operator's language, before they confirm.
+
+    A `match` rather than a dict lookup, and deliberately: mypy checks a match
+    over a `StrEnum` for exhaustiveness, so a tenth action added without a
+    sentence here fails the type check rather than raising `KeyError` at the
+    moment an operator presses the button. The dict this replaced did exactly
+    that when the recovery members arrived.
+    """
+    match request.action:
+        case OpsAction.ACKNOWLEDGE:
+            what = f"Mark {request.target} as seen by you."
+        case OpsAction.ASSIGN:
+            what = f"Assign {request.target} to {request.assignee or 'somebody'}."
+        case OpsAction.NOTE:
+            what = f"Add a note to {request.target}."
+        case OpsAction.PAUSE:
+            what = f"Stop new work on {request.target}. Anything already running finishes."
+        case OpsAction.RESUME:
+            what = f"Allow new work on {request.target} again."
+        case OpsAction.RETRY:
+            resume = (
+                request.resume_from.value if request.resume_from else "its last completed stage"
+            )
+            what = f"Re-run {request.target} from {resume}."
+        case OpsAction.RESTART_FROM_STAGE:
+            resume = (
+                request.resume_from.value if request.resume_from else "its last completed stage"
+            )
+            what = f"Resume {request.target} at {resume}, keeping the rows already loaded."
+        case OpsAction.REPROCESS_BATCH:
+            what = (
+                f"Re-run every record in {request.target} under a new batch, superseding "
+                "the one it replaces."
+            )
+        case OpsAction.REPROCESS_FAILED_ONLY:
+            what = f"Re-run only the quarantined records of {request.target}."
+        case OpsAction.BACKDATE:
+            period = request.business_date.isoformat() if request.business_date else "an earlier"
+            what = f"Process {period} for this feed as a superseding batch."
     return Preview(
         action=request.action,
         target=request.target,

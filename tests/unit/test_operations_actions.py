@@ -44,6 +44,7 @@ from cinqflow.core.operations.actions import (
     fail,
     offered,
     preview,
+    refused_action,
     request_action,
     unverified,
     verify,
@@ -89,7 +90,13 @@ def test_the_issue_shows_who_retried_why_and_the_verified_outcome() -> None:
         now=NOW,
     )
     record = request_action(request, now=NOW)
-    done = verify(record, outcome="resumed from silver_raw; 9,992 rows loaded", now=NOW)
+    done = verify(
+        record,
+        observed_state=BatchState.COMPLETED,
+        expected=frozenset({BatchState.COMPLETED}),
+        outcome="resumed from silver_raw; 9,992 rows loaded",
+        now=NOW,
+    )
 
     issue = apply_to_issue(Issue(issue_id="I-1", feed_id=FEED, target=BATCH, opened_ts=NOW), done)
     rendered = issue.render()
@@ -117,7 +124,13 @@ def test_a_verification_must_say_what_was_observed() -> None:
     """ "Succeeded" with no detail is the green tick this surface refuses."""
     record = request_action(retry(), now=NOW)
     with pytest.raises(ActionError) as refused:
-        verify(record, outcome="   ", now=NOW)
+        verify(
+            record,
+            observed_state=BatchState.COMPLETED,
+            expected=frozenset({BatchState.COMPLETED}),
+            outcome="   ",
+            now=NOW,
+        )
     assert "green tick" in str(refused.value)
 
 
@@ -130,9 +143,21 @@ def test_an_action_that_ran_and_failed_is_recorded_not_silent() -> None:
 
 
 def test_an_outcome_cannot_be_recorded_twice() -> None:
-    record = verify(request_action(retry(), now=NOW), outcome="fine", now=NOW)
+    record = verify(
+        request_action(retry(), now=NOW),
+        observed_state=BatchState.COMPLETED,
+        expected=frozenset({BatchState.COMPLETED}),
+        outcome="fine",
+        now=NOW,
+    )
     with pytest.raises(ActionError):
-        verify(record, outcome="fine again", now=NOW)
+        verify(
+            record,
+            observed_state=BatchState.COMPLETED,
+            expected=frozenset({BatchState.COMPLETED}),
+            outcome="fine again",
+            now=NOW,
+        )
 
 
 def test_actions_nobody_verified_are_a_finding_the_api_can_ask_for() -> None:
@@ -140,7 +165,13 @@ def test_actions_nobody_verified_are_a_finding_the_api_can_ask_for() -> None:
     and this is how that is checked rather than assumed."""
     stale = request_action(retry(), now=NOW - timedelta(hours=2))
     fresh = request_action(retry(), now=NOW)
-    done = verify(request_action(retry(), now=NOW - timedelta(hours=3)), outcome="ok", now=NOW)
+    done = verify(
+        request_action(retry(), now=NOW - timedelta(hours=3)),
+        observed_state=BatchState.COMPLETED,
+        expected=frozenset({BatchState.COMPLETED}),
+        outcome="ok",
+        now=NOW,
+    )
 
     found = unverified([stale, fresh, done], now=NOW, after=timedelta(hours=1))
     assert [r.requested_ts for r in found] == [stale.requested_ts]
@@ -351,7 +382,7 @@ def test_the_preview_says_the_scope_before_the_button_is_pressed() -> None:
     )
     text = shown.explain()
     assert "Re-run 1244 from silver_raw" in text
-    assert "22,000,000 record(s)" in text
+    assert "22,000,000 rows re-enter" in text
     assert "approval identifier is required" in text
 
 
@@ -395,3 +426,80 @@ def test_nothing_reaches_the_thread_without_a_record_behind_it() -> None:
 
     signature = inspect.signature(apply_to_issue)
     assert list(signature.parameters)[1] == "record"
+
+
+# ── the recovery toolkit joins the same surface ──────────────────────────────
+def test_every_action_has_a_row_in_the_allowed_state_matrix() -> None:
+    """A new action costs a row. That toll is what stops an eleventh arriving
+    as a text box."""
+    assert set(ALLOWED_STATES) == set(OpsAction)
+
+
+def test_the_recovery_actions_all_reload_data_and_all_need_an_approval() -> None:
+    recoveries = {
+        OpsAction.RESTART_FROM_STAGE,
+        OpsAction.REPROCESS_BATCH,
+        OpsAction.REPROCESS_FAILED_ONLY,
+        OpsAction.BACKDATE,
+    }
+    assert all(action.reloads_data for action in recoveries)
+    assert all(action.mutates_production for action in recoveries)
+
+
+def test_bookkeeping_never_reloads_data_and_never_needs_an_approval() -> None:
+    """Requiring an approval identifier to write a note would make the surface
+    unusable and teach people to route around it."""
+    for action in (OpsAction.ACKNOWLEDGE, OpsAction.ASSIGN, OpsAction.NOTE):
+        assert not action.reloads_data
+        assert not action.mutates_production
+
+
+def test_a_paused_feed_offers_no_action_that_would_reload_data() -> None:
+    available = offered(batch_state=BatchState.FAILED, feed_paused=True)
+    assert not any(action.reloads_data for action in available)
+    assert OpsAction.RESUME in available
+
+
+def test_a_verification_checks_the_state_it_read_not_the_prose_it_was_given() -> None:
+    """An operator typing 'looks fine' over a batch that is still FAILED is the
+    green tick with extra steps."""
+    record = request_action(retry(), now=NOW)
+    outcome = verify(
+        record,
+        observed_state=BatchState.FAILED,
+        expected=frozenset({BatchState.COMPLETED}),
+        outcome="looks fine to me",
+        now=NOW,
+    )
+    assert outcome.phase is ActionPhase.FAILED
+    assert not outcome.is_complete
+    assert outcome.observed_state is BatchState.FAILED
+
+
+def test_verifying_against_no_expected_state_is_refused() -> None:
+    """A verification that accepts any outcome as success is decoration."""
+    with pytest.raises(ActionError, match="what success looks like"):
+        verify(
+            request_action(retry(), now=NOW),
+            observed_state=BatchState.COMPLETED,
+            expected=frozenset(),
+            outcome="fine",
+            now=NOW,
+        )
+
+
+def test_a_refusal_becomes_a_row_rather_than_an_exception_that_vanished() -> None:
+    """"the system refuses, notifies a human, and RECORDS the refusal"."""
+    request = retry()
+    with pytest.raises(RefusedError) as raised:
+        authorize(
+            request,
+            environment=Environment.DEVELOPMENT,
+            batch_state=BatchState.IN_PROGRESS,
+            now=NOW,
+        )
+    row = refused_action(request, raised.value.refusal, now=NOW)
+    assert row.phase is ActionPhase.REFUSED
+    assert row.status is StatusWord.NEEDS_ATTENTION
+    assert not row.is_complete
+    assert "refused" in row.explain()
