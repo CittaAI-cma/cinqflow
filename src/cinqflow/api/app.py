@@ -146,6 +146,7 @@ from cinqflow.api.schemas import (
     RulePolicySetOut,
     RulePreviewOut,
     RulePreviewPackOut,
+    RunbookOut,
     SimilarFeedOut,
     SourceIn,
     SourceOut,
@@ -3156,6 +3157,27 @@ def create_app(
             if principal.scopes.covers_feed(event.feed_id)
         ]
 
+    @app.get(
+        f"{API_PREFIX}/operations/runbooks/{{guide_id}}",
+        response_model=RunbookOut,
+        tags=["operations"],
+    )
+    def get_runbook(
+        guide_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        version: int | None = None,
+    ) -> RunbookOut:
+        """A `runbook:<id>` citation's destination (CF-V1-W1-25) —
+        `RecoveryGuide.citation` and `GuideMatch.citations` point here, and so
+        does every per-step citation `workers.knowledge.chunk_runbook`
+        produces for the knowledge plane."""
+        try:
+            obj = metadata.get(ObjectType.RUNBOOK, guide_id, version)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        return _runbook_out(obj)
+
     def _move_incident(
         incident_id: str,
         control: ControlTablesPort,
@@ -4399,6 +4421,24 @@ def _accept_mapping_proposal(
         detail=f"{proposal.proposal_id} · {len(corrections)} correction(s)",
     )
     return _proposal_out(stored)
+
+
+def _runbook_out(obj: GovernedObject) -> RunbookOut:
+    """The same fields `_runbook_body_from` writes, read back — `get_runbook`
+    (CF-V1-W1-25) is the one place this codebase renders a runbook on its
+    own, so this is the one place that reads its body back out."""
+    body = obj.body
+    return RunbookOut(
+        guide_id=obj.object_id,
+        title=str(body.get("title") or obj.object_id),
+        steps=[str(step) for step in body.get("steps", ())],
+        signatures=[str(sig) for sig in body.get("signatures", ())],
+        remedy=str(body["remedy"]) if body.get("remedy") else None,
+        is_transient=bool(body.get("is_transient", False)),
+        version=obj.version,
+        lifecycle_state=obj.lifecycle_state.value,
+        status=obj.lifecycle_state.status_word,
+    )
 
 
 def _runbook_record(payload: dict[str, Any]) -> dict[str, Any]:

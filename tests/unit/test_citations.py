@@ -55,6 +55,8 @@ from cinqflow.core.citations import CitationId, CitationKind, UnresolvableCitati
         ("error:9f3c1a7b", CitationKind.ERROR, "9f3c1a7b", None, None),
         ("file:sha256-abc123", CitationKind.FILE, "sha256-abc123", None, None),
         ("rule:DQ-002", CitationKind.RULE, "DQ-002", None, None),
+        ("runbook:RB-1", CitationKind.RUNBOOK, "RB-1", None, None),
+        ("runbook:RB-1#step-3", CitationKind.RUNBOOK, "RB-1", None, "step-3"),
         ("term:member-date-of-birth", CitationKind.TERM, "member-date-of-birth", None, None),
     ],
 )
@@ -100,6 +102,8 @@ def test_a_citation_is_a_ui_route_and_that_is_the_whole_point() -> None:
         "/data/intake/feed/fidelis-downstate-roster?version=3"
     )
     assert parse("rule:DQ-002").route == "/data/intake/rule/DQ-002"
+    assert parse("runbook:RB-1").route == "/data/intake/runbook/RB-1"
+    assert parse("runbook:RB-1#step-3").route == "/data/intake/runbook/RB-1?panel=step-3"
     assert parse("term:member-date-of-birth").route == "/data/intake/glossary/member-date-of-birth"
     # CF-V1-E5-01. A column is a PANEL on the profile, not a page of its own.
     assert parse("profile:sha256-abc#DOB").route == "/data/intake/profile/sha256-abc?column=DOB"
@@ -118,6 +122,7 @@ def test_every_kind_has_a_route_so_no_citation_can_be_a_dead_end() -> None:
         CitationKind.ERROR: "error:abc",
         CitationKind.FILE: "file:abc",
         CitationKind.RULE: "rule:DQ-001",
+        CitationKind.RUNBOOK: "runbook:RB-1",
         CitationKind.TERM: "term:a-term",
         CitationKind.PROFILE: "profile:sha256-abc",
     }

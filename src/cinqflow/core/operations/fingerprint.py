@@ -196,7 +196,9 @@ class RecoveryGuide:
 
     @property
     def citation(self) -> CitationId:
-        return CitationId(kind=CitationKind.RULE, subject=self.guide_id)
+        # CF-V1-W1-25: a guide is a RUNBOOK, not a RULE — it was miscast
+        # before the citation vocabulary had a kind for it.
+        return CitationId(kind=CitationKind.RUNBOOK, subject=self.guide_id)
 
 
 @dataclass(frozen=True)

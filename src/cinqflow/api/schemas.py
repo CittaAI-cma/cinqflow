@@ -2046,6 +2046,25 @@ class GuideMatchOut(BaseModel):
     explanation: str = ""
 
 
+class RunbookOut(BaseModel):
+    """A published recovery guide, on its own — the destination a
+    `runbook:<id>` citation opens (CF-V1-W1-25). Distinct from
+    `GuideMatchOut`: that shape is a MATCH's evidence (errors, occurrences,
+    priors), nested inside one incident; this is the guide itself, the same
+    fields `_runbook_body_from` writes and `workers.incidents
+    .recovery_guides` reads back."""
+
+    guide_id: str
+    title: str
+    steps: list[str] = Field(default_factory=list)
+    signatures: list[str] = Field(default_factory=list)
+    remedy: str | None = None
+    is_transient: bool = False
+    version: int
+    lifecycle_state: str
+    status: StatusWord
+
+
 class VarianceIn(BaseModel):
     """One discrepancy an operator writes down. The platform computes the
     delta and the criticality — a caller who could declare their own variance

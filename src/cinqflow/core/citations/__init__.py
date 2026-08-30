@@ -56,6 +56,14 @@ class CitationKind(StrEnum):
     ERROR = "error"
     FILE = "file"
     RULE = "rule"
+    #: CF-V1-W1-25. A PUBLISHED governed runbook — the K2 content
+    #: `core.knowledge.chunk_runbook` cites, one fragment per STEP
+    #: (`runbook:RB-1#step-3`), the same "one depth level, like every other
+    #: drawer" shape `BATCH`'s panel fragment already uses. Unversioned, like
+    #: `RULE`: `RecoveryGuide.citation` (the match-time evidence trail) has
+    #: never pinned a version, because a match is against whichever guide is
+    #: CURRENTLY published for a signature, not a specific historical one.
+    RUNBOOK = "runbook"
     TERM = "term"
 
     @property
@@ -148,6 +156,11 @@ class CitationId:
                 return f"/data/intake/profile/{self.subject}{column}"
             case CitationKind.RULE:
                 return f"/data/intake/rule/{self.subject}"
+            case CitationKind.RUNBOOK:
+                # A step is a panel on the runbook, not a page of its own —
+                # the same shape BATCH's fragment already uses.
+                panel = f"?panel={self.fragment}" if self.fragment else ""
+                return f"/data/intake/runbook/{self.subject}{panel}"
             case CitationKind.TERM:
                 return f"/data/intake/glossary/{self.subject}"
 

@@ -32,6 +32,11 @@ class ActionOutcome(StrEnum):
     REFUSED_PERMISSION = "refused_permission"
     REFUSED_NOT_WHITELISTED = "refused_not_whitelisted"
     REFUSED_UNDECLARED_ENDPOINT = "refused_undeclared_endpoint"
+    #: CF-V1-W1-25. A knowledge chunk tripped `PhiScrubPort.detect` and was
+    #: refused before it ever reached `LlmGateway.embed` — never masked and
+    #: embedded anyway. The knowledge plane's own quarantine record: what a
+    #: quarantined data row does for a rule, this does for a chunk.
+    REFUSED_PHI = "refused_phi"
     FAILED_SCHEMA = "failed_schema"
     FAILED_COMPLETION = "failed_completion"
     ESCALATED_TO_MANUAL = "escalated_to_manual"
