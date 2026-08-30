@@ -814,6 +814,27 @@ def blocking(findings: tuple[MappingFinding, ...]) -> tuple[MappingFinding, ...]
 # stored, with no second declaration to keep in step.
 
 
+def mapping_body(
+    mapping: FeedMapping, *, business_consumers: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    """The governed body, without the envelope.
+
+    Separate from `mapping_as_governed` because CF-V1-E6-02's approval path
+    needs the body alone — `core.proposals.apply` supplies the author, the
+    version and the DRAFT state, and it is the approver who authors it. A
+    caller forced to invent a placeholder actor just to reach a dict would be
+    one edit away from that placeholder ending up on a real row.
+    """
+    return {
+        "feed_id": mapping.feed_id,
+        "contract_id": mapping.feed_id if mapping.contract_version else None,
+        "contract_version": mapping.contract_version,
+        "glossary_ids": list(mapping.glossary_ids),
+        "business_consumers": list(business_consumers),
+        "lines": [line_to_dict(line) for line in mapping.lines],
+    }
+
+
 def mapping_as_governed(
     mapping: FeedMapping,
     *,
@@ -828,14 +849,7 @@ def mapping_as_governed(
         lifecycle_state=LifecycleState.DRAFT,
         created_by=author,
         created_ts=created_ts or datetime.now(UTC),
-        body={
-            "feed_id": mapping.feed_id,
-            "contract_id": mapping.feed_id if mapping.contract_version else None,
-            "contract_version": mapping.contract_version,
-            "glossary_ids": list(mapping.glossary_ids),
-            "business_consumers": list(business_consumers),
-            "lines": [line_to_dict(line) for line in mapping.lines],
-        },
+        body=mapping_body(mapping, business_consumers=business_consumers),
     )
 
 

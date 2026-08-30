@@ -42,6 +42,19 @@ type PhiColumn = {
   rationale: string;
   citations: string[];
 };
+type ProposedMapping = {
+  source_column: string;
+  target_entity: string;
+  target_field: string;
+  unmapped: boolean;
+  unmapped_reason: string;
+  glossary_id: string | null;
+  confidence: number;
+  settled_by: string;
+  rationale: string;
+  like_feed_id: string | null;
+  citations: string[];
+};
 type Proposal = {
   proposal_id: string;
   agent: string;
@@ -62,6 +75,7 @@ type Proposal = {
   grounding_citations: string[];
   columns: ProposedColumn[];
   phi_columns: PhiColumn[];
+  mapping_lines: ProposedMapping[];
   needs_input: string[];
   needs_steward_review: string[];
   masked_columns: string[];
@@ -100,6 +114,9 @@ export default async function ProposalPage({
   }
 
   const isPhi = result.agent === "phi-detection";
+  const isMapping = result.agent === "mapping-suggestion";
+  const unmapped = result.mapping_lines.filter((line) => line.unmapped);
+  const mapped = result.mapping_lines.filter((line) => !line.unmapped);
 
   return (
     <>
@@ -112,7 +129,13 @@ export default async function ProposalPage({
           result.proposal_id
         )}
       </p>
-      <h1>{isPhi ? "What this file holds" : "A proposed data contract"}</h1>
+      <h1>
+        {isPhi
+          ? "What this file holds"
+          : isMapping
+            ? "Where each column would land"
+            : "A proposed data contract"}
+      </h1>
       <p className="lede">
         Suggested by {result.agent} at {result.risk_class}. {result.state.replace("_", " ")}.
         {result.model_called
@@ -131,7 +154,102 @@ export default async function ProposalPage({
         </div>
       ) : null}
 
-      {isPhi ? (
+      {isMapping ? (
+        <>
+          {/*
+            THE DECLINED COLUMNS COME FIRST. They are the shortest read on the
+            page and the only part a steward has to do something about — a
+            mapped line with a cited precedent needs a glance, and a declined
+            one needs a decision. Putting the ninety agreements above the
+            twelve questions is how a review screen becomes a scroll.
+          */}
+          {unmapped.length > 0 ? (
+            <div className="card">
+              <strong>
+                {unmapped.length} column{unmapped.length === 1 ? "" : "s"} the agent would not
+                place
+              </strong>
+              <p className="note">
+                Every one says why. Declining is a correct answer here — a wrong mapping nobody
+                questions loads real values into the wrong field and reconciles perfectly while
+                doing it.
+              </p>
+              <dl>
+                {unmapped.map((line) => (
+                  <div key={line.source_column}>
+                    <dt className="mono">{line.source_column}</dt>
+                    <dd>{line.unmapped_reason}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          ) : null}
+
+          <h2>Proposed mapping</h2>
+          <div className="card scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Source column</th>
+                  <th>Would land in</th>
+                  <th>Decided by</th>
+                  <th>Like</th>
+                  <th>Confidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mapped.map((line) => (
+                  <tr className="row" key={line.source_column}>
+                    <td className="mono">{line.source_column}</td>
+                    <td className="mono">
+                      <Link href={`/data/canonical/${encodeURIComponent(line.target_entity)}`}>
+                        {line.target_entity}
+                      </Link>
+                      .{line.target_field}
+                    </td>
+                    <td>
+                      {line.settled_by === "glossary"
+                        ? "your own glossary"
+                        : line.settled_by === "published_mapping"
+                          ? "already approved on this feed"
+                          : "the model"}
+                    </td>
+                    <td>
+                      {line.like_feed_id ? (
+                        <Link href={`/data/intake/mapping/${line.like_feed_id}`}>
+                          {line.like_feed_id}
+                        </Link>
+                      ) : (
+                        <span className="note">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {line.settled_by === "inference"
+                        ? `${Math.round(line.confidence * 100)}%`
+                        : "settled"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <h2>Why each column was placed</h2>
+          {mapped
+            .filter((line) => line.rationale)
+            .map((line) => (
+              <div className="card" key={`why-${line.source_column}`}>
+                <strong>{line.source_column}</strong>
+                <p>{line.rationale}</p>
+                <p className="note">
+                  {line.citations.map((citation) => (
+                    <CitationChip key={citation} citationId={citation} />
+                  ))}
+                </p>
+              </div>
+            ))}
+        </>
+      ) : isPhi ? (
         <>
           <div className="card">
             <strong>{result.masked_columns.length} column(s) would be masked</strong>

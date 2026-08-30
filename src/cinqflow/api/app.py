@@ -84,6 +84,7 @@ from cinqflow.api.schemas import (
     ProfileIn,
     ProposalOut,
     ProposedColumnOut,
+    ProposedMappingOut,
     ReadinessOut,
     ReclassifyIn,
     ReferenceOut,
@@ -110,6 +111,7 @@ from cinqflow.api.schemas import (
 )
 from cinqflow.core import lifecycle, proposals
 from cinqflow.core import mapping as mapping_core
+from cinqflow.core.agents.mapping_suggestion.graph import AGENT as MAPPING_SUGGESTION_AGENT
 from cinqflow.core.agents.phi_detection.graph import AGENT as PHI_DETECTION_AGENT
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
 from cinqflow.core.citations import CitationId, CitationKind
@@ -138,6 +140,7 @@ from cinqflow.core.registry.wave0 import wave_0_register
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.core.security import Action, may
 from cinqflow.core.tools import CATALOGUE, ToolError
+from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
 from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent, RecallGateFailedError
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
@@ -159,6 +162,9 @@ SCHEMA_ACCEPTANCE_GATE = 0.90
 #: leave the routes filtering for an agent that no longer exists.
 PHI_AGENT = PHI_DETECTION_AGENT
 
+#: CF-V1-E6-02's agent name, imported for the same reason.
+MAPPING_AGENT = MAPPING_SUGGESTION_AGENT
+
 #: Build an agent for ONE caller. Never a shared agent — a shared agent is a
 #: shared scope, and the tool context is where the caller's RBAC lives.
 AgentFactory = Callable[[Principal, "ControlTablesPort", MetadataDbPort], PipelineInsightAgent]
@@ -170,6 +176,9 @@ SchemaInferenceFactory = Callable[[MetadataDbPort], SchemaInferenceAgent]
 
 #: Same reasoning, same lifetime. CF-V1-E5-03.
 PhiDetectionFactory = Callable[[MetadataDbPort], PhiDetectionAgent]
+
+#: Same reasoning, same lifetime. CF-V1-E6-02.
+MappingSuggestionFactory = Callable[[MetadataDbPort], MappingSuggestionAgent]
 
 
 @unique
@@ -245,6 +254,7 @@ def create_app(
     agent_factory: AgentFactory | None = None,
     schema_inference_factory: SchemaInferenceFactory | None = None,
     phi_detection_factory: PhiDetectionFactory | None = None,
+    mapping_suggestion_factory: MappingSuggestionFactory | None = None,
     budget: Budget | None = None,
 ) -> FastAPI:
     """Build the app from PINS.
@@ -274,6 +284,7 @@ def create_app(
     # which is exactly what a deployment with no model endpoint should offer.
     app.state.schema_inference_factory = schema_inference_factory
     app.state.phi_detection_factory = phi_detection_factory
+    app.state.mapping_suggestion_factory = mapping_suggestion_factory
     # The cap the observability screen reports against. A screen showing spend
     # with no cap beside it is a number, not a control.
     app.state.llm_budget = budget or Budget(
@@ -1354,6 +1365,72 @@ def create_app(
         )
         return _proposal_out(result.proposal, model_called=result.model_called)
 
+    # ── AI source→target mapping · CF-V1-E6-02 ───────────────────────────────
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/suggest-mapping",
+        response_model=ProposalOut,
+        tags=["intelligence"],
+    )
+    def suggest_mapping(
+        feed_id: str,
+        request: Request,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        audit: Audit,
+    ) -> ProposalOut:
+        """Propose a target for every column of the feed's contract.
+
+        The mapping is proposed against the CONTRACT rather than a raw file:
+        the contract is what a human approved as the shape of this feed, and
+        mapping from anything else would map columns nobody agreed exist.
+
+        Precedents come from PUBLISHED mappings only — never a draft. Grounding
+        a suggestion in somebody's unreviewed work would launder an unapproved
+        decision into a second feed, where it would arrive wearing the
+        authority of precedent.
+        """
+        agent_factory = request.app.state.mapping_suggestion_factory
+        if agent_factory is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no LLM pin is fitted on this deployment, so mapping suggestion is not "
+                "available. The canonical browser and the manual mapping editor still "
+                "work, and a feed whose columns the glossary already names needs no "
+                "model at all.",
+            )
+        contract = _contract_of(metadata, feed_id)
+        if contract is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"feed {feed_id!r} has no schema contract yet. A mapping is proposed "
+                "against the contract — the shape a human approved — so approve one first.",
+            )
+
+        published, approvers = _published_mappings(metadata, exclude=feed_id)
+        result = agent_factory(metadata).propose(
+            contract,
+            feed_id=feed_id,
+            glossary=_glossary_of(metadata),
+            model=_canonical_of(metadata),
+            caller=principal.as_actor(),
+            published_mappings=published + _own_published_mapping(metadata, feed_id),
+            approvers=approvers,
+        )
+        audit.record(
+            object_type=ObjectType.MAPPING,
+            object_id=feed_id,
+            action="suggest_mapping",
+            actor=principal.as_actor(),
+            detail=(
+                f"{result.proposal.proposal_id} · {len(result.lines) - len(result.unmapped)} "
+                f"of {len(result.lines)} columns mapped, {len(result.unmapped)} left for a "
+                f"human, {len(result.refusals)} refusal(s), "
+                f"model_called={result.model_called}"
+            ),
+        )
+        return _proposal_out(result.proposal, model_called=result.model_called)
+
     @app.get(
         f"{API_PREFIX}/proposals/{{proposal_id}}/recall",
         response_model=PhiRecallOut,
@@ -1461,6 +1538,15 @@ def create_app(
             proposal = metadata.get_proposal(proposal_id)
         except ObjectNotFoundError:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"no proposal {proposal_id!r}") from None
+
+        if proposal.agent == MAPPING_AGENT:
+            # A mapping proposal produces a DRAFT MAPPING, not a contract.
+            # Routed out here rather than folded into the branches below,
+            # because the two differ in the object type, the key the
+            # corrections are computed over, the fields compared and the
+            # version sequence — four differences, which is a second path and
+            # not a third conditional.
+            return _accept_mapping_proposal(metadata, proposal, body, principal, audit)
 
         accepted = _apply_decisions(proposal.payload, body)
         corrections = proposals.diff_fields(
@@ -2510,6 +2596,166 @@ def _mapping_out(metadata: MetadataDbPort, obj: GovernedObject) -> MappingOut:
     )
 
 
+# ── AI source→target mapping · CF-V1-E6-02 ───────────────────────────────────
+
+
+def _published_mappings(
+    metadata: MetadataDbPort, *, exclude: str
+) -> tuple[tuple[mapping_core.FeedMapping, ...], dict[str, str]]:
+    """Every PUBLISHED mapping except this feed's own, with its approver.
+
+    PUBLISHED only. A draft is somebody's unreviewed work, and offering it to
+    a second feed as precedent would launder an unapproved decision into a
+    place it would arrive wearing authority it has not earned.
+
+    `exclude` keeps the feed under test out of the exemplar pool — its own
+    prior mapping is handled separately, as the decision rather than as
+    evidence, and mixing the two would make the eval's blind re-derivation a
+    measurement of the platform reading its own answer key.
+    """
+    found: list[mapping_core.FeedMapping] = []
+    approvers: dict[str, str] = {}
+    for obj in metadata.list(ObjectType.MAPPING):
+        if obj.object_id == exclude or not obj.is_executable:
+            continue
+        found.append(mapping_core.from_governed(obj))
+        if obj.approved_by is not None:
+            approvers[obj.object_id] = obj.approved_by.display_name or obj.approved_by.subject
+    return tuple(found), approvers
+
+
+def _own_published_mapping(
+    metadata: MetadataDbPort, feed_id: str
+) -> tuple[mapping_core.FeedMapping, ...]:
+    """This feed's own published mapping, if it has one. The DECISION."""
+    try:
+        obj = metadata.get(ObjectType.MAPPING, feed_id)
+    except ObjectNotFoundError:
+        return ()
+    return (mapping_core.from_governed(obj),) if obj.is_executable else ()
+
+
+def _accepted_mapping_records(payload: dict[str, Any], body: ApproveProposalIn) -> dict[str, Any]:
+    """The reviewer's version of the proposed lines.
+
+    Absent fields keep the agent's value, so a reviewer redirecting one column
+    does not restate the other forty — and a reviewer who changed nothing
+    produces zero corrections, which is exactly what the eval counts.
+    """
+    decided = {d.source_column: d for d in body.mappings}
+    records: list[dict[str, Any]] = []
+    for record in payload.get("records", ()):
+        accepted = dict(record)
+        decision = decided.get(str(record.get("source_column")))
+        if decision is not None:
+            for attribute in ("target_entity", "target_field", "unmapped", "unmapped_reason"):
+                value = getattr(decision, attribute)
+                if value is not None:
+                    accepted[attribute] = value
+        records.append(accepted)
+    return {**payload, "records": records}
+
+
+def _mapping_body_from(records: tuple[dict[str, Any], ...], feed_id: str) -> dict[str, Any]:
+    """Build a governed MAPPING body from the accepted records.
+
+    Routed through `core.mapping.MappingLine` rather than assembled as a dict,
+    so a reviewer who unmaps a column without giving a reason is refused by the
+    same type that refuses it in the manual editor. One rule, one place.
+    """
+    lines: list[mapping_core.MappingLine] = []
+    for record in records:
+        source = str(record.get("source_column", ""))
+        entity = str(record.get("target_entity") or "unassigned")
+        field = str(record.get("target_field") or source)
+        if record.get("unmapped"):
+            lines.append(
+                mapping_core.MappingLine(
+                    target_entity=entity,
+                    target_field=field,
+                    unmapped_reason=str(record.get("unmapped_reason") or ""),
+                    glossary_id=record.get("glossary_id"),
+                    confidence=record.get("confidence"),
+                )
+            )
+            continue
+        lines.append(
+            mapping_core.MappingLine(
+                target_entity=entity,
+                target_field=field,
+                source_columns=(source,),
+                glossary_id=record.get("glossary_id"),
+                notes=str(record.get("rationale") or ""),
+                confidence=record.get("confidence"),
+            )
+        )
+    return mapping_core.mapping_body(mapping_core.FeedMapping(feed_id=feed_id, lines=tuple(lines)))
+
+
+def _accept_mapping_proposal(
+    metadata: MetadataDbPort,
+    proposal: Proposal,
+    body: ApproveProposalIn,
+    principal: Principal,
+    audit: AuditLog,
+) -> ProposalOut:
+    """Accept a mapping suggestion, producing a DRAFT MAPPING.
+
+    The same door a hand-typed mapping arrives at: `proposals.apply` makes the
+    APPROVER the author, so they cannot then approve the mapping, and it
+    travels CF-V1-E6-03's lifecycle to a steward exactly as one saved through
+    the editor does.
+    """
+    feed_id = proposal.feed_id or ""
+    accepted = _accepted_mapping_records(proposal.payload, body)
+    corrections = proposals.diff_fields(
+        proposal.payload,
+        accepted,
+        key="source_column",
+        # `unmapped` is compared because a reviewer MAPPING a column the agent
+        # declined, or declining one it mapped, is the most informative
+        # correction the eval set can receive — and comparing only the target
+        # would score both as "no change".
+        fields=("target_entity", "target_field", "unmapped"),
+    )
+    records = tuple(r for r in accepted.get("records", ()) if isinstance(r, dict))
+    try:
+        decided = proposals.approve(
+            proposal,
+            approver=principal.as_actor(),
+            comment=body.comment,
+            corrections=corrections,
+        )
+        applied, draft = proposals.apply(
+            decided,
+            object_type=ObjectType.MAPPING,
+            object_id=feed_id,
+            body=_mapping_body_from(records, feed_id),
+            version=_next_mapping_version(metadata, feed_id),
+        )
+    except (proposals.ProposalError, mapping_core.MappingError) as refused:
+        audit.record(
+            object_type=ObjectType.MAPPING,
+            object_id=feed_id or proposal.proposal_id,
+            action="refused:approve_proposal",
+            actor=principal.as_actor(),
+            detail=str(refused),
+        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(refused)) from None
+
+    metadata.save(draft)
+    stored = metadata.record_proposal(applied)
+    audit.record(
+        object_type=ObjectType.MAPPING,
+        object_id=draft.object_id,
+        version=draft.version,
+        action="applied_proposal",
+        actor=principal.as_actor(),
+        detail=f"{proposal.proposal_id} · {len(corrections)} correction(s)",
+    )
+    return _proposal_out(stored)
+
+
 def _canonical_of(metadata: MetadataDbPort) -> canonical.CanonicalModel:
     """Built per request from the spec and the CURRENT glossary.
 
@@ -2859,6 +3105,7 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
     # would silently change how every proposal renders, and the agent is what
     # actually determines the shape.
     is_phi_agent = proposal.agent == PHI_AGENT
+    is_mapping_agent = proposal.agent == MAPPING_AGENT
     return ProposalOut(
         proposal_id=proposal.proposal_id,
         agent=proposal.agent,
@@ -2880,9 +3127,18 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
         applied_object_id=proposal.applied_object_id,
         applied_version=proposal.applied_version,
         grounding_citations=[str(c) for c in proposal.grounding_citations],
-        columns=([] if is_phi_agent else [ProposedColumnOut(**_column_fields(r)) for r in records]),
+        columns=(
+            []
+            if is_phi_agent or is_mapping_agent
+            else [ProposedColumnOut(**_column_fields(r)) for r in records]
+        ),
         phi_columns=(
             [PhiColumnOut(**_phi_column_fields(r)) for r in records] if is_phi_agent else []
+        ),
+        mapping_lines=(
+            [ProposedMappingOut(**_mapping_record_fields(r)) for r in records]
+            if is_mapping_agent
+            else []
         ),
         needs_steward_review=list(proposal.payload.get("needs_steward_review", ())),
         masked_columns=list(proposal.payload.get("masked_columns", ())),
@@ -2899,6 +3155,23 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
         ],
         model_called=model_called,
     )
+
+
+def _mapping_record_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """One proposed mapping line, as the reviewer reads it. CF-V1-E6-02."""
+    return {
+        "source_column": str(record.get("source_column", "")),
+        "target_entity": str(record.get("target_entity", "")),
+        "target_field": str(record.get("target_field", "")),
+        "unmapped": bool(record.get("unmapped", False)),
+        "unmapped_reason": str(record.get("unmapped_reason", "")),
+        "glossary_id": record.get("glossary_id"),
+        "confidence": float(record.get("confidence", 0.0)),
+        "settled_by": str(record.get("settled_by", "inference")),
+        "rationale": str(record.get("rationale", "")),
+        "like_feed_id": record.get("like_feed_id"),
+        "citations": list((record.get("line") or {}).get("citations", ())),
+    }
 
 
 def _column_fields(record: dict[str, Any]) -> dict[str, Any]:

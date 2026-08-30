@@ -937,6 +937,30 @@ class PhiColumnOut(BaseModel):
     citations: list[str] = Field(default_factory=list)
 
 
+class ProposedMappingOut(BaseModel):
+    """One proposed mapping line. CF-V1-E6-02.
+
+    `settled_by` is on the wire because a mapping that is 90% glossary lookups
+    is not evidence that a model is good at mapping — and a steward reading the
+    queue should be able to see at a glance which lines a model touched.
+
+    `like_feed_id` is the precedent it reasoned from, so "maps like Fidelis
+    did" is a link a reviewer can open rather than a claim they must take.
+    """
+
+    source_column: str
+    target_entity: str
+    target_field: str
+    unmapped: bool = False
+    unmapped_reason: str = ""
+    glossary_id: str | None = None
+    confidence: float = 0.0
+    settled_by: str = "inference"
+    rationale: str = ""
+    like_feed_id: str | None = None
+    citations: list[str] = Field(default_factory=list)
+
+
 class ProposalOut(BaseModel):
     """One agent proposal, as the review screen renders it.
 
@@ -968,13 +992,14 @@ class ProposalOut(BaseModel):
     refusals: list[str]
     corrections: list[CorrectionOut]
     model_called: bool = True
-    # ── CF-V1-E5-03 · populated for `phi-detection` proposals only ───────────
+    # ── CF-V1-E5-03 and CF-V1-E6-02 · one list per agent, only one filled ────
     #
     # A second list rather than a second response model, so ONE review queue
     # renders every R2 agent's output. `agent` says which list is populated;
     # the other is empty, and a client that renders both renders correctly for
     # either without knowing the agent's name.
     phi_columns: list[PhiColumnOut] = Field(default_factory=list)
+    mapping_lines: list[ProposedMappingOut] = Field(default_factory=list)
     needs_steward_review: list[str] = Field(default_factory=list)
     masked_columns: list[str] = Field(default_factory=list)
 
@@ -1043,6 +1068,26 @@ class ColumnDecisionIn(BaseModel):
     date_format: str | None = None
 
 
+class MappingDecisionIn(BaseModel):
+    """What the human decided about one proposed mapping line. CF-V1-E6-02.
+
+    Keyed by SOURCE COLUMN, like `ColumnDecisionIn`, and for the same reason:
+    absent fields keep the proposal's value, so a reviewer redirecting one
+    column does not restate the other forty.
+
+    Note what cannot be set here: a transform's PARAMETERS. The agent proposes
+    a column pairing and never a separator, a lookup table or a set of cases —
+    those are business rules, and they are set in the manual editor, which is
+    the correction surface CF-V1-E6-03 exists to be.
+    """
+
+    source_column: str
+    target_entity: str | None = None
+    target_field: str | None = None
+    unmapped: bool | None = None
+    unmapped_reason: str | None = None
+
+
 class ApproveProposalIn(BaseModel):
     """Approve, with any corrections. Both travel together deliberately: an
     approval recorded now and its corrections recorded later is an eval set
@@ -1051,6 +1096,9 @@ class ApproveProposalIn(BaseModel):
     comment: str = ""
     columns: list[ColumnDecisionIn] = Field(default_factory=list)
     key_columns: list[str] = Field(default_factory=list)
+    #: CF-V1-E6-02. Present only on a mapping proposal, where the records are
+    #: mapping lines rather than contract columns.
+    mappings: list[MappingDecisionIn] = Field(default_factory=list)
 
 
 class ReclassifyIn(BaseModel):

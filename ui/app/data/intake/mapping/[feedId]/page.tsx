@@ -108,7 +108,9 @@ export default async function MappingPage({
           <Link className="cited" href="/data/canonical">
             canonical model browser
           </Link>
-          : you cannot map to a model you cannot see.
+          : you cannot map to a model you cannot see. Or have the platform propose one — it
+          settles every column your glossary already names without calling a model, and asks
+          about the rest.
         </div>
       </>
     );
@@ -209,6 +211,12 @@ export default async function MappingPage({
           </tbody>
         </table>
       </div>
+
+      <p className="note">
+        <Link className="cited" href={`/data/intake/proposals?feed_id=${found.feed_id}`}>
+          Mapping suggestions for this feed →
+        </Link>
+      </p>
 
       <p className="note">
         Every transform on this page is configuration, not code — a closed set of kinds with
