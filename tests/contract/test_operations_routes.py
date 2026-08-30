@@ -316,6 +316,48 @@ def test_a_retry_comes_back_requested_and_not_complete(
     assert "not yet verified" in record["explanation"]
 
 
+def test_a_requested_action_survives_the_response_and_can_be_polled(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """CF-V2-E12-03 — the record is a LEDGER ROW, not a response body. The
+    screen polls it by id until a worker verifies; until then it stays
+    REQUESTED, never a tick."""
+    _open_batch(control, state=BatchState.FAILED)
+    posted = client.post(
+        f"/api/operations/batches/{BATCH}/actions",
+        json={"action": "retry", "reason": "Transient cluster error."},
+        headers=_as(OPERATOR),
+    ).json()
+    assert posted["record_id"]
+
+    polled = client.get(f"/api/operations/actions/{posted['record_id']}", headers=_as(READ_ONLY))
+    assert polled.status_code == 200
+    assert polled.json()["phase"] == "requested"
+    assert polled.json()["record_id"] == posted["record_id"]
+
+    assert client.get("/api/operations/actions/never-was", headers=_as(OPERATOR)).status_code == 404
+
+
+def test_a_refusal_lands_in_the_action_history_too(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """ "the system refuses ... and RECORDS the refusal" — findable on the
+    batch's own history, beside the actions that ran."""
+    _open_batch(control, state=BatchState.COMPLETED)
+    refused = client.post(
+        f"/api/operations/batches/{BATCH}/actions",
+        json={"action": "retry", "reason": "Just in case."},
+        headers=_as(OPERATOR),
+    )
+    assert refused.status_code == 409
+
+    history = client.get(
+        f"/api/operations/batches/{BATCH}/action-history", headers=_as(READ_ONLY)
+    ).json()
+    assert [entry["phase"] for entry in history] == ["refused"]
+    assert history[0]["action"] == "retry"
+
+
 def test_a_retry_without_a_reason_is_refused(
     client: TestClient, control: MemStoreControlTables
 ) -> None:

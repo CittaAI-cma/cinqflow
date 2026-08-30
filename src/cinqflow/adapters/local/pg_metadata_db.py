@@ -35,7 +35,8 @@ from cinqflow.core.model.governed import (
     LifecycleState,
     ObjectType,
 )
-from cinqflow.core.model.vocabulary import ActorType, RiskClass
+from cinqflow.core.model.vocabulary import ActorType, BatchState, RiskClass
+from cinqflow.core.operations.actions import ActionPhase, ActionRecord, OpsAction
 from cinqflow.core.profiling import FileProfile
 from cinqflow.core.proposals import Proposal, ProposalBody, ProposalState
 from cinqflow.core.registry.suspension import (
@@ -46,6 +47,7 @@ from cinqflow.core.registry.suspension import (
 )
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
+    ActionRecordRow,
     ConcurrentVersionError,
     FileProfileRecord,
     ObjectNotFoundError,
@@ -208,6 +210,29 @@ def _suspension(row: tuple[Any, ...]) -> SuspensionEvent:
         actor=_actor(row[3], ActorType.HUMAN.value, row[4]),
         occurred_ts=row[5],
         resumes_after=row[6],
+    )
+
+
+# The mapper below reads columns by POSITION, in the order every SELECT in
+# this file names them: record_id, feed_id, batch_id, action, phase,
+# actor_subject, actor_name, reason, approval_identifier, outcome,
+# observed_state, requested_ts, verified_ts.
+def _action_row(row: tuple[Any, ...]) -> ActionRecordRow:
+    return ActionRecordRow(
+        record_id=row[0],
+        feed_id=row[1],
+        record=ActionRecord(
+            action=OpsAction(row[3]),
+            target=row[2],
+            actor=_actor(row[5], ActorType.HUMAN.value, row[6]),
+            reason=row[7] or "",
+            approval_identifier=row[8] or "",
+            phase=ActionPhase(row[4]),
+            outcome=row[9] or "",
+            observed_state=BatchState(row[10]) if row[10] else None,
+            requested_ts=row[11],
+            verified_ts=row[12],
+        ),
     )
 
 
@@ -692,3 +717,67 @@ class PostgresMetadataDb:
         statement += " ORDER BY occurred_ts DESC, suspension_id DESC LIMIT %s"
         parameters += (limit,)
         return tuple(_suspension(row) for row in self._db.fetch_all(statement, parameters))
+
+    # ── ops.action_record · CF-V2-E12-03/E8-04 — append-only, one row per phase ──
+    def record_action_event(self, row: ActionRecordRow) -> ActionRecordRow:
+        """One INSERT; like the suspension ledger, append-only is kept by the
+        absence of an UPDATE in this file, not by a permission. `occurred_ts`
+        is derived from the record's own timestamps — this adapter never
+        consults a clock, so replaying a write is idempotent in content."""
+        record = row.record
+        self._db.execute(
+            "INSERT INTO ops.action_record (event_id, record_id, batch_id, feed_id, action, "
+            "phase, actor_subject, actor_name, reason, approval_identifier, outcome, "
+            "observed_state, requested_ts, verified_ts, occurred_ts) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                str(uuid.uuid4()),
+                row.record_id,
+                record.target,
+                row.feed_id,
+                record.action.value,
+                record.phase.value,
+                record.actor.subject,
+                record.actor.display_name,
+                record.reason,
+                record.approval_identifier,
+                record.outcome,
+                record.observed_state.value if record.observed_state else None,
+                record.requested_ts,
+                record.verified_ts,
+                row.occurred_ts,
+            ),
+        )
+        return row
+
+    def get_action_record(self, record_id: str) -> ActionRecordRow:
+        rows = self._db.fetch_all(
+            "SELECT record_id, feed_id, batch_id, action, phase, actor_subject, actor_name, "
+            "reason, approval_identifier, outcome, observed_state, requested_ts, verified_ts "
+            "FROM ops.action_record WHERE record_id = %s "
+            "ORDER BY occurred_ts DESC, event_id DESC LIMIT 1",
+            (record_id,),
+        )
+        if not rows:
+            raise ObjectNotFoundError(f"action record {record_id} was never written")
+        return _action_row(rows[0])
+
+    def list_action_records(
+        self, *, batch_id: str | None = None, feed_id: str | None = None, limit: int = 50
+    ) -> Sequence[ActionRecordRow]:
+        statement = (
+            "SELECT DISTINCT ON (record_id) record_id, feed_id, batch_id, action, phase, "
+            "actor_subject, actor_name, reason, approval_identifier, outcome, observed_state, "
+            "requested_ts, verified_ts FROM ops.action_record WHERE 1=1"
+        )
+        parameters: tuple[Any, ...] = ()
+        if batch_id is not None:
+            statement += " AND batch_id = %s"
+            parameters += (batch_id,)
+        if feed_id is not None:
+            statement += " AND feed_id = %s"
+            parameters += (feed_id,)
+        statement += " ORDER BY record_id, occurred_ts DESC, event_id DESC"
+        current_rows = tuple(_action_row(row) for row in self._db.fetch_all(statement, parameters))
+        newest_first = sorted(current_rows, key=lambda row: row.occurred_ts, reverse=True)
+        return tuple(newest_first[:limit])

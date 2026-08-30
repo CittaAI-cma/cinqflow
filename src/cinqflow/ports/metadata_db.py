@@ -25,9 +25,34 @@ from typing import Any, Protocol, runtime_checkable
 
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
+from cinqflow.core.operations.actions import ActionRecord
 from cinqflow.core.profiling import FileProfile
 from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry.suspension import Suspension, SuspensionEvent
+
+
+@dataclass(frozen=True)
+class ActionRecordRow:
+    """One operations action as the ledger holds it — the record, plus the two
+    facts the record deliberately does not carry.
+
+    `record_id` is minted at the SEAM (the API, the worker), not in core:
+    `request_action` is pure and two phases of one action must share an id, so
+    the id belongs to whoever holds the action across both. `feed_id` rides
+    along because the batch's feed is the scope every read is filtered by, and
+    re-deriving it per read would put a control-table lookup inside a
+    metadata query.
+    """
+
+    record_id: str
+    feed_id: str
+    record: ActionRecord
+
+    @property
+    def occurred_ts(self) -> datetime:
+        """When THIS phase happened — the ledger's ordering key, derived from
+        the record so the adapter never consults a clock."""
+        return self.record.verified_ts or self.record.requested_ts
 
 
 @dataclass(frozen=True)
@@ -252,4 +277,39 @@ class MetadataDbPort(Protocol):
         """Newest first. The pause history a steward reads beside the version
         history — the two together are what "which version was live in March,
         and was it running?" needs."""
+        ...
+
+    # ── ops.action_record · CF-V2-E12-03 / E8-04 ─────────────────────────────
+    #
+    # The same shape as the suspension ledger, for the same reason: an action
+    # is the platform's own record of its own decisions. One row PER PHASE,
+    # append-only — a REQUESTED row is never updated into a VERIFIED one, so
+    # "what did this look like before somebody checked" stays answerable, and
+    # verify() has something real to re-read instead of a response that
+    # vanished with the request.
+
+    def record_action_event(self, row: ActionRecordRow) -> ActionRecordRow:
+        """Append one phase of one action. There is deliberately no update verb.
+
+        REFUSED rows land here too — "the system refuses, notifies a human,
+        and RECORDS THE REFUSAL" — because the refusals are exactly what a
+        reviewer needs six weeks later, when the question is why nobody
+        retried the batch that was failing all night.
+        """
+        ...
+
+    def get_action_record(self, record_id: str) -> ActionRecordRow:
+        """The CURRENT phase — the newest row for this record_id.
+
+        Raises `ObjectNotFoundError` for an id the ledger has never seen; the
+        API turns an out-of-scope hit into the same shape, for the usual
+        reason.
+        """
+        ...
+
+    def list_action_records(
+        self, *, batch_id: str | None = None, feed_id: str | None = None, limit: int = 50
+    ) -> Sequence[ActionRecordRow]:
+        """Current phase per record, newest first — the screen's action
+        history, and the worker's queue of REQUESTED work to verify."""
         ...

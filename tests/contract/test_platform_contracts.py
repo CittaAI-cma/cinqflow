@@ -12,7 +12,7 @@ platform's safety floor stated in one place.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -25,12 +25,15 @@ from cinqflow.core.model.governed import (
     LifecycleState,
     ObjectType,
 )
-from cinqflow.core.model.vocabulary import ActorType, Layer
+from cinqflow.core.model.vocabulary import ActorType, BatchState, Layer
+from cinqflow.core.operations.actions import ActionPhase, OpsAction
+from cinqflow.core.operations.actions import verify as ops_verify
 from cinqflow.ports.authn import AuthenticationError, AuthnPort, Role
 from cinqflow.ports.catalog import CatalogPort
 from cinqflow.ports.compute_job import ComputeError, ComputeJobPort
 from cinqflow.ports.identity import IdentityPort, UnapprovedMergeError
 from cinqflow.ports.metadata_db import (
+    ActionRecordRow,
     ConcurrentVersionError,
     MetadataDbPort,
     ObjectNotFoundError,
@@ -127,6 +130,125 @@ def test_audit_is_append_only_with_no_deletion_path_for_anyone(
     )
     assert len(metadata.read_audit(object_id="fidelis-downstate-roster")) == 1
     for forbidden in ("delete_audit", "update_audit", "purge", "truncate_audit", "clear"):
+        assert not hasattr(metadata, forbidden), f"metadata_db exposes {forbidden}"
+
+
+# ── ops.action_record · CF-V2-E12-03/E8-04 ───────────────────────────────────
+def _requested_retry(record_id: str, *, batch_id: str = "B-1244") -> ActionRecordRow:
+    from cinqflow.core.operations.actions import ActionRequest, request_action
+
+    request = ActionRequest(
+        action=OpsAction.RETRY,
+        target=batch_id,
+        actor=AUTHOR,
+        reason="Transient cluster error.",
+    )
+    return ActionRecordRow(
+        record_id=record_id,
+        feed_id="fidelis-downstate-roster",
+        record=request_action(request, now=NOW),
+    )
+
+
+def test_a_requested_action_is_readable_back_and_not_complete(
+    metadata: MetadataDbPort,
+) -> None:
+    """The record used to vanish with the HTTP response — 'I clicked retry and
+    nothing happened' was unanswerable. Now it is a row."""
+    metadata.record_action_event(_requested_retry("act-1"))
+    row = metadata.get_action_record("act-1")
+    assert row.record.phase is ActionPhase.REQUESTED
+    assert row.record.is_complete is False
+    assert row.feed_id == "fidelis-downstate-roster"
+
+
+def test_verification_is_a_second_row_and_becomes_the_current_phase(
+    metadata: MetadataDbPort,
+) -> None:
+    """'retry requested' is not 'retry succeeded' — and the phase only moves
+    when a verification that OBSERVED something is appended."""
+    first = _requested_retry("act-2")
+    metadata.record_action_event(first)
+    verified = ops_verify(
+        first.record,
+        observed_state=BatchState.COMPLETED,
+        expected=frozenset({BatchState.COMPLETED}),
+        outcome="Batch re-ran to COMPLETED; 9,992 rows loaded.",
+        now=NOW + timedelta(minutes=18),
+    )
+    metadata.record_action_event(ActionRecordRow("act-2", first.feed_id, verified))
+    row = metadata.get_action_record("act-2")
+    assert row.record.phase is ActionPhase.VERIFIED
+    assert row.record.is_complete is True
+    assert row.record.observed_state is BatchState.COMPLETED
+
+
+def test_a_refusal_is_a_row_too(metadata: MetadataDbPort) -> None:
+    """ "the system refuses, notifies a human, and RECORDS THE REFUSAL" — an
+    action declined at the gate must still be findable six weeks later."""
+    from cinqflow.core.operations.actions import (
+        ActionRequest,
+        Refusal,
+        RefusalReason,
+        refused_action,
+    )
+
+    request = ActionRequest(
+        action=OpsAction.RETRY, target="B-1244", actor=AUTHOR, reason="Just in case."
+    )
+    refusal = Refusal(
+        action=OpsAction.RETRY,
+        target="B-1244",
+        reason=RefusalReason.WRONG_STATE,
+        detail="B-1244 is completed — a completed batch is not retried, it is reprocessed.",
+    )
+    metadata.record_action_event(
+        ActionRecordRow("act-3", "fidelis-downstate-roster", refused_action(request, refusal))
+    )
+    row = metadata.get_action_record("act-3")
+    assert row.record.phase is ActionPhase.REFUSED
+    assert "not retried" in row.record.outcome
+
+
+def test_the_action_history_lists_current_phases_newest_first(
+    metadata: MetadataDbPort,
+) -> None:
+    first = _requested_retry("act-4")
+    metadata.record_action_event(first)
+    metadata.record_action_event(
+        ActionRecordRow(
+            "act-4",
+            first.feed_id,
+            ops_verify(
+                first.record,
+                observed_state=BatchState.FAILED,
+                expected=frozenset({BatchState.COMPLETED}),
+                outcome="Re-ran and failed again at Bronze.",
+                now=NOW + timedelta(minutes=5),
+            ),
+        )
+    )
+    metadata.record_action_event(_requested_retry("act-5", batch_id="B-9999"))
+
+    listed = metadata.list_action_records(batch_id="B-1244")
+    assert [row.record_id for row in listed] == ["act-4"]
+    assert listed[0].record.phase is ActionPhase.FAILED
+
+    # Newest CURRENT PHASE first: act-4's verification (NOW+5m) is newer than
+    # act-5's request (NOW), so the acted-on record leads.
+    everything = metadata.list_action_records()
+    assert [row.record_id for row in everything] == ["act-4", "act-5"]
+
+
+def test_an_unknown_action_record_is_a_missing_object(metadata: MetadataDbPort) -> None:
+    with pytest.raises(ObjectNotFoundError):
+        metadata.get_action_record("never-requested")
+
+
+def test_the_action_ledger_has_no_edit_path_for_anyone(metadata: MetadataDbPort) -> None:
+    """Append-only the same way the audit ledger is: by the ABSENCE of a verb,
+    not a permission that could be misconfigured."""
+    for forbidden in ("update_action_record", "delete_action_record", "clear_action_records"):
         assert not hasattr(metadata, forbidden), f"metadata_db exposes {forbidden}"
 
 

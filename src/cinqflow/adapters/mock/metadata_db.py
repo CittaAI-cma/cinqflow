@@ -12,6 +12,7 @@ from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry.suspension import Suspension, SuspensionEvent, current
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
+    ActionRecordRow,
     ConcurrentVersionError,
     FileProfileRecord,
     ObjectNotFoundError,
@@ -34,6 +35,7 @@ class MemMetadataDb:
         self._profiles: dict[tuple[str, str], FileProfileRecord] = {}
         self._proposals: dict[str, Proposal] = {}
         self._suspensions: list[SuspensionEvent] = []
+        self._action_events: list[ActionRecordRow] = []
 
     def save(self, obj: GovernedObject) -> GovernedObject:
         versions = self._objects.setdefault((obj.object_type, obj.object_id), [])
@@ -203,3 +205,31 @@ class MemMetadataDb:
     ) -> Sequence[SuspensionEvent]:
         found = [e for e in self._suspensions if feed_id is None or e.feed_id == feed_id]
         return tuple(sorted(found, key=lambda e: e.occurred_ts, reverse=True)[:limit])
+
+    # ── ops.action_record · CF-V2-E12-03 / E8-04 ─────────────────────────────
+    def record_action_event(self, row: ActionRecordRow) -> ActionRecordRow:
+        """Append-only, one row per phase — no removal path, like the audit
+        list and the suspension ledger."""
+        self._action_events.append(row)
+        return row
+
+    def get_action_record(self, record_id: str) -> ActionRecordRow:
+        phases = [row for row in self._action_events if row.record_id == record_id]
+        if not phases:
+            raise ObjectNotFoundError(f"action record {record_id} was never written")
+        return max(phases, key=lambda row: row.occurred_ts)
+
+    def list_action_records(
+        self, *, batch_id: str | None = None, feed_id: str | None = None, limit: int = 50
+    ) -> Sequence[ActionRecordRow]:
+        newest: dict[str, ActionRecordRow] = {}
+        for row in self._action_events:
+            if batch_id is not None and row.record.target != batch_id:
+                continue
+            if feed_id is not None and row.feed_id != feed_id:
+                continue
+            held = newest.get(row.record_id)
+            if held is None or row.occurred_ts >= held.occurred_ts:
+                newest[row.record_id] = row
+        current_rows = sorted(newest.values(), key=lambda row: row.occurred_ts, reverse=True)
+        return tuple(current_rows[:limit])

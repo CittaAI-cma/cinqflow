@@ -1968,8 +1968,14 @@ class PreviewOut(BaseModel):
 
 class ActionRecordOut(BaseModel):
     """`phase` is REQUESTED until somebody observed the outcome — 'retry
-    requested' is not 'retry succeeded'."""
+    requested' is not 'retry succeeded'.
 
+    `record_id` is the ledger address the screen polls
+    (`GET /api/operations/actions/{record_id}`) until a worker has re-read the
+    control tables and the phase moved.
+    """
+
+    record_id: str = ""
     action: str
     target: str
     actor_subject: str

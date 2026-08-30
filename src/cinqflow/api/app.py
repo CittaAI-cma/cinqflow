@@ -227,7 +227,12 @@ from cinqflow.ports.control_tables import (
     ControlTableError,
     ControlTablesPort,
 )
-from cinqflow.ports.metadata_db import FileProfileRecord, MetadataDbPort, ObjectNotFoundError
+from cinqflow.ports.metadata_db import (
+    ActionRecordRow,
+    FileProfileRecord,
+    MetadataDbPort,
+    ObjectNotFoundError,
+)
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.delivery import DeliveryOutcome, DeliveryWorker
 from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
@@ -2968,6 +2973,16 @@ def create_app(
                 now=now,
             )
         except ops_actions.RefusedError as refused:
+            # A refusal is a ROW in the ledger, not only an audit line — six
+            # weeks later, "why did nobody retry the batch that was failing
+            # all night" is answered from the same history as the retries.
+            metadata.record_action_event(
+                ActionRecordRow(
+                    record_id=str(uuid4()),
+                    feed_id=batch.feed_id,
+                    record=ops_actions.refused_action(request, refused.refusal, now=now),
+                )
+            )
             audit.record(
                 object_type=ObjectType.FEED,
                 object_id=batch.feed_id,
@@ -2978,6 +2993,9 @@ def create_app(
             raise HTTPException(status.HTTP_409_CONFLICT, refused.refusal.explain()) from None
 
         record = ops_actions.request_action(request, now=now)
+        row = metadata.record_action_event(
+            ActionRecordRow(record_id=str(uuid4()), feed_id=batch.feed_id, record=record)
+        )
         audit.record(
             object_type=ObjectType.FEED,
             object_id=batch.feed_id,
@@ -2985,7 +3003,53 @@ def create_app(
             actor=principal.as_actor(),
             detail=record.explain(),
         )
-        return _action_record_out(record)
+        return _action_record_out(record, record_id=row.record_id)
+
+    @app.get(
+        f"{API_PREFIX}/operations/actions/{{record_id}}",
+        response_model=ActionRecordOut,
+        tags=["operations"],
+    )
+    def action_record(
+        record_id: str,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> ActionRecordOut:
+        """CF-V2-E12-03 — the round trip the story is about.
+
+        The POST answered REQUESTED; this is where the screen polls until a
+        worker has re-read the control tables and the phase became VERIFIED or
+        FAILED. A record still REQUESTED here is rendered as exactly that —
+        never as a tick.
+        """
+        try:
+            row = metadata.get_action_record(record_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        if not principal.scopes.covers_feed(row.feed_id):
+            # The usual shape: out of scope must be indistinguishable from
+            # not found, or the denial leaks which records exist.
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        return _action_record_out(row.record, record_id=row.record_id)
+
+    @app.get(
+        f"{API_PREFIX}/operations/batches/{{batch_id}}/action-history",
+        response_model=list[ActionRecordOut],
+        tags=["operations"],
+    )
+    def action_history(
+        batch_id: str,
+        control: Control,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> list[ActionRecordOut]:
+        """Everything anyone did — or was refused — on this batch, newest
+        first. The monitor stays action-free; history is not an affordance."""
+        batch = _batch_or_404(control, batch_id, principal)
+        return [
+            _action_record_out(row.record, record_id=row.record_id)
+            for row in metadata.list_action_records(batch_id=batch.batch_id)
+        ]
 
     # ── CF-V2-E12-04 · fingerprinting and guide matching ─────────────────
 
@@ -5490,8 +5554,9 @@ def _preview_out(shown: ops_actions.Preview) -> PreviewOut:
     )
 
 
-def _action_record_out(record: ops_actions.ActionRecord) -> ActionRecordOut:
+def _action_record_out(record: ops_actions.ActionRecord, *, record_id: str = "") -> ActionRecordOut:
     return ActionRecordOut(
+        record_id=record_id,
         action=record.action.value,
         target=record.target,
         actor_subject=record.actor.subject,

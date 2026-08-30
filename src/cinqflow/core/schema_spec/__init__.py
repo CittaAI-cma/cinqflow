@@ -911,6 +911,48 @@ OPS_SCHEMA = Schema(
             check_constraints=("action IN ('paused', 'resumed')",),
             append_only=True,
         ),
+        Table(
+            name="action_record",
+            comment=(
+                "CF-V2-E12-03/E8-04 — one operations action, one row PER PHASE. The record "
+                "that came back from the POST used to vanish with the response, so 'I "
+                "clicked retry and nothing happened' was unanswerable and verify() had "
+                "nothing to re-read. APPEND-ONLY like the suspension ledger: a REQUESTED "
+                "row is never updated into a VERIFIED one — the second phase is a second "
+                "row, so 'what did this look like before somebody checked' is a fact the "
+                "ledger holds. The current phase is the newest row per record_id. REFUSED "
+                "actions are rows too — the refusals are exactly what a reviewer needs six "
+                "weeks later."
+            ),
+            columns=(
+                Column("event_id", TypeName.UUID, nullable=False),
+                Column("record_id", TypeName.STRING, nullable=False),
+                Column("batch_id", TypeName.STRING, nullable=False),
+                _FEED,
+                Column("action", TypeName.STRING, nullable=False),
+                Column("phase", TypeName.STRING, nullable=False),
+                Column("actor_subject", TypeName.STRING, nullable=False),
+                Column("actor_name", TypeName.STRING),
+                Column("reason", TypeName.STRING),
+                Column("approval_identifier", TypeName.STRING),
+                Column("outcome", TypeName.STRING),
+                # What the control tables said when somebody looked. NULL until
+                # then — which is a different fact from "the batch has no
+                # state", and the screen renders them differently.
+                Column("observed_state", TypeName.STRING),
+                Column("requested_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("verified_ts", TypeName.TIMESTAMP_UTC),
+                Column("occurred_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("event_id",),
+            indexes=(("record_id", "occurred_ts"), ("batch_id",), ("feed_id", "occurred_ts")),
+            check_constraints=(
+                "action IN ('acknowledge', 'assign', 'note', 'pause', 'resume', 'retry', "
+                "'restart_from_stage', 'reprocess_batch', 'reprocess_failed_only', 'backdate')",
+                "phase IN ('requested', 'verified', 'failed', 'refused')",
+            ),
+            append_only=True,
+        ),
     ),
     append_only=True,
 )
