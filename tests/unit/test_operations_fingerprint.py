@@ -28,6 +28,8 @@ from cinqflow.core.operations.fingerprint import (
     FingerprintError,
     GuideMatch,
     IncidentKind,
+    IncidentState,
+    IncidentTransitionError,
     Precision,
     PriorIncident,
     RecoveryGuide,
@@ -129,7 +131,7 @@ def test_batch_1244_reads_exactly_as_the_story_writes_it() -> None:
     assert incident.match.guide.guide_id == "BH-AF-002"
     assert incident.match.occurrences == 14
     assert incident.match.mean_fix_minutes == 18
-    assert "14 prior occurrence(s), mean fix 18 minutes" in incident.match.explain()
+    assert "14 prior occurrences, mean fix 18 minutes" in incident.match.explain()
 
     # A one-click proposed fix — pressed on the ACTION SURFACE, not here.
     assert incident.proposed_remedy is OpsAction.RETRY
@@ -510,3 +512,92 @@ def test_fingerprinting_a_noisy_batch_is_a_rounding_error_in_the_budget() -> Non
     elapsed = time.perf_counter() - started
     assert incident.match is not None
     assert elapsed < 2.0, f"fingerprinting took {elapsed:.2f}s of a 60s promise"
+
+
+# ── the operational machine, and the gate the knowledge loop asks ────────────
+def test_a_fresh_incident_is_open_and_teaches_nothing_yet() -> None:
+    incident = fingerprint_batch(
+        batch_id=BATCH, feed_id=FEED, errors=[error("root", BH_AF_002_MESSAGE)], now=NOW
+    )
+    assert incident.state is IncidentState.OPEN
+    assert not incident.embeddable
+    with pytest.raises(IncidentTransitionError, match="only closed narratives"):
+        incident.narrative()
+
+
+def test_an_incident_cannot_skip_from_open_to_closed() -> None:
+    """Closing an incident nobody resolved would embed an empty lesson."""
+    incident = fingerprint_batch(
+        batch_id=BATCH, feed_id=FEED, errors=[error("root", BH_AF_002_MESSAGE)], now=NOW
+    )
+    with pytest.raises(IncidentTransitionError, match="cannot go open -> closed"):
+        incident.close()
+
+
+def test_an_acknowledgement_names_a_person() -> None:
+    incident = fingerprint_batch(
+        batch_id=BATCH, feed_id=FEED, errors=[error("root", BH_AF_002_MESSAGE)], now=NOW
+    )
+    with pytest.raises(IncidentTransitionError, match="names a person"):
+        incident.acknowledge(by="   ")
+
+
+def test_a_resolution_that_says_nothing_is_refused() -> None:
+    """A resolution nobody wrote is a guide nobody can retrieve."""
+    incident = fingerprint_batch(
+        batch_id=BATCH, feed_id=FEED, errors=[error("root", BH_AF_002_MESSAGE)], now=NOW
+    )
+    with pytest.raises(IncidentTransitionError, match="teaches nothing"):
+        incident.resolve(resolution="  ", at=NOW)
+
+
+def test_only_a_closed_incident_becomes_knowledge() -> None:
+    """CF-V2-E16-07's don't, enforced a wave before its write side lands."""
+    opened = fingerprint_batch(
+        batch_id=BATCH, feed_id=FEED, errors=[error("root", BH_AF_002_MESSAGE)], now=NOW
+    )
+    resolved = opened.acknowledge(by="sam@cinqcare.test").resolve(
+        resolution="Re-ran validate_input; business_date restored.",
+        at=NOW + timedelta(minutes=18),
+    )
+    assert not resolved.embeddable
+
+    closed = resolved.close()
+    assert closed.embeddable
+    narrative = closed.narrative()
+    assert closed.signature in narrative
+    assert "business_date restored" in narrative
+    assert "Time to resolve: 18 minutes." in narrative
+
+
+def test_a_transition_returns_a_new_incident_and_leaves_the_old_one_alone() -> None:
+    """ "what did this look like when it was acknowledged" is a fact the ledger
+    can hold rather than a version somebody overwrote."""
+    opened = fingerprint_batch(
+        batch_id=BATCH, feed_id=FEED, errors=[error("root", BH_AF_002_MESSAGE)], now=NOW
+    )
+    acknowledged = opened.acknowledge(by="sam@cinqcare.test", assigned_to="ops-rota")
+
+    assert opened.state is IncidentState.OPEN
+    assert opened.acknowledged_by == ""
+    assert acknowledged.state is IncidentState.ACKNOWLEDGED
+    assert acknowledged.assigned_to == "ops-rota"
+    # The identity is unchanged: it is the same incident, later.
+    assert acknowledged.incident_id == opened.incident_id
+
+
+def test_the_narrative_carries_no_model_output() -> None:
+    """What makes the loop safe to run automatically: there is nothing in a
+    narrative that a model wrote."""
+    closed = (
+        fingerprint_batch(
+            batch_id=BATCH, feed_id=FEED, errors=[error("root", BH_AF_002_MESSAGE)], now=NOW
+        )
+        .resolve(resolution="Re-ran validate_input.", at=NOW)
+        .close()
+    )
+    narrative = closed.narrative()
+    # Every line traces to an error row, the cascade, or the human's own words.
+    assert "Re-ran validate_input." in narrative
+    assert closed.batch_id in narrative
+    assert closed.feed_id in narrative

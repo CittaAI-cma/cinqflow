@@ -60,7 +60,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum, unique
 
@@ -258,20 +258,30 @@ class GuideMatch:
         """Everything a reviewer can open. The guide, then the priors."""
         return (self.guide.citation, *(prior.citation for prior in self.priors))
 
-    def explain(self) -> str:
-        """The sentence the story writes for `BH-AF-002`, generalised."""
+    def summary(self) -> str:
+        """The story's own sentence, verbatim: '14 prior occurrences, mean fix
+        18 minutes'.
+
+        Singular and plural are handled rather than parenthesised, because '1
+        prior occurrence(s)' on an incident card reads as a machine nobody
+        proofread — and this is the line an operator sees at 3 AM, when their
+        confidence in the platform is being decided.
+        """
+        occurrence = "occurrence" if self.occurrences == 1 else "occurrences"
         mean = (
-            f", mean fix {self.mean_fix_minutes} minutes"
+            f"mean fix {self.mean_fix_minutes} minutes"
             if self.mean_fix_minutes is not None
-            else ", no fix duration recorded"
+            else "no fix duration recorded"
         )
+        stale = " · GUIDE MARKED STALE" if self.guide.stale else ""
+        return f"{self.occurrences} prior {occurrence}, {mean}{stale}"
+
+    def explain(self) -> str:
+        """The same sentence, with the guide named — for the incident header."""
         stale = (
             " (this guide's feed has retired — check it still applies)" if self.guide.stale else ""
         )
-        return (
-            f"{self.guide.guide_id} — {self.guide.title}. "
-            f"{self.occurrences} prior occurrence(s){mean}{stale}."
-        )
+        return f"{self.guide.guide_id} — {self.guide.title}. {self.summary()}.{stale}"
 
 
 # ── the incident ─────────────────────────────────────────────────────────────
@@ -286,6 +296,39 @@ class IncidentKind(StrEnum):
     @property
     def status_word(self) -> StatusWord:
         return StatusWord.NEEDS_ATTENTION
+
+
+@unique
+class IncidentState(StrEnum):
+    """AN INCIDENT IS NOT A GOVERNED OBJECT, and this machine is why it needs
+    its own.
+
+    ADR-0006's one lifecycle governs CONFIGURATION — things authored, reviewed
+    and published. An incident is an operational fact: it happened. Pushing it
+    through Draft → In Review → Approved would require somebody to approve that
+    a batch failed.
+
+    What DOES travel the governed lifecycle is the RUNBOOK an incident
+    produces, which is exactly why CF-V2-E16-07 says only CLOSED narratives
+    become knowledge: the incident closes, and a governed object begins.
+    """
+
+    OPEN = "open"
+    ACKNOWLEDGED = "acknowledged"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+
+
+_TRANSITIONS: dict[IncidentState, frozenset[IncidentState]] = {
+    IncidentState.OPEN: frozenset({IncidentState.ACKNOWLEDGED, IncidentState.RESOLVED}),
+    IncidentState.ACKNOWLEDGED: frozenset({IncidentState.RESOLVED}),
+    IncidentState.RESOLVED: frozenset({IncidentState.CLOSED}),
+    IncidentState.CLOSED: frozenset(),
+}
+
+
+class IncidentTransitionError(RuntimeError):
+    """A move the incident's state machine does not permit."""
 
 
 @dataclass(frozen=True)
@@ -306,6 +349,15 @@ class Incident:
     cascade: Cascade = field(default_factory=Cascade)
     signature: str = ""
     match: GuideMatch | None = None
+    #: The operational machine. Immutable like everything else here: a
+    #: transition returns a NEW incident, so "what did this look like when it
+    #: was acknowledged" is a fact the ledger can hold rather than a version
+    #: somebody overwrote.
+    state: IncidentState = IncidentState.OPEN
+    acknowledged_by: str = ""
+    assigned_to: str = ""
+    resolution: str = ""
+    resolved_ts: datetime | None = None
 
     @property
     def kind(self) -> IncidentKind:
@@ -389,6 +441,88 @@ class Incident:
             "below is everything the platform knows about it; when you resolve it, the "
             "resolution can be saved as a new draft guide."
         )
+
+    # ── the operational machine ──────────────────────────────────────────────
+    def _moved(self, target: IncidentState, **changes: object) -> Incident:
+        permitted = _TRANSITIONS[self.state]
+        if target not in permitted:
+            allowed = ", ".join(sorted(state.value for state in permitted)) or "nothing (terminal)"
+            raise IncidentTransitionError(
+                f"incident {self.incident_id} cannot go {self.state.value} -> {target.value}. "
+                f"Permitted: {allowed}."
+            )
+        return replace(self, state=target, **changes)  # type: ignore[arg-type]
+
+    def acknowledge(self, *, by: str, assigned_to: str = "") -> Incident:
+        if not by.strip():
+            raise IncidentTransitionError(
+                "an acknowledgement names a person, or it is not an acknowledgement"
+            )
+        return self._moved(
+            IncidentState.ACKNOWLEDGED,
+            acknowledged_by=by.strip(),
+            assigned_to=assigned_to.strip() or self.assigned_to,
+        )
+
+    def resolve(self, *, resolution: str, at: datetime) -> Incident:
+        """Resolution text is REQUIRED, and CF-V2-E16-07 starts here.
+
+        The narrative embedded on close is this string plus the evidence. A
+        resolution nobody wrote is a guide nobody can retrieve — which is why
+        the loop's median-lag measurement is taken from this moment.
+        """
+        if not resolution.strip():
+            raise IncidentTransitionError(
+                f"incident {self.incident_id} needs a resolution that says what was done. "
+                "It becomes the narrative the next matching incident retrieves, and an "
+                "empty one teaches nothing."
+            )
+        return self._moved(IncidentState.RESOLVED, resolution=resolution.strip(), resolved_ts=at)
+
+    def close(self) -> Incident:
+        """Closing is what makes the narrative embeddable.
+
+        "Embed an unresolved incident's speculation — only closed
+         narratives become knowledge."
+        — CF-V2-E16-07's don't
+        """
+        return self._moved(IncidentState.CLOSED)
+
+    def duration(self) -> timedelta | None:
+        return None if self.resolved_ts is None else self.resolved_ts - self.opened_ts
+
+    @property
+    def embeddable(self) -> bool:
+        """The gate CF-V2-E16-07's write side asks before it embeds anything."""
+        return self.state is IncidentState.CLOSED and bool(self.resolution)
+
+    def narrative(self) -> str:
+        """The chunk the knowledge loop embeds.
+
+        FACTS AND THE HUMAN'S RESOLUTION — never a model's speculation, which
+        is not stored on the incident at all. That is what makes the loop safe
+        to run automatically: there is nothing here a model wrote.
+        """
+        if not self.embeddable:
+            raise IncidentTransitionError(
+                f"incident {self.incident_id} is {self.state.value} — only closed narratives "
+                "become knowledge"
+            )
+        root = self.root_cause
+        took = self.duration()
+        lines = [
+            f"# Incident {self.incident_id} · feed {self.feed_id} · batch {self.batch_id}",
+            f"Signature: {self.signature}",
+        ]
+        if root is not None:
+            lines.append(
+                f"Root cause ({root.category.value} at {root.stage.value}): {root.message}"
+            )
+        lines.append(self.cascade.explain())
+        lines.append(f"Resolution: {self.resolution}")
+        if took is not None:
+            lines.append(f"Time to resolve: {int(took.total_seconds() // 60)} minutes.")
+        return "\n".join(lines)
 
 
 def _incident_id(batch_id: str, signature: str) -> str:
