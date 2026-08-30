@@ -17,6 +17,20 @@ const config: NextConfig = {
   env: {
     CINQFLOW_API: process.env.CINQFLOW_API ?? "http://127.0.0.1:8000",
   },
+  // `deliverFile` (app/data/intake/deliver/actions.ts) posts the raw file
+  // straight to this Server Action, and Next enforces its OWN transport-level
+  // cap here BEFORE the platform ever sees the bytes — a 1 MB default that has
+  // nothing to do with `core.landing._size_bounds`, the feed's real,
+  // per-feed-configured limit (30 MB for the Fidelis golden feed). Real
+  // enrollment/claims rosters routinely run tens of MB; left at the default,
+  // Next silently refuses a delivery the platform's own rule would have
+  // accepted, which is exactly the "browser judges bytes the platform never
+  // saw" case `deliverFile`'s docstring says cannot happen.
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "100mb",
+    },
+  },
 };
 
 export default config;
