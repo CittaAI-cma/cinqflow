@@ -45,6 +45,15 @@ class Action(StrEnum):
     APPROVE = "approve"
     PUBLISH = "publish"
     RETIRE = "retire"
+    #: CF-V1-E7-03. Configuring an APPROVED rule's layer, consequence,
+    #: threshold and effective dates.
+    #:
+    #: Its own action rather than `EDIT_FEED`, because it is neither authoring
+    #: nor approving and the steward who does it holds neither. Granting a
+    #: steward `EDIT_FEED` so that they could set a threshold would also let
+    #: them rewrite the mapping they are meant to be reviewing, which is the
+    #: segregation this matrix exists to keep.
+    CONFIGURE_RULE_POLICY = "configure_rule_policy"
     RUN_PIPELINE = "run_pipeline"
     RETRY_BATCH = "retry_batch"
     MANAGE_USERS = "manage_users"
@@ -75,6 +84,7 @@ _PERMITTED: dict[Role, frozenset[Action]] = {
             Action.SUBMIT_FOR_REVIEW,
             Action.RUN_PIPELINE,
             Action.RETRY_BATCH,
+            Action.CONFIGURE_RULE_POLICY,
         }
     ),
     # Plate 14's `platform_engineer` — the technical approver, and a DIFFERENT
@@ -92,10 +102,21 @@ _PERMITTED: dict[Role, frozenset[Action]] = {
             Action.CREATE_FEED,
             Action.EDIT_FEED,
             Action.SUBMIT_FOR_REVIEW,
+            Action.CONFIGURE_RULE_POLICY,
         }
     ),
     Role.DATA_STEWARD: frozenset(
-        {Action.VIEW, Action.ASK_AGENT, Action.APPROVE, Action.PUBLISH, Action.RETIRE}
+        {
+            Action.VIEW,
+            Action.ASK_AGENT,
+            Action.APPROVE,
+            Action.PUBLISH,
+            Action.RETIRE,
+            # CF-V1-E7-03: the steward decides what a failing row costs. Note
+            # what this still does not admit — the steward cannot author the
+            # rule whose consequence they are setting.
+            Action.CONFIGURE_RULE_POLICY,
+        }
     ),
     Role.BUSINESS_APPROVER: frozenset(
         {Action.VIEW, Action.ASK_AGENT, Action.APPROVE, Action.PUBLISH}
