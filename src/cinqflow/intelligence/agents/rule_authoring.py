@@ -54,6 +54,7 @@ from cinqflow.core.rules import (
     RuleSpec,
     rule_to_dict,
 )
+from cinqflow.core.rules.preview import evidence_pack, preview_all
 from cinqflow.intelligence.gateway import LlmGateway, ManualPathRequiredError
 from cinqflow.ports.metadata_db import MetadataDbPort
 
@@ -148,9 +149,23 @@ class RuleAuthoringAgent:
         glossary: Glossary,
         caller: Actor,
         published: tuple[RuleSpec, ...] = (),
+        sample: tuple[dict[str, Any], ...] | None = None,
         run_id: str | None = None,
         now: datetime | None = None,
     ) -> AuthoringResult:
+        """Sentences in, one `proposals.proposal` row out — with its EVIDENCE.
+
+        `sample` is CF-V1-E7-02's rows, passed as DATA by the caller rather
+        than read here: reading a file is a pin, and this agent holds a gateway
+        and a store and nothing else. The preview is folded into the payload
+        BEFORE the proposal is created, because `record_proposal` deliberately
+        never rewrites a payload — evidence attached afterwards would be
+        evidence that never persisted.
+
+        Omitted, the rules are still written and the payload says the preview
+        did not run. A feed whose sample has not been profiled yet is exactly
+        the feed a BA is still setting up.
+        """
         run = run_id or str(uuid.uuid4())
         stamp = now or datetime.now(UTC)
 
@@ -178,6 +193,7 @@ class RuleAuthoringAgent:
                     "records": [r.as_record() for r in rules] + [r.as_record() for r in review],
                     "refusals": list(refusals),
                     "needs_technical_review": [r.stated for r in review],
+                    "preview": _preview_evidence(tuple(a.rule for a in rules), sample, contract),
                 },
                 created_by=AGENT_ACTOR,
                 created_ts=stamp,
@@ -473,6 +489,37 @@ class RuleAuthoringAgent:
                 detail=detail,
             )
         )
+
+
+def _preview_evidence(
+    specs: tuple[RuleSpec, ...],
+    sample: tuple[dict[str, Any], ...] | None,
+    contract: SchemaContract,
+) -> dict[str, Any]:
+    """CF-V1-E7-02's evidence, computed here so it is stored with the rules.
+
+    "Trust is built in the preview, not the prose." A proposal that arrived
+    without counts is a proposal reviewed on its description — and "member
+    first name must be populated" is agreeable on any screen whether it fails
+    nothing or forty per cent of the roster.
+
+    The masking is `core.rules.preview`'s, which reads the CONTRACT's PHI
+    flags. No unmasked value enters this payload, and a test asserts it over
+    the serialised form rather than the object.
+    """
+    if not specs:
+        return {"sample_rows": 0, "rules_previewed": 0, "previews": []}
+    if sample is None:
+        return {
+            "sample_rows": 0,
+            "rules_previewed": 0,
+            "previews": [],
+            "not_previewed_because": (
+                "no profiled sample was supplied, so the rules are written but untested. "
+                "Profile a delivery and re-run to see what they catch."
+            ),
+        }
+    return evidence_pack(preview_all(specs, sample, contract=contract), sample_rows=len(sample))
 
 
 def _dimension(answer: dict[str, Any]) -> Dimension:

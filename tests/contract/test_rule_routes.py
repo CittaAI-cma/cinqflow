@@ -287,3 +287,73 @@ def test_previewing_a_feed_with_no_rules_says_so(client: TestClient) -> None:
     )
     assert missing.status_code == 404
     assert "no rules yet" in missing.text
+
+
+# ── the preview is SAVED AS EVIDENCE, with the proposal · CF-V1-E7-02 ───────
+
+
+def test_the_proposal_carries_the_preview_it_was_written_against(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    """ "saved as evidence" — and saved WITH the proposal rather than left to a
+    second call somebody might not make. A proposal reviewed on its prose is
+    the failure this story names."""
+    proposal_id = client.post(
+        f"/api/feeds/{FEED}/author-rules",
+        json={"stated": ["Member first name must be populated for all active members"]},
+        headers=_as(BA),
+    ).json()["proposal_id"]
+
+    stored = store.get_proposal(proposal_id)
+    evidence = stored.payload["preview"]
+
+    assert evidence["sample_rows"] == 3
+    assert evidence["rules_previewed"] == 1
+    assert evidence["previews"][0]["tested"] == 3
+    assert evidence["previews"][0]["failed"] == 1
+
+
+def test_the_stored_evidence_carries_no_unmasked_value(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    """THE PROPERTY, asserted over what is actually PERSISTED — a proposal
+    payload lives as long as the proposal, and this is the copy that outlives
+    the request."""
+    proposal_id = client.post(
+        f"/api/feeds/{FEED}/author-rules",
+        json={"stated": ["Member first name must be populated for all active members"]},
+        headers=_as(BA),
+    ).json()["proposal_id"]
+
+    rendered = repr(store.get_proposal(proposal_id).payload)
+    for protected in ("Ada", "Grace", "MBR000001", "MBR000003"):
+        assert protected not in rendered, f"{protected} was persisted unmasked"
+    assert MASKED in rendered
+
+
+def test_a_feed_with_no_sample_still_gets_its_rules_and_says_why(
+    store: MemMetadataDb,
+) -> None:
+    """BEST EFFORT on the authoring path. A feed whose sample has not been
+    profiled yet is exactly the feed a BA is still setting up — refusing the
+    whole proposal because a file is missing would make the agent useless
+    there."""
+    bare = MemMetadataDb()
+    author = Actor(subject=BA, actor_type=ActorType.HUMAN)
+    for template in TEMPLATES:
+        bare.save(_published(template.as_governed(author=author, now=NOW)))
+    bare.save(contract_as_governed(CONTRACT, author=author))
+
+    app = create_app(authn=StaticAuthn(), metadata_db=bare, rule_authoring_factory=_agent)
+    with TestClient(app) as client:
+        body = client.post(
+            f"/api/feeds/{FEED}/author-rules",
+            json={"stated": ["Member first name must be populated for all active members"]},
+            headers=_as(BA),
+        )
+
+    assert body.status_code == 200, body.text
+    assert body.json()["rules"][0]["sql"], "the rule was still written"
+    evidence = bare.get_proposal(body.json()["proposal_id"]).payload["preview"]
+    assert evidence["previews"] == []
+    assert "not_previewed_because" in evidence

@@ -161,3 +161,72 @@ def test_a_rule_set_round_trips_through_its_row(plane: object) -> None:
     assert stored.object_type is ObjectType.DQ_RULE
     assert rules_from_governed(stored) == rules
     assert stored.body["glossary_ids"] == ["BG-002"]
+
+
+# ── CF-V1-E7-02 · the evidence, on the row that actually stores it ──────────
+
+
+def test_the_preview_evidence_survives_the_proposal_row(plane: object) -> None:
+    """The masked rows and the counts are JSONB inside a JSONB — and this is the
+    copy that outlives the request, so it is the copy worth proving.
+
+    `record_proposal` never rewrites `payload`, which is why the evidence is
+    folded in before the proposal is created rather than attached afterwards.
+    This asserts the consequence: what was written is what comes back.
+    """
+    from cinqflow.core.citations import CitationId, CitationKind
+    from cinqflow.core.model.vocabulary import RiskClass
+    from cinqflow.core.proposals import Proposal, submit
+    from cinqflow.core.registry.contract import ContractColumn, SchemaContract
+    from cinqflow.core.rules.preview import MASKED, evidence_pack, preview_all
+    from cinqflow.core.schema_spec import TypeName
+
+    contract = SchemaContract(
+        feed_id=FEED,
+        version=3,
+        columns=(
+            ContractColumn("first_name", TypeName.STRING, is_phi=True),
+            ContractColumn("line_of_business", TypeName.STRING),
+        ),
+    )
+    rules = (
+        RuleSpec(
+            rule_id="DQ-002",
+            name="Member First Name Not Null",
+            stated="Member first name must be populated for all active members",
+            check=Check(kind=CheckKind.NOT_NULL, column="first_name"),
+            dimension=Dimension.COMPLETENESS,
+            proposed_severity=Severity.HIGH,
+        ),
+    )
+    rows = (
+        {"first_name": "Ada", "line_of_business": "MEDICAID"},
+        {"first_name": "", "line_of_business": "MEDICARE"},
+    )
+    evidence = evidence_pack(preview_all(rules, rows, contract=contract), sample_rows=len(rows))
+
+    store = PostgresMetadataDb(plane)  # type: ignore[arg-type]
+    stored = store.record_proposal(
+        submit(
+            Proposal(
+                proposal_id="22222222-2222-4222-8222-222222222222",
+                agent="rule-authoring",
+                capability="propose_dq_rule",
+                risk_class=RiskClass.R2,
+                run_id="run-e702",
+                feed_id=FEED,
+                payload={"key": "stated", "records": [], "preview": evidence},
+                created_by=Actor(
+                    subject="rule-authoring", actor_type=ActorType.AI, display_name="Rules"
+                ),
+                created_ts=NOW,
+                grounding_citations=(CitationId(kind=CitationKind.RULE, subject="DQ-002"),),
+            ),
+            now=NOW,
+        )
+    )
+
+    back = store.get_proposal(stored.proposal_id).payload["preview"]
+    assert back == evidence
+    assert back["previews"][0]["failing_rows"][0]["values"]["first_name"] == MASKED
+    assert "Ada" not in repr(back), "an unmasked value survived into the stored row"

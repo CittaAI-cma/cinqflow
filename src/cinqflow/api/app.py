@@ -1509,7 +1509,21 @@ def create_app(
             glossary=_glossary_of(metadata),
             caller=principal.as_actor(),
             published=_published_rules(metadata, feed_id),
+            # CF-V1-E7-02 · the rows the preview runs over. Read HERE because
+            # reading a file is a pin, and passed as data so the agent stays a
+            # gateway and a store. Best effort: a feed with no profiled sample
+            # yet still gets its rules written, and the payload says why the
+            # counts are missing.
+            sample=_sample_rows_or_none(
+                metadata, request.app.state.storage, feed_id, body.profile_id
+            ),
         )
+        # CF-V1-E7-02 · SAVED AS EVIDENCE, and saved HERE rather than left to a
+        # second call somebody might not make. The counts are what makes a rule
+        # reviewable, and a proposal that arrived without them would be a
+        # proposal reviewed on its prose — which is the failure the story
+        # names. Attached to the proposal so it travels to the approver with
+        # the rule it is evidence about.
         audit.record(
             object_type=ObjectType.DQ_RULE,
             object_id=feed_id,
@@ -3066,6 +3080,28 @@ def _sample_rows(
         encoding=record.profile.structure.encoding,
     )
     return tuple(parsed.table.to_pylist())
+
+
+def _sample_rows_or_none(
+    metadata: MetadataDbPort,
+    storage: StoragePort | None,
+    feed_id: str,
+    profile_id: str | None,
+) -> tuple[dict[str, Any], ...] | None:
+    """The sample, or None when there is not one.
+
+    BEST EFFORT on the authoring path, deliberately. A feed with no profiled
+    delivery yet — or one whose sample has moved out of landing — still
+    produces usable rules, and the proposal says why the counts are missing.
+    Refusing the whole proposal because a file moved would make the agent
+    useless on exactly the feeds a BA is still setting up.
+
+    The PREVIEW route raises instead, because there the sample IS the request.
+    """
+    try:
+        return _sample_rows(metadata, storage, feed_id, profile_id)
+    except HTTPException:
+        return None
 
 
 def _preview_pack_out(
