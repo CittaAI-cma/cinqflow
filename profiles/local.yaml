@@ -77,6 +77,9 @@ agents:
   pipeline_insight:
     risk_class: R0                            # observe — always allowed, audited
     tool_whitelist: read_only                 # NO write tool, at any confidence, in any environment
+  fingerprint_match:
+    risk_class: R2                            # proposes a draft runbook; a human approves — never applies one
+    tool_whitelist: read_only                 # NO write tool, at any confidence, in any environment
 
 # CF-V2-E12-05 / ADR-0015 — the reliability score's configuration. The
 # weighting is configurable, and configurable means per-environment, which

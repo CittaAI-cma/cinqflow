@@ -47,6 +47,9 @@ agents:
   pipeline_insight:
     risk_class: R0
     tool_whitelist: read_only
+  fingerprint_match:
+    risk_class: R2
+    tool_whitelist: read_only
 
 assertions:
   cost_caps_enforced: true       # a prompt change that doubles spend fails CI like a broken unit test
