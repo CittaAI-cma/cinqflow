@@ -231,6 +231,7 @@ from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent, Recall
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
 from cinqflow.intelligence.agents.rule_authoring import RuleAuthoringAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
+from cinqflow.intelligence.gateway import EmbeddingFailedError
 from cinqflow.intelligence.tools import ToolContext, ToolResult, all_dq_rule_entries, invoke
 from cinqflow.ports.authn import AuthnPort, Principal
 from cinqflow.ports.connector import (
@@ -2683,6 +2684,14 @@ def create_app(
         the MAPPING/DQ_RULE ones on `approve_object`, and for the atomic
         supersede this triggers when the guide_id has a prior published
         version.
+
+        CF-V1-W1-28: the transition above is ALREADY DURABLE by the time the
+        embed runs — `_embed_published_runbook` catches its own
+        `EmbeddingFailedError` rather than letting it reach here, so a
+        publish this route already committed never turns into a 500 the
+        caller cannot safely retry (`lifecycle.publish` refuses a non-
+        Approved object, and Published is exactly that). Its warning, if
+        any, rides on `result` rather than being swallowed.
         """
         result = _governance_act(
             "publish",
@@ -2696,9 +2705,11 @@ def create_app(
             ),
         )
         if object_type is ObjectType.RUNBOOK:
-            _embed_published_runbook(
-                metadata, object_id, principal, app.state.knowledge_ingest_factory
+            warning = _embed_published_runbook(
+                metadata, object_id, principal, app.state.knowledge_ingest_factory, audit
             )
+            if warning is not None:
+                result = result.model_copy(update={"warnings": [warning]})
         return result
 
     @app.post(
@@ -3259,15 +3270,37 @@ def create_app(
         # so a second close attempt never reaches this line at all — the
         # pipeline fires AT MOST once per incident, structurally, not by a
         # guard added here.
+        #
+        # CF-V1-W1-28: `record_incident_event`/`audit.record` above have
+        # ALREADY made the CLOSED transition durable — `Incident.close()` is
+        # one-way, so there is no legal retry of THIS call if the embed below
+        # throws uncaught. `EmbeddingFailedError` (the one type
+        # `LlmGateway.embed` raises for a budget refusal or transport
+        # failure) is therefore caught here, audited the same way
+        # `_governance_act` audits a caught refusal, and turned into a
+        # warning on the response instead of an unhandled 500 that would
+        # lie about whether the close took. Anything else is a real bug and
+        # still surfaces.
+        warning: str | None = None
         if moved.embeddable:
             factory: KnowledgeIngestFactory | None = app.state.knowledge_ingest_factory
             if factory is not None:
-                factory(metadata).ingest_incident(
-                    moved,
-                    run_id=f"knowledge-incident-{incident_id}-{uuid4().hex[:8]}",
-                    caller=principal.as_actor(),
-                )
-        return _incident_out(moved)
+                try:
+                    factory(metadata).ingest_incident(
+                        moved,
+                        run_id=f"knowledge-incident-{incident_id}-{uuid4().hex[:8]}",
+                        caller=principal.as_actor(),
+                    )
+                except EmbeddingFailedError as failure:
+                    warning = f"embed-on-close failed: {failure}"
+                    audit.record(
+                        object_type=ObjectType.FEED,
+                        object_id=held.feed_id,
+                        action="embed_failed:incident_close",
+                        actor=principal.as_actor(),
+                        detail=f"{incident_id}: {warning}",
+                    )
+        return _incident_out(moved, warnings=(warning,) if warning is not None else ())
 
     @app.post(
         f"{API_PREFIX}/operations/incidents/{{incident_id}}/acknowledge",
@@ -4542,7 +4575,8 @@ def _embed_published_runbook(
     object_id: str,
     principal: Principal,
     factory: KnowledgeIngestFactory | None,
-) -> None:
+    audit: AuditLog,
+) -> str | None:
     """CF-V1-W1-26 · CF-V1-E16-07 — a runbook publish is what makes its steps
     knowledge (ADR-0007: "Only Published governed objects embed").
 
@@ -4564,17 +4598,44 @@ def _embed_published_runbook(
     turns this into ONE `VectorPort.supersede` call rather than a plain
     `index()` that would leave the prior version's chunks stranded under
     their own (different) content-addressed ids forever.
+
+    CF-V1-W1-28: the paragraph above said the publish "already succeeded"
+    while the code let a bare `EmbeddingFailedError` — `LlmGateway.embed`'s
+    own type for a budget refusal or a transport failure, see its docstring —
+    reach ASGI and turn into an unhandled 500. By then `metadata.get` above
+    already reads back `lifecycle_state="published"`, so the 500 was a LIE
+    about what happened and a TRAP for whoever retried it: `lifecycle.publish`
+    only accepts an Approved object, and this one no longer is. Caught here,
+    audited (`action="embed_failed:publish"`, mirroring `_governance_act`'s
+    own `refused:{act}` audit-on-catch pattern), and returned as a warning
+    string for `publish_object` to carry on the response — never hidden, and
+    never allowed to make a durable success look like a failure at the door.
+    Anything OTHER than `EmbeddingFailedError` is a real bug in the embed path
+    and is left to propagate; only the documented degrade mode degrades.
     """
     if factory is None:
-        return
+        return None
     published = metadata.get(ObjectType.RUNBOOK, object_id)
     prior = _prior_published_version(metadata, object_id, before=published.version)
-    factory(metadata).ingest_runbook(
-        published,
-        run_id=f"knowledge-runbook-{object_id}-v{published.version}-{uuid4().hex[:8]}",
-        caller=principal.as_actor(),
-        supersedes=prior,
-    )
+    try:
+        factory(metadata).ingest_runbook(
+            published,
+            run_id=f"knowledge-runbook-{object_id}-v{published.version}-{uuid4().hex[:8]}",
+            caller=principal.as_actor(),
+            supersedes=prior,
+        )
+    except EmbeddingFailedError as failure:
+        detail = f"embed-on-publish failed: {failure}"
+        audit.record(
+            object_type=ObjectType.RUNBOOK,
+            object_id=object_id,
+            version=published.version,
+            action="embed_failed:publish",
+            actor=principal.as_actor(),
+            detail=detail,
+        )
+        return detail
+    return None
 
 
 def _prior_published_version(
@@ -6555,7 +6616,14 @@ def _incident_for(
     return fingerprinting.hydrate(incident, held)
 
 
-def _incident_out(incident: fingerprinting.Incident) -> IncidentOut:
+def _incident_out(
+    incident: fingerprinting.Incident, *, warnings: tuple[str, ...] = ()
+) -> IncidentOut:
+    """`warnings` (CF-V1-W1-28) is CloneOut's own pattern: "unapproved
+    inherited parts marked" there, "the knowledge-embed side effect did not
+    happen" here — a fact a steward should know that is not part of the
+    incident's own state, so it does not belong mixed into `resolution` or
+    any other substantive field."""
     match = incident.match
     return IncidentOut(
         incident_id=incident.incident_id,
@@ -6604,6 +6672,7 @@ def _incident_out(incident: fingerprinting.Incident) -> IncidentOut:
         explanation=incident.explain(),
         citation=str(incident.citation),
         route=incident.citation.route,
+        warnings=list(warnings),
     )
 
 

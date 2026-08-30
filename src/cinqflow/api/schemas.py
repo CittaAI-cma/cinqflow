@@ -263,7 +263,17 @@ class ContractOut(BaseModel):
 class GovernedOut(BaseModel):
     """Any governed object, as the lifecycle sees it — one shape for all ten
     types, because there is one state machine (ADR-0006). Type-specific detail
-    stays in `body`; everything governance needs is a first-class field."""
+    stays in `body`; everything governance needs is a first-class field.
+
+    `warnings` (CF-V1-W1-28) is `CloneOut`'s own pattern, reused rather than
+    reinvented: a fact a caller should know about a side effect of this act
+    that is NOT part of the object itself — RUNBOOK publish's knowledge-embed
+    step failing to run is the first tenant. `body` is the object's own
+    persisted content and is the wrong place for that: stuffing an ephemeral
+    operational note into it would make a client reading `body` believe the
+    note was part of the runbook. Empty for every act that has no such side
+    effect, which today is every act but a RUNBOOK publish.
+    """
 
     object_type: str
     object_id: str
@@ -277,6 +287,7 @@ class GovernedOut(BaseModel):
     approved_by_name: str | None = None
     approved_ts: datetime | None = None
     body: dict[str, Any] = {}
+    warnings: list[str] = Field(default_factory=list)
 
 
 class CanonicalFieldOut(BaseModel):
@@ -2218,3 +2229,9 @@ class IncidentOut(BaseModel):
     explanation: str = ""
     citation: str = ""
     route: str = ""
+    #: CF-V1-W1-28, `GovernedOut.warnings`'s sibling: non-empty only when a
+    #: close's knowledge-embed side effect (`.embeddable`) was attempted and
+    #: failed the documented way. The incident's own state above is
+    #: unaffected either way — this says only that its narrative is not yet
+    #: retrievable as a citation.
+    warnings: list[str] = Field(default_factory=list)

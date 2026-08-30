@@ -16,7 +16,7 @@ calling it.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -190,3 +190,100 @@ def test_a_guides_first_publish_has_nothing_to_supersede(
     response = client.post("/api/objects/runbook/RB-300/publish", headers=_as(STEWARD))
     assert response.status_code == 200, response.text
     assert vector.count() == 1
+
+
+# ── CF-V1-W1-28 · a publish that already succeeded does not fail at the door ─
+
+
+def _exhausted_budget_factory(
+    vector: ListVector,
+) -> Callable[[MemMetadataDb], KnowledgeIngestWorker]:
+    """The adversarial review's own repro: a budget too small for the embed
+    call to ever clear `Budget.check`. `per_run_usd` sits below the gateway's
+    default `estimate_usd` (`$0.01`), so `LlmGateway.embed` raises
+    `EmbeddingFailedError` before any text reaches `ScriptedLlm` — the
+    DOCUMENTED "endpoint unreachable/budget ran out" failure mode, not a
+    stand-in for it."""
+
+    def factory(metadata: MemMetadataDb) -> KnowledgeIngestWorker:
+        gateway = LlmGateway(
+            llm=ScriptedLlm(),
+            phi_scrub=PatternPhiScrub(),
+            metadata_db=metadata,
+            observability=NoopObservability(),
+            budget=Budget(per_run_usd=Decimal("0.001"), per_agent_per_day_usd=Decimal("0.001")),
+            routing=Routing(small="small-model", large="large-model"),
+            clock=lambda: NOW,
+        )
+        return KnowledgeIngestWorker(
+            phi_scrub=PatternPhiScrub(),
+            llm=gateway,
+            vector=vector,
+            metadata=metadata,
+            clock=lambda: NOW,
+        )
+
+    return factory
+
+
+def test_publish_survives_an_embed_failure_and_records_it(
+    store: MemMetadataDb, vector: ListVector
+) -> None:
+    """The exact bug an adversarial review proved: `_governance_act` already
+    persisted Approved -> Published (`metadata.record_transition`) BEFORE
+    `_embed_published_runbook` ever runs, and a retry of `publish` is illegal
+    from Published — `lifecycle.publish` only accepts an Approved object. An
+    unhandled 500 here would tell the caller the action failed while the
+    store already disagrees. The route must return 200, the transition must
+    genuinely have landed, the embed must genuinely not have happened, and
+    the failure must be auditable — never merely swallowed."""
+    store.save(_approved_runbook("RB-500", 1, ["Step one."]))
+    app = create_app(
+        authn=StaticAuthn(),
+        metadata_db=store,
+        knowledge_ingest_factory=_exhausted_budget_factory(vector),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/objects/runbook/RB-500/publish", headers=_as(STEWARD))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["lifecycle_state"] == "published"
+    assert vector.count() == 0, "the embed genuinely did not happen"
+    assert body["warnings"], "a steward must be told the guide is not retrievable yet"
+    assert "embed-on-publish failed" in body["warnings"][0]
+
+    # Durable on a fresh read too, and a retry of publish is correctly illegal
+    # from here — proving the transition really landed, not just the response.
+    stored = store.get(ObjectType.RUNBOOK, "RB-500")
+    assert stored.lifecycle_state is LifecycleState.PUBLISHED
+
+    audited = [
+        entry
+        for entry in store.read_audit(object_id="RB-500")
+        if entry.action == "embed_failed:publish"
+    ]
+    assert len(audited) == 1, "the failure must be auditable, not merely swallowed"
+    assert "embed-on-publish failed" in audited[0].detail
+
+
+def test_a_genuine_bug_in_the_runbook_embed_path_still_surfaces(store: MemMetadataDb) -> None:
+    """The inverse regression: W1-28 catches `EmbeddingFailedError`
+    specifically, never a bare `Exception`. A real programming error inside
+    the embed path — anything that is NOT the documented budget/transport
+    degrade — must still be loud, or the fix would have traded an honest
+    crash for a silent lie about whether the guide is retrievable."""
+    store.save(_approved_runbook("RB-501", 1, ["Step one."]))
+
+    class _ExplodingWorker:
+        def ingest_runbook(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("not a budget problem, not a transport problem")
+
+    app = create_app(
+        authn=StaticAuthn(),
+        metadata_db=store,
+        knowledge_ingest_factory=lambda metadata: _ExplodingWorker(),  # type: ignore[arg-type,return-value]
+    )
+    with TestClient(app) as client, pytest.raises(RuntimeError, match="not a budget problem"):
+        client.post("/api/objects/runbook/RB-501/publish", headers=_as(STEWARD))

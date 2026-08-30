@@ -177,6 +177,38 @@ def _knowledge_ingest_factory(
     return factory
 
 
+def _broken_knowledge_ingest_factory(
+    vector: ListVector,
+) -> Callable[[MemMetadataDb], KnowledgeIngestWorker]:
+    """CF-V1-W1-28's own repro: a budget too small for the embed call to ever
+    clear `Budget.check` — the same "endpoint unreachable/budget ran out"
+    shape the adversarial review actually reproduced, not a stand-in for it.
+    `per_run_usd` sits below the gateway's own default `estimate_usd`
+    (`$0.01`), so `LlmGateway.embed` raises `EmbeddingFailedError` before any
+    text ever reaches `ScriptedLlm` — proving the route survives the
+    DOCUMENTED failure mode, not merely a mocked one."""
+
+    def factory(metadata: MemMetadataDb) -> KnowledgeIngestWorker:
+        gateway = LlmGateway(
+            llm=ScriptedLlm(),
+            phi_scrub=PatternPhiScrub(),
+            metadata_db=metadata,
+            observability=NoopObservability(),
+            budget=Budget(per_run_usd=Decimal("0.001"), per_agent_per_day_usd=Decimal("0.001")),
+            routing=Routing(small="small-model", large="large-model"),
+            clock=lambda: NOW,
+        )
+        return KnowledgeIngestWorker(
+            phi_scrub=PatternPhiScrub(),
+            llm=gateway,
+            vector=vector,
+            metadata=metadata,
+            clock=lambda: NOW,
+        )
+
+    return factory
+
+
 @pytest.fixture
 def client_with_knowledge(
     store: MemMetadataDb, control: MemStoreControlTables, vector: ListVector
@@ -191,6 +223,24 @@ def client_with_knowledge(
         metadata_db=store,
         control_tables=control,
         knowledge_ingest_factory=_knowledge_ingest_factory(vector),
+    )
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def client_with_broken_knowledge(
+    store: MemMetadataDb, control: MemStoreControlTables, vector: ListVector
+) -> Iterator[TestClient]:
+    """CF-V1-W1-28 — the knowledge pin is fitted but starved: every embed
+    call it makes is refused before it reaches the transport. Proves closing
+    an incident is unaffected by the SAME failure mode `client_with_knowledge`
+    proves the happy path for."""
+    app = create_app(
+        authn=StaticAuthn(),
+        metadata_db=store,
+        control_tables=control,
+        knowledge_ingest_factory=_broken_knowledge_ingest_factory(vector),
     )
     with TestClient(app) as test_client:
         yield test_client
@@ -634,6 +684,89 @@ def test_closing_an_incident_embeds_its_narrative_exactly_once(
     )
     assert second_close.status_code == 409
     assert vector.count() == 1, "a second close attempt cannot double-fire the embed"
+
+
+def test_closing_an_incident_survives_an_embed_failure_and_records_it(
+    client_with_broken_knowledge: TestClient,
+    control: MemStoreControlTables,
+    store: MemMetadataDb,
+    vector: ListVector,
+) -> None:
+    """CF-V1-W1-28's own repro, reproduced as a permanent regression: the
+    CLOSED transition (`metadata.record_incident_event`/`audit.record`) is
+    ALREADY DURABLE before `ingest_incident` even runs, and `close()` is
+    one-way — so an unhandled 500 here would leave an operator with a
+    genuinely closed incident and no legal way to retry closing it. The
+    route must return 200, the state must genuinely be CLOSED, the embed
+    must genuinely not have happened, and the failure must be auditable."""
+    incident_id = _opened_incident(control, store)
+    client_with_broken_knowledge.post(
+        f"/api/operations/incidents/{incident_id}/acknowledge", json={}, headers=_as(OPERATOR)
+    )
+    client_with_broken_knowledge.post(
+        f"/api/operations/incidents/{incident_id}/resolve",
+        json={"resolution": "Re-ran validate_input, then retried the batch."},
+        headers=_as(OPERATOR),
+    )
+
+    closed = client_with_broken_knowledge.post(
+        f"/api/operations/incidents/{incident_id}/close", headers=_as(OPERATOR)
+    )
+
+    assert closed.status_code == 200, closed.text
+    body = closed.json()
+    assert body["state"] == "closed", "the transition genuinely landed"
+    assert vector.count() == 0, "the embed genuinely did not happen"
+    assert body["warnings"], "a steward must be told the narrative is not retrievable yet"
+    assert "embed-on-close failed" in body["warnings"][0]
+
+    # The state is durable on a fresh read too — not merely in this response.
+    view = client_with_broken_knowledge.get(
+        f"/api/operations/batches/{BATCH}/incident", headers=_as(READ_ONLY)
+    ).json()
+    assert view["state"] == "closed"
+
+    audited = [
+        entry
+        for entry in store.read_audit(object_id=ENROLLMENT)
+        if entry.action == "embed_failed:incident_close"
+    ]
+    assert len(audited) == 1, "the failure must be auditable, not merely swallowed"
+    assert incident_id in audited[0].detail
+    assert "embed-on-close failed" in audited[0].detail
+
+
+def test_a_genuine_bug_in_the_incident_embed_path_still_surfaces(
+    control: MemStoreControlTables, store: MemMetadataDb
+) -> None:
+    """The inverse of the regression above: W1-28 catches `EmbeddingFailedError`
+    specifically, never a bare `Exception` — a real programming error inside
+    the embed path (anything that is NOT the documented budget/transport
+    degrade) must still be loud, or the fix would have traded an honest crash
+    for a silent lie."""
+    incident_id = _opened_incident(control, store)
+
+    class _ExplodingWorker:
+        def ingest_incident(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("not a budget problem, not a transport problem")
+
+    app = create_app(
+        authn=StaticAuthn(),
+        metadata_db=store,
+        control_tables=control,
+        knowledge_ingest_factory=lambda metadata: _ExplodingWorker(),  # type: ignore[arg-type,return-value]
+    )
+    with TestClient(app) as client:
+        client.post(
+            f"/api/operations/incidents/{incident_id}/acknowledge", json={}, headers=_as(OPERATOR)
+        )
+        client.post(
+            f"/api/operations/incidents/{incident_id}/resolve",
+            json={"resolution": "Re-ran validate_input, then retried the batch."},
+            headers=_as(OPERATOR),
+        )
+        with pytest.raises(RuntimeError, match="not a budget problem"):
+            client.post(f"/api/operations/incidents/{incident_id}/close", headers=_as(OPERATOR))
 
 
 def test_a_deployment_with_no_knowledge_pin_still_closes_incidents(
