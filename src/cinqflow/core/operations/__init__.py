@@ -52,7 +52,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum, unique
 from typing import Protocol, runtime_checkable
 
@@ -60,6 +60,7 @@ from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.model.vocabulary import BatchState, StatusWord
 from cinqflow.core.registry.operations import ServiceLevel
 from cinqflow.core.scheduling import DependencyGraph
+from cinqflow.core.sla import Cycle, SlaStatus
 
 
 class OperationsError(RuntimeError):
@@ -186,15 +187,67 @@ class Expectation:
         and nothing is early — it is either here or not."""
         return max(0, int((now - self.due_ts).total_seconds() // 60))
 
+    def as_cycle(
+        self,
+        *,
+        actual_ts: datetime | None = None,
+        batch_id: str | None = None,
+        files_received: int = 0,
+        files_expected: int = 1,
+    ) -> Cycle:
+        """This expectation as a row of `control.sla_instance`, before it is one.
+
+        THE CLOCK IS DEFINED ONCE, IN `core.sla`, AND THIS PROJECTS ONTO IT.
+        Two implementations of "is this late" is precisely how a board reports
+        one missing file while the feed's reliability trend reports none — and
+        the two would be built months apart by different people, each correct
+        in isolation.
+
+        `cycle_date` is the BUSINESS date, not the due date's calendar day.
+        They usually coincide and occasionally must not: a monthly roster for
+        August delivered on 1 September belongs to August, and a cycle keyed on
+        the delivery day would file it under the wrong month forever.
+        """
+        return Cycle(
+            feed_id=self.feed_id,
+            cycle_date=date.fromisoformat(self.business_date),
+            expected_ts=self.due_ts,
+            grace=timedelta(minutes=self.grace_minutes),
+            actual_ts=actual_ts,
+            batch_id=batch_id,
+            files_received=files_received,
+            files_expected=files_expected,
+        )
+
     def condition(self, *, arrived: bool, now: datetime) -> ArrivalCondition:
+        """What the BOARD shows. Four values, matching the four counters.
+
+        Distinct from `sla_status` below, and the difference is the point. An
+        operator looking at the morning board wants to know the file is here;
+        the control table has to remember that it arrived outside its window.
+        Both are true, and collapsing them loses the second one silently.
+        """
         if arrived:
             return ArrivalCondition.RECEIVED
-        late = self.minutes_late(now)
-        if late == 0:
-            return ArrivalCondition.EXPECTED
-        if late <= self.grace_minutes:
-            return ArrivalCondition.AT_RISK
-        return ArrivalCondition.MISSING
+        match self.as_cycle().status(now):
+            case SlaStatus.ON_TIME:
+                return ArrivalCondition.EXPECTED
+            case SlaStatus.DELAYED:
+                return ArrivalCondition.AT_RISK
+            case SlaStatus.BREACHED:
+                return ArrivalCondition.MISSING
+
+    def sla_status(self, *, actual_ts: datetime | None, now: datetime) -> SlaStatus:
+        """What `control.sla_instance.sla_status` records. Three values, and
+        they are the CHECK constraint's own.
+
+        A delivery that ARRIVED is judged on when it arrived; only one that has
+        not arrived is judged against the wall clock. Reversing those two makes
+        a late-but-received file flip back to Breached on every page refresh —
+        and makes the reliability trend forget every late delivery that
+        eventually turned up.
+        """
+        return self.as_cycle(actual_ts=actual_ts, files_received=1 if actual_ts else 0).status(now)
 
 
 # ── one row on the board ─────────────────────────────────────────────────────
