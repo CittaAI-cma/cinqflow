@@ -293,6 +293,53 @@ def test_a_failed_batch_leaves_an_incident_row_in_the_same_transaction(plane) ->
     assert len(metadata.list_incident_events(batch_id=outcome.batch_id)) == 1
 
 
+# ── CF-V2-E5-04 · the payer renames a column, and nothing breaks ─────────────
+def test_a_glossary_settled_rename_processes_and_reads_the_new_spelling(rig) -> None:
+    """The story's happy path on the real plane: `DOB` arrives as
+    `date_of_birth`, the glossary says they are one concept, the batch
+    COMPLETES with the values read through the rename, and the drift row says
+    RENAMED — where a structural diff would have said dropped-plus-new and
+    nulled a required PHI column."""
+    from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
+
+    play, control, plane = rig
+    delivery = PayerSimulator().deliver(business_date=AUGUST)
+    renamed = Delivery(
+        key=delivery.key,
+        content=delivery.content.replace(b",DOB,", b",date_of_birth,", 1),
+        business_date=delivery.business_date,
+        injection=delivery.injection,
+    )
+    glossary = Glossary(
+        terms=(
+            GlossaryTerm(
+                glossary_id="BG-004",
+                term="Member Date of Birth",
+                definition="Date of birth of the member.",
+                mapped_columns_original=("DOB", "date_of_birth"),
+                is_phi=True,
+            ),
+        )
+    )
+    outcome = play(renamed, glossary=glossary)
+
+    assert outcome.state is BatchState.COMPLETED
+    assert [(r.was, r.now) for r in outcome.renames] == [("DOB", "date_of_birth")]
+
+    (drift,) = control.get_schema_drift(outcome.batch_id)
+    assert drift.classification == "renamed"
+    assert drift.blocked_batch is False
+    assert "one concept, two spellings" in drift.detail
+
+    # The values were READ, not nulled — a required PHI column arrived under
+    # its new spelling and landed.
+    (populated,) = plane.fetch_one(
+        "SELECT count(*) FROM silver_raw.members WHERE batch_id = %s AND date_of_birth IS NOT NULL",
+        (outcome.batch_id,),
+    )
+    assert populated > 0
+
+
 # ── CF-V2-E12-03 · requested -> engine -> verified, on the real plane ────────
 def test_a_completed_engine_run_verifies_the_requested_action(plane) -> None:
     """The exit demo's step 6, as a test: REQUESTED -> (engine) -> VERIFIED.

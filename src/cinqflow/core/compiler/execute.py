@@ -69,12 +69,20 @@ def apply(
     contract: SchemaContract,
     rules: tuple[DqRule, ...],
     batch_id: str,
+    reads_as: dict[str, str] | None = None,
 ) -> ExecutionResult:
     """Run the cast -> map -> evaluate_rules steps over parsed rows.
 
     Every exclusion is attributed as it happens, so the balance equation is a
     consequence of how rows are processed rather than something checked
     afterwards and hoped for.
+
+    `reads_as` is CF-V2-E5-04's settled renames — contract spelling to the
+    spelling that actually arrived, each one backed by a glossary term. It
+    aliases THIS READ and nothing else: the contract is not modified, and the
+    rename that produced the alias also produced a draft contract v(n+1) for
+    a steward. Refusing to read a spelling the glossary itself settled would
+    null a contracted column and quarantine a perfectly good file.
     """
     steps = set(plan.step_kinds)
     loaded: list[dict[str, Any]] = []
@@ -83,7 +91,9 @@ def apply(
     seen_keys: set[tuple[Any, ...]] = set()
 
     for row_number, raw in enumerate(rows, start=1):
-        mapped, failure = _cast_and_map(raw, contract, row_number, run_cast=StepKind.CAST in steps)
+        mapped, failure = _cast_and_map(
+            raw, contract, row_number, run_cast=StepKind.CAST in steps, reads_as=reads_as
+        )
         if failure is not None:
             quarantined.append(failure)
             continue
@@ -162,16 +172,22 @@ class _BrokenRule:
 
 
 def _cast_and_map(
-    raw: dict[str, str], contract: SchemaContract, row_number: int, *, run_cast: bool
+    raw: dict[str, str],
+    contract: SchemaContract,
+    row_number: int,
+    *,
+    run_cast: bool,
+    reads_as: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], QuarantinedRow | None]:
     """Cast to contracted types and rename to canonical names, in one pass.
 
     In Wave 0 the mapping IS the rename declared on the contract column. Wave
     1's mapping studio adds transforms; the step stays where it is.
     """
+    aliases = reads_as or {}
     mapped: dict[str, Any] = {}
     for column in contract.columns:
-        source_value = raw.get(column.reads_from, "")
+        source_value = raw.get(aliases.get(column.reads_from, column.reads_from), "")
         if not run_cast:
             mapped[column.name] = source_value.strip() or None
             continue

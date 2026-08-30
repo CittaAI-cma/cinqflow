@@ -24,12 +24,15 @@ from datetime import UTC, datetime
 from cinqflow.adapters.local.pg_compute import PostgresCompute
 from cinqflow.core.compiler.execute import ExecutionResult, apply, error_category_for
 from cinqflow.core.compiler.plan import LogicalPlan
+from cinqflow.core.drift import DriftAssessment, Rename
+from cinqflow.core.drift import classify as classify_drift
 from cinqflow.core.landing import LandingDecision, LandingOutcome, classify
 from cinqflow.core.model.vocabulary import BatchState, ErrorCategory, FileState, Layer
 from cinqflow.core.parsers import ParseError, parse
 from cinqflow.core.recon import error_id_hash
 from cinqflow.core.registry.contract import DqRule, SchemaContract, compare_to_contract
 from cinqflow.core.registry.feed import FeedRecord
+from cinqflow.core.registry.glossary import Glossary
 from cinqflow.core.registry.suspension import Suspension
 from cinqflow.core.scheduling import ReleaseDecision, guard_start
 from cinqflow.ports.control_tables import (
@@ -69,6 +72,11 @@ class RunOutcome:
     result: ExecutionResult | None = None
     failure: str | None = None
     drift_blocked: tuple[str, ...] = field(default_factory=tuple)
+    #: CF-V2-E5-04 — the settled renames this run read through, evidence and
+    #: all. Non-empty means a draft contract v(n+1) should be proposed; the
+    #: runner never proposes it itself, because proposing is a metadata write
+    #: and the runner's writes are the control tables.
+    renames: tuple[Rename, ...] = field(default_factory=tuple)
 
     @property
     def processed(self) -> bool:
@@ -111,6 +119,7 @@ class PipelineRunner:
         batch_id: str | None = None,
         suspension: Suspension | None = None,
         release: ReleaseDecision | None = None,
+        glossary: Glossary | None = None,
     ) -> RunOutcome:
         """Landing -> Bronze -> Silver Raw. Every outcome registers a file.
 
@@ -210,6 +219,7 @@ class PipelineRunner:
                 plan=plan,
                 decision=decision,
                 resume_from=resume_from,
+                glossary=glossary,
             )
         except _StageFailureError as failure:
             self._fail(batch, failure)
@@ -274,6 +284,7 @@ class PipelineRunner:
         plan: LogicalPlan,
         decision: LandingDecision,
         resume_from: Layer | None,
+        glossary: Glossary | None = None,
     ) -> RunOutcome:
         content = self._storage.read_bytes(file.key)
         try:
@@ -281,8 +292,17 @@ class PipelineRunner:
         except ParseError as exc:
             raise _StageFailureError(Layer.BRONZE, ErrorCategory.FILE, str(exc), ()) from None
 
-        # G2's first half: drift, classified BY MEANING.
+        # G2's first half: drift, classified BY MEANING. The structural
+        # comparison sees ADDED and REMOVED; the glossary — when this run has
+        # one — sees that DOB and date_of_birth are one concept, and folds the
+        # pair into a RENAMED finding that neither blocks nor nulls. Without a
+        # glossary the structural reading stands unchanged, which is Wave 0's
+        # exact behaviour.
         findings = compare_to_contract(parsed.columns, contract)
+        assessment: DriftAssessment | None = None
+        if glossary is not None and findings:
+            assessment = classify_drift(findings, contract=contract, glossary=glossary)
+            findings = assessment.findings
         for finding in findings:
             self._control.record_schema_drift(
                 SchemaDrift(
@@ -344,7 +364,14 @@ class PipelineRunner:
         completed.append(Layer.BRONZE)
 
         # G2's second half plus G3: cast, map, rules, and the balance equation.
-        result = apply(plan, rows=rows, contract=contract, rules=rules, batch_id=batch)
+        result = apply(
+            plan,
+            rows=rows,
+            contract=contract,
+            rules=rules,
+            batch_id=batch,
+            reads_as=assessment.reads_as if assessment else None,
+        )
         self._compute.load_silver_raw(
             plan=plan, batch_id=batch, result=result, source_system=self._source_system
         )
@@ -381,6 +408,7 @@ class PipelineRunner:
             state=state,
             stages_completed=tuple(completed),
             result=result,
+            renames=assessment.renames if assessment else (),
         )
 
     # ── control-plane bookkeeping ────────────────────────────────────────────

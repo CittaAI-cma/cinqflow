@@ -419,6 +419,9 @@ def ingest(
 
     with commit(loaded) as connection:
         from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+        from cinqflow.core.model.governed import ObjectType
+        from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
+        from cinqflow.workers.drift import propose_contract_update
         from cinqflow.workers.incidents import IncidentWorker
         from cinqflow.workers.ops import OpsVerifier
 
@@ -435,6 +438,15 @@ def ingest(
             source_system="fidelis",
             on_batch_failed=incidents.on_batch_failed,
         )
+        # CF-V2-E5-04: the published glossary rides along, so a payer's
+        # rename is classified by MEANING at G2 rather than failing as a
+        # dropped column plus a new one.
+        glossary = Glossary(
+            terms=tuple(
+                GlossaryTerm.from_governed(obj)
+                for obj in metadata_db.list(ObjectType.GLOSSARY_TERM)
+            )
+        )
         outcome = runner.run(
             landed,
             feed=FEED,
@@ -445,7 +457,19 @@ def ingest(
             business_date=business_date,
             resume_from=stage,
             batch_id=batch_id,
+            glossary=glossary,
         )
+        if outcome.renames and outcome.batch_id is not None:
+            # "Never block on compatible drift — log it and PROPOSE the
+            # contract update." The proposal is a draft the steward decides;
+            # the contract itself is untouched.
+            propose_contract_update(
+                metadata_db,
+                feed_id=FEED.feed_id,
+                contract=CONTRACT,
+                renames=outcome.renames,
+                run_id=outcome.batch_id,
+            )
         # CF-V2-E12-03's second act: the engine just ran, so any REQUESTED
         # action on this batch can now be verified against what the control
         # tables actually say — in the same transaction as the run itself.
