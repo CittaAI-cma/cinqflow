@@ -36,7 +36,7 @@ test("a user in no CINQFLOW group gets a clear answer, not an empty app", async 
 
 test("wave-1 destinations are absent, not greyed out", async ({ page }) => {
   await signIn(page, "dev-engineer@cinqcare.test");
-  for (const key of ["mapping", "quality", "work-queue", "lineage"]) {
+  for (const key of ["mapping", "quality", "work-queue", "lineage", "incidents", "certification"]) {
     await expect(page.locator(`[data-destination="${key}"]`)).toHaveCount(0);
   }
   await expect(page.locator('[data-destination="intake"]')).toBeVisible();

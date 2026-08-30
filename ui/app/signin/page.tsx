@@ -16,6 +16,17 @@ const DEV_USERS = [
   { token: "dev-engineer@cinqcare.test", name: "Arun Menon", role: "Engineer" },
   { token: "dev-analyst@cinqcare.test", name: "Priya Nair", role: "Read-Only" },
   { token: "dev-admin@cinqcare.test", name: "Steve Mathews", role: "Administrator" },
+  // Wave 1 (ADR-0022) and Wave 2 (CF-V2-E12-03) added four roles, then an
+  // eighth, to `authn.py` and `profiles/dev-users.yaml` — kept in step with
+  // each other by a test, but never with this list, so nobody could sign in
+  // as any of them to see what their own screens look like. W2-33 is the
+  // first story that needed one of these five to test a real permission
+  // gate in a browser, which is what surfaced the gap.
+  { token: "dev-ba@cinqcare.test", name: "Meera Iyer", role: "Business Analyst" },
+  { token: "dev-steward@cinqcare.test", name: "Daniel Okafor", role: "Data Steward" },
+  { token: "dev-platform@cinqcare.test", name: "Ravi Shankar", role: "Platform Engineer" },
+  { token: "dev-approver@cinqcare.test", name: "Grace Lin", role: "Business Approver" },
+  { token: "dev-operations@cinqcare.test", name: "Tomás Rivera", role: "Operations" },
   { token: "dev-nogroup@cinqcare.test", name: "Unassigned User", role: "no CINQFLOW group" },
 ];
 

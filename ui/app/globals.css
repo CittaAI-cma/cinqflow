@@ -222,6 +222,21 @@
   .status[data-word="Needs Attention"] { color: var(--st-needs-attention); }
   .status[data-word="Missing"]         { color: var(--st-missing); }
 
+  /* ---- other closed vocabularies (CF-V2-E12-04/E13-04) ----
+   * Incident states, KNOWN/NOVEL and a certification verdict are NOT the
+   * seven status words — `Tag` is their own component — but the meaning
+   * behind "done", "an exception was accepted", "needs a person" and
+   * "neither yet" is the same shape every time, so the hues are reused
+   * rather than a second palette invented for them. */
+  .tag { font-weight: 620; font-size: var(--t-sm); white-space: nowrap; }
+  .tag[data-tone="good"]    { color: var(--st-completed); }
+  .tag[data-tone="bad"]     { color: var(--st-needs-attention); }
+  .tag[data-tone="pending"] { color: var(--st-processing); }
+  .tag[data-tone="neutral"] { color: var(--ink-3); }
+
+  /* ---- the incident's cascade (CF-V2-E12-04) ---- */
+  .tree-list { padding-left: var(--s-5); margin-top: var(--s-1); }
+
   /* ---- the citation layer ---- */
   .cited {
     color: inherit; border-bottom: 1px dashed var(--cite);
@@ -368,6 +383,13 @@
   .outcome[data-outcome="SKIPPED"]    { border-left-color: var(--st-expected); }
   .outcome[data-outcome="SKIPPED"]    .outcome-word { color: var(--st-expected); }
   .outcome[data-outcome="NOT SENT"]   .outcome-word { color: var(--ink-3); }
+  /* ---- an incident's own transitions (CF-V2-E12-04) ---- */
+  .outcome[data-outcome="ACKNOWLEDGED"] { border-left-color: var(--st-processing); }
+  .outcome[data-outcome="ACKNOWLEDGED"] .outcome-word { color: var(--st-processing); }
+  .outcome[data-outcome="RESOLVED"]     { border-left-color: var(--st-completed); }
+  .outcome[data-outcome="RESOLVED"]     .outcome-word { color: var(--st-completed); }
+  .outcome[data-outcome="CLOSED"]       { border-left-color: var(--st-completed); }
+  .outcome[data-outcome="CLOSED"]       .outcome-word { color: var(--st-completed); }
 
   /* ---- metric tile ---- */
   .tile .label { color: var(--ink-3); font-size: var(--t-sm); }

@@ -151,3 +151,33 @@ export async function upload<T>(path: string, form: FormData): Promise<T> {
   }
   return (await response.json()) as T;
 }
+
+/**
+ * A GET whose body is not JSON — CF-V2-E13-04's plain-text certification
+ * export. A Route Handler is the one place in this app that hands a browser
+ * a FILE rather than a rendered page, and a download must carry the BFF's
+ * own status straight through rather than being normalised into `Refused`:
+ * a 403 here becomes the download's own HTTP status, not a JSON error body
+ * nobody downloading a `.txt` file would ever read.
+ */
+export async function rawGet(
+  path: string,
+): Promise<{ status: number; contentType: string; text: string }> {
+  const bearer = await token();
+  const url = `${API}${path}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
+      cache: "no-store",
+    });
+  } catch (cause) {
+    throw new Unreachable(url, { cause });
+  }
+  return {
+    status: response.status,
+    contentType: response.headers.get("content-type") ?? "text/plain; charset=utf-8",
+    text: await response.text(),
+  };
+}

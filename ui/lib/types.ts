@@ -451,3 +451,133 @@ export interface FeedProfile {
   profiled_ts: string;
   profiled_by: string;
 }
+
+// ── incidents · CF-V2-E12-04 ──────────────────────────────────────────────
+
+/** One error the batch's engine logged, root cause or consequence alike. */
+export interface BatchError {
+  error_id_hash: string;
+  stage: string;
+  category: string;
+  message: string;
+  occurred_ts: string;
+  rule_id: string | null;
+  is_consequence: boolean;
+  caused_by: string | null;
+  citation: string;
+  route: string;
+}
+
+/** One earlier incident this signature also produced. */
+export interface PriorIncident {
+  incident_id: string;
+  occurred_ts: string;
+  fix_minutes: number | null;
+  batch_id: string | null;
+  citation: string;
+}
+
+/** A matched recovery guide, WITH the evidence that justifies the claim —
+ *  a match may not be claimed without showing the fingerprint. Present only
+ *  for a KNOWN failure; absent (null) means NOVEL. */
+export interface GuideMatch {
+  guide_id: string;
+  title: string;
+  steps: string[];
+  signature: string;
+  matched_errors: string[];
+  occurrences: number;
+  mean_fix_minutes: number | null;
+  remedy: string | null;
+  stale: boolean;
+  priors: PriorIncident[];
+  citations: string[];
+  explanation: string;
+}
+
+/** One line in the incident list — the ledger's current state, cheap enough
+ *  to serve for every open incident at once. The full evidence bundle stays
+ *  on the per-batch route (`Incident` below), which recomputes it. */
+export interface IncidentRow {
+  incident_id: string;
+  batch_id: string;
+  feed_id: string;
+  state: string;
+  signature: string;
+  assigned_to: string;
+  opened_ts: string;
+  resolved_ts: string | null;
+}
+
+/** The whole incident: evidence recomputed on every read, decisions read
+ *  from the ledger. `match` null is NOVEL; present is KNOWN. */
+export interface Incident {
+  incident_id: string;
+  batch_id: string;
+  feed_id: string;
+  opened_ts: string;
+  kind: string;
+  status: StatusWord;
+  state: string;
+  acknowledged_by: string;
+  assigned_to: string;
+  resolution: string;
+  resolved_ts: string | null;
+  signature: string;
+  root_cause: BatchError | null;
+  consequences: BatchError[];
+  match: GuideMatch | null;
+  proposed_remedy: string | null;
+  explanation: string;
+  citation: string;
+  route: string;
+}
+
+// ── certification · CF-V2-E13-03/04 ───────────────────────────────────────
+
+/** A discrepancy, written down by whoever found it — the platform computes
+ *  `delta` and `critical`; the finder never grades their own homework.
+ *  Decimal fields arrive as strings, the same convention `Budget` and
+ *  `AgentAction` already use for money on the wire. */
+export interface Variance {
+  variance_id: string;
+  batch_id: string;
+  feed_id: string;
+  kind: string;
+  expected: string;
+  actual: string;
+  delta: string;
+  tolerance: string;
+  critical: boolean;
+  outcome: string;
+  opened_by: string;
+  opened_ts: string;
+  explanation: string;
+  waived_by: string;
+  waiver_reason: string;
+  waiver_expires_on: string | null;
+  citation: string;
+}
+
+/** One mandatory check's result. `completed: false` means PENDING —
+ *  silence is not a pass, and it is never rendered as one. */
+export interface CertificationCheck {
+  kind: string;
+  passed: boolean;
+  completed: boolean;
+  evidence: string;
+}
+
+/** A batch's certification, DERIVED on every read from retained history.
+ *  `verdict` is one of exactly four strings: "Certified",
+ *  "Certified-with-Waiver", "Not Certified", "Pending" — rendered verbatim,
+ *  never re-cased or abbreviated. There is no route that sets one. */
+export interface Certification {
+  batch_id: string;
+  feed_id: string;
+  verdict: string;
+  publishable: boolean;
+  derived_ts: string | null;
+  checks: CertificationCheck[];
+  variances: Variance[];
+}

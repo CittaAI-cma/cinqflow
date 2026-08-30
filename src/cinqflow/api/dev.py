@@ -17,7 +17,8 @@ from cinqflow.adapters.local.localfs_storage import LocalFsStorage
 from cinqflow.adapters.local.upload_connector import UploadConnector
 from cinqflow.adapters.mock.authn import StaticAuthn
 from cinqflow.api import create_app
-from cinqflow.intelligence.demo import BUDGET, agent_for, plane, schema_inference_for
+from cinqflow.intelligence.demo import BATCH_ID, BUDGET, agent_for, plane, schema_inference_for
+from cinqflow.workers.incidents import IncidentWorker
 
 #: The same root `profiles/local.yaml` names, so a file delivered through the
 #: dev server and one delivered by `cinqflow ingest` land in one zone.
@@ -35,6 +36,16 @@ def build(landing_root: str | None = None) -> Any:
     without a disk.
     """
     store, control = plane()
+    # W2-33 (CF-V2-E12-04). `plane()` seeds the anchor batch's ERROR; it does
+    # not open its incident, because `IncidentWorker` lives in `workers/` — a
+    # layer `intelligence/demo.py` may not import (`lint-imports`'s own
+    # "api -> workers/installer/simulator -> intelligence" contract says so).
+    # `api/dev.py` sits above that line, so the wiring happens here instead.
+    # Without it `GET /api/operations/incidents` — which reads the LEDGER,
+    # deliberately, never recomputed evidence — would show nothing for a batch
+    # that visibly failed, and nothing on the incidents screen could ever be
+    # acknowledged, resolved or closed.
+    IncidentWorker(control=control, metadata=store).on_batch_failed(BATCH_ID)
     landing = LocalFsStorage(root=landing_root or DEFAULT_LANDING_ROOT)
     return create_app(
         authn=StaticAuthn(),

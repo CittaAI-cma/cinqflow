@@ -144,6 +144,29 @@ DESTINATIONS: tuple[Destination, ...] = (
         answers="Where a column came from and what depends on it.",
         wave=2,
     ),
+    #: CF-V2-E12-03/E12-04. The operator's own screen: what broke, whether it
+    #: has broken this way before, and what fixed it that time.
+    Destination(
+        key="incidents",
+        label="Incidents",
+        route="/operations/incidents",
+        group=NavGroup.OPERATIONS,
+        answers="What broke, what it was, and what fixed it last time.",
+        wave=2,
+        prominent_for=frozenset({Role.OPERATIONS}),
+    ),
+    #: CF-V2-E13-04. Certification DERIVES from retained history on every
+    #: read — there is no button that sets it, so this destination only ever
+    #: shows a computed verdict, never one somebody chose.
+    Destination(
+        key="certification",
+        label="Certification",
+        route="/operations/certification",
+        group=NavGroup.OPERATIONS,
+        answers="Which batches are certified, and what the evidence says.",
+        wave=2,
+        prominent_for=frozenset({Role.OPERATIONS, Role.DATA_STEWARD}),
+    ),
     Destination(
         key="ask",
         label="Ask CINQFLOW",
