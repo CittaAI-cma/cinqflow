@@ -423,7 +423,87 @@ def test_retrying_a_paused_feed_is_refused_with_a_link(
     assert "mapping change pending" in refused.text
 
 
-# ── CF-V2-E12-04 · the incident ──────────────────────────────────────────────
+# ── CF-V2-E12-04 · the incident's life, over the wire ────────────────────────
+def _opened_incident(control: MemStoreControlTables, store: MemMetadataDb) -> str:
+    """A failed batch whose incident the worker has written down — the state
+    every lifecycle test starts from, produced the way production produces it."""
+    from cinqflow.workers.incidents import IncidentWorker
+
+    _open_batch(control, state=BatchState.FAILED)
+    _fail_at_bronze(control)
+    worker = IncidentWorker(control=control, metadata=store)
+    return worker.on_batch_failed(BATCH, now=NOW).incident_id
+
+
+def test_an_incident_lives_from_open_to_closed_over_the_api(
+    client: TestClient, control: MemStoreControlTables, store: MemMetadataDb
+) -> None:
+    """Acknowledge -> resolve -> close, each a row, each visible on the batch's
+    own incident view — and only a closed one is embeddable."""
+    incident_id = _opened_incident(control, store)
+
+    listed = client.get("/api/operations/incidents?state=open", headers=_as(READ_ONLY)).json()
+    assert [row["incident_id"] for row in listed] == [incident_id]
+
+    acked = client.post(
+        f"/api/operations/incidents/{incident_id}/acknowledge",
+        json={"assigned_to": "mei@cinqcare.test"},
+        headers=_as(OPERATOR),
+    )
+    assert acked.status_code == 200, acked.text
+    assert acked.json()["state"] == "acknowledged"
+    assert acked.json()["acknowledged_by"] == OPERATOR
+    assert acked.json()["assigned_to"] == "mei@cinqcare.test"
+
+    resolved = client.post(
+        f"/api/operations/incidents/{incident_id}/resolve",
+        json={"resolution": "Re-ran validate_input, then retried the batch."},
+        headers=_as(OPERATOR),
+    )
+    assert resolved.status_code == 200, resolved.text
+
+    closed = client.post(f"/api/operations/incidents/{incident_id}/close", headers=_as(OPERATOR))
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["state"] == "closed"
+
+    # The batch's own incident view reads the same ledger.
+    view = client.get(f"/api/operations/batches/{BATCH}/incident", headers=_as(READ_ONLY)).json()
+    assert view["state"] == "closed"
+    assert view["resolution"] == "Re-ran validate_input, then retried the batch."
+    # And the open list no longer carries it.
+    assert client.get("/api/operations/incidents?state=open", headers=_as(READ_ONLY)).json() == []
+
+
+def test_closing_an_unresolved_incident_is_refused_with_the_machines_words(
+    client: TestClient, control: MemStoreControlTables, store: MemMetadataDb
+) -> None:
+    """ "only a closed one teaches" has a precondition: something was learned.
+    The machine refuses OPEN -> CLOSED, and the wire carries its sentence."""
+    incident_id = _opened_incident(control, store)
+    refused = client.post(f"/api/operations/incidents/{incident_id}/close", headers=_as(OPERATOR))
+    assert refused.status_code == 409
+    assert "cannot go open -> closed" in refused.text
+
+
+def test_incident_bookkeeping_needs_the_operations_role(
+    client: TestClient, control: MemStoreControlTables, store: MemMetadataDb
+) -> None:
+    incident_id = _opened_incident(control, store)
+    for subject in (READ_ONLY, ENGINEER):
+        denied = client.post(
+            f"/api/operations/incidents/{incident_id}/acknowledge",
+            json={},
+            headers=_as(subject),
+        )
+        assert denied.status_code == 403, subject
+    assert (
+        client.post(
+            "/api/operations/incidents/INC-never/acknowledge", json={}, headers=_as(OPERATOR)
+        ).status_code
+        == 404
+    )
+
+
 def test_the_incident_matches_the_guide_and_shows_its_evidence(
     client: TestClient, control: MemStoreControlTables
 ) -> None:

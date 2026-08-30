@@ -37,6 +37,7 @@ from cinqflow.core.model.governed import (
 )
 from cinqflow.core.model.vocabulary import ActorType, BatchState, RiskClass
 from cinqflow.core.operations.actions import ActionPhase, ActionRecord, OpsAction
+from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
 from cinqflow.core.profiling import FileProfile
 from cinqflow.core.proposals import Proposal, ProposalBody, ProposalState
 from cinqflow.core.registry.suspension import (
@@ -210,6 +211,23 @@ def _suspension(row: tuple[Any, ...]) -> SuspensionEvent:
         actor=_actor(row[3], ActorType.HUMAN.value, row[4]),
         occurred_ts=row[5],
         resumes_after=row[6],
+    )
+
+
+def _incident_event(row: tuple[Any, ...]) -> IncidentEvent:
+    return IncidentEvent(
+        incident_id=row[0],
+        batch_id=row[1],
+        feed_id=row[2],
+        signature=row[3],
+        state=IncidentState(row[4]),
+        actor_subject=row[5],
+        acknowledged_by=row[6] or "",
+        assigned_to=row[7] or "",
+        resolution=row[8] or "",
+        opened_ts=row[9],
+        resolved_ts=row[10],
+        occurred_ts=row[11],
     )
 
 
@@ -781,3 +799,71 @@ class PostgresMetadataDb:
         current_rows = tuple(_action_row(row) for row in self._db.fetch_all(statement, parameters))
         newest_first = sorted(current_rows, key=lambda row: row.occurred_ts, reverse=True)
         return tuple(newest_first[:limit])
+
+    # ── ops.incident_event · CF-V2-E12-04 — append-only, one row per transition ──
+    def record_incident_event(self, event: IncidentEvent) -> IncidentEvent:
+        self._db.execute(
+            "INSERT INTO ops.incident_event (event_id, incident_id, batch_id, feed_id, "
+            "signature, state, actor_subject, acknowledged_by, assigned_to, resolution, "
+            "opened_ts, resolved_ts, occurred_ts) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                str(uuid.uuid4()),
+                event.incident_id,
+                event.batch_id,
+                event.feed_id,
+                event.signature,
+                event.state.value,
+                event.actor_subject,
+                event.acknowledged_by,
+                event.assigned_to,
+                event.resolution,
+                event.opened_ts,
+                event.resolved_ts,
+                event.occurred_ts,
+            ),
+        )
+        return event
+
+    def get_incident_event(self, incident_id: str) -> IncidentEvent:
+        rows = self._db.fetch_all(
+            "SELECT incident_id, batch_id, feed_id, signature, state, actor_subject, "
+            "acknowledged_by, assigned_to, resolution, opened_ts, resolved_ts, occurred_ts "
+            "FROM ops.incident_event WHERE incident_id = %s "
+            "ORDER BY occurred_ts DESC, event_id DESC LIMIT 1",
+            (incident_id,),
+        )
+        if not rows:
+            raise ObjectNotFoundError(f"incident {incident_id} has no events")
+        return _incident_event(rows[0])
+
+    def list_incident_events(
+        self,
+        *,
+        batch_id: str | None = None,
+        feed_id: str | None = None,
+        state: IncidentState | None = None,
+        limit: int = 50,
+    ) -> Sequence[IncidentEvent]:
+        statement = (
+            "SELECT DISTINCT ON (incident_id) incident_id, batch_id, feed_id, signature, "
+            "state, actor_subject, acknowledged_by, assigned_to, resolution, opened_ts, "
+            "resolved_ts, occurred_ts FROM ops.incident_event WHERE 1=1"
+        )
+        parameters: tuple[Any, ...] = ()
+        if batch_id is not None:
+            statement += " AND batch_id = %s"
+            parameters += (batch_id,)
+        if feed_id is not None:
+            statement += " AND feed_id = %s"
+            parameters += (feed_id,)
+        statement += " ORDER BY incident_id, occurred_ts DESC, event_id DESC"
+        current_events = tuple(
+            _incident_event(row) for row in self._db.fetch_all(statement, parameters)
+        )
+        # The state filter applies AFTER folding to the current event — in SQL
+        # it would filter rows, and an incident whose newest event is CLOSED
+        # would reappear as "open" through its older rows.
+        filtered = [e for e in current_events if state is None or e.state is state]
+        filtered.sort(key=lambda e: e.occurred_ts, reverse=True)
+        return tuple(filtered[:limit])

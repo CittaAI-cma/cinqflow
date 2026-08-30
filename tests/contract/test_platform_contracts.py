@@ -12,6 +12,7 @@ platform's safety floor stated in one place.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -28,6 +29,7 @@ from cinqflow.core.model.governed import (
 from cinqflow.core.model.vocabulary import ActorType, BatchState, Layer
 from cinqflow.core.operations.actions import ActionPhase, OpsAction
 from cinqflow.core.operations.actions import verify as ops_verify
+from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
 from cinqflow.ports.authn import AuthenticationError, AuthnPort, Role
 from cinqflow.ports.catalog import CatalogPort
 from cinqflow.ports.compute_job import ComputeError, ComputeJobPort
@@ -250,6 +252,83 @@ def test_the_action_ledger_has_no_edit_path_for_anyone(metadata: MetadataDbPort)
     not a permission that could be misconfigured."""
     for forbidden in ("update_action_record", "delete_action_record", "clear_action_records"):
         assert not hasattr(metadata, forbidden), f"metadata_db exposes {forbidden}"
+
+
+# ── ops.incident_event · CF-V2-E12-04 ────────────────────────────────────────
+def _open_event(incident_id: str, *, batch_id: str = "B-1244") -> IncidentEvent:
+    return IncidentEvent(
+        incident_id=incident_id,
+        batch_id=batch_id,
+        feed_id="fidelis-downstate-roster",
+        signature="a3f9c2d1e8b7a6f0",
+        state=IncidentState.OPEN,
+        actor_subject="platform@cinqflow",
+        occurred_ts=NOW,
+        opened_ts=NOW,
+    )
+
+
+def test_an_incident_transition_is_a_second_row_and_the_current_state(
+    metadata: MetadataDbPort,
+) -> None:
+    """A transition is a NEW event — 'what did this look like when it was
+    acknowledged' stays a fact the ledger can answer."""
+    metadata.record_incident_event(_open_event("INC-1"))
+    metadata.record_incident_event(
+        replace(
+            _open_event("INC-1"),
+            state=IncidentState.ACKNOWLEDGED,
+            acknowledged_by="ops@cinqcare.test",
+            actor_subject="ops@cinqcare.test",
+            occurred_ts=NOW + timedelta(minutes=3),
+        )
+    )
+    held = metadata.get_incident_event("INC-1")
+    assert held.state is IncidentState.ACKNOWLEDGED
+    assert held.acknowledged_by == "ops@cinqcare.test"
+
+
+def test_the_state_filter_reads_the_current_state_not_the_history(
+    metadata: MetadataDbPort,
+) -> None:
+    """An incident that was open and is now closed must not reappear as open
+    through its older rows."""
+    metadata.record_incident_event(_open_event("INC-2"))
+    metadata.record_incident_event(
+        replace(
+            _open_event("INC-2"),
+            state=IncidentState.RESOLVED,
+            resolution="Re-ran validate_input, retried the batch.",
+            resolved_ts=NOW + timedelta(minutes=18),
+            occurred_ts=NOW + timedelta(minutes=18),
+        )
+    )
+    metadata.record_incident_event(_open_event("INC-3", batch_id="B-9999"))
+
+    open_now = metadata.list_incident_events(state=IncidentState.OPEN)
+    assert [e.incident_id for e in open_now] == ["INC-3"]
+    assert [e.incident_id for e in metadata.list_incident_events(batch_id="B-1244")] == ["INC-2"]
+
+
+def test_an_untouched_incident_is_a_missing_object_here(metadata: MetadataDbPort) -> None:
+    """The batch route computes OPEN for an incident with no events; asking
+    the ledger for a specific id it never held is a different question."""
+    with pytest.raises(ObjectNotFoundError):
+        metadata.get_incident_event("INC-nobody-wrote")
+
+
+def test_the_incident_ledger_has_no_edit_path_and_no_lifecycle_state(
+    metadata: MetadataDbPort,
+) -> None:
+    """Two absences, both load-bearing: no edit verb (append-only the way the
+    audit ledger is), and no governed lifecycle — an incident is an
+    operational fact, and pushing it through Draft -> Approved would require
+    somebody to approve that a batch failed."""
+    for forbidden in ("update_incident_event", "delete_incident_event", "clear_incidents"):
+        assert not hasattr(metadata, forbidden), f"metadata_db exposes {forbidden}"
+    from dataclasses import fields as dataclass_fields
+
+    assert "lifecycle_state" not in {f.name for f in dataclass_fields(IncidentEvent)}
 
 
 def test_every_audit_row_names_its_actor_type(metadata: MetadataDbPort) -> None:

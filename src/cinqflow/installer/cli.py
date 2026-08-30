@@ -418,11 +418,20 @@ def ingest(
     landed = delivery.file
 
     with commit(loaded) as connection:
+        from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+        from cinqflow.workers.incidents import IncidentWorker
+
+        control_tables = PostgresControlTables(connection)
+        # CF-V2-E12-04: a failed batch opens its incident in the SAME
+        # transaction that records the failure — the ledger row and the error
+        # rows land or roll back together.
+        incidents = IncidentWorker(control=control_tables, metadata=PostgresMetadataDb(connection))
         runner = PipelineRunner(
             storage=storage,
-            control=PostgresControlTables(connection),
+            control=control_tables,
             compute=PostgresCompute(connection),
             source_system="fidelis",
+            on_batch_failed=incidents.on_batch_failed,
         )
         outcome = runner.run(
             landed,

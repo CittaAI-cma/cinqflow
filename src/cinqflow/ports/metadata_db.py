@@ -26,6 +26,7 @@ from typing import Any, Protocol, runtime_checkable
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 from cinqflow.core.operations.actions import ActionRecord
+from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
 from cinqflow.core.profiling import FileProfile
 from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry.suspension import Suspension, SuspensionEvent
@@ -312,4 +313,41 @@ class MetadataDbPort(Protocol):
     ) -> Sequence[ActionRecordRow]:
         """Current phase per record, newest first — the screen's action
         history, and the worker's queue of REQUESTED work to verify."""
+        ...
+
+    # ── ops.incident_event · CF-V2-E12-04 ────────────────────────────────────
+    #
+    # The DECISIONS only. An incident's evidence — cascade, signature, guide
+    # match — recomputes deterministically from control.error_log and the
+    # published runbooks; this ledger holds what people did about it, which
+    # nothing can recompute. `core.operations.fingerprint.hydrate` folds the
+    # two halves together on read.
+
+    def record_incident_event(self, event: IncidentEvent) -> IncidentEvent:
+        """Append one transition. No update verb exists, by design — a
+        transition is a new row, so "what did this look like when it was
+        acknowledged" stays a fact the ledger can answer."""
+        ...
+
+    def get_incident_event(self, incident_id: str) -> IncidentEvent:
+        """The CURRENT state — the newest event for this incident.
+
+        Raises `ObjectNotFoundError` for an incident the ledger has never
+        seen. An incident nobody has touched has no events, and that is an
+        ordinary answer for the batch route (it computes OPEN) but a missing
+        one here, where the caller asked for a specific id.
+        """
+        ...
+
+    def list_incident_events(
+        self,
+        *,
+        batch_id: str | None = None,
+        feed_id: str | None = None,
+        state: IncidentState | None = None,
+        limit: int = 50,
+    ) -> Sequence[IncidentEvent]:
+        """Current state per incident, newest first. `state=OPEN` is the
+        operations home's open-incident list; `batch_id=` is how the batch
+        route finds the decisions to hydrate with."""
         ...

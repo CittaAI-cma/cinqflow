@@ -233,6 +233,51 @@ def test_bad_encoding_is_rejected_rather_than_mojibaked_into_bronze(rig) -> None
     ) == (0,), "nothing reached Bronze"
 
 
+# ── CF-V2-E12-04 · a failure opens its incident, on the real plane ────────────
+def test_a_failed_batch_leaves_an_incident_row_in_the_same_transaction(plane) -> None:
+    """The runner's failure hook, end to end on Postgres: the FAILED state,
+    the error rows and the incident's OPEN event land together — so the
+    morning operator finds the incident already open, not a batch they have
+    to fingerprint by hand."""
+    from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+    from cinqflow.adapters.mock.storage import MemFsStorage
+    from cinqflow.core.operations.fingerprint import IncidentState
+    from cinqflow.workers.incidents import PLATFORM_SUBJECT, IncidentWorker
+
+    storage = MemFsStorage()
+    control = PostgresControlTables(plane)
+    metadata = PostgresMetadataDb(plane)
+    incidents = IncidentWorker(control=control, metadata=metadata)
+    runner = PipelineRunner(
+        storage=storage,
+        control=control,
+        compute=PostgresCompute(plane),
+        source_system="fidelis",
+        on_batch_failed=incidents.on_batch_failed,
+    )
+    delivery = PayerSimulator().deliver(business_date=AUGUST, injection=Injection.BAD_ENCODING)
+    storage.place(delivery.key, delivery.content)
+    file = next(f for f in storage.list_files("enrollments/") if f.key == delivery.key)
+    outcome = runner.run(
+        file,
+        feed=FEED,
+        feed_version=1,
+        contract=CONTRACT,
+        rules=(DQ_002,),
+        plan=PLAN,
+        business_date=delivery.business_date.isoformat(),
+    )
+    assert outcome.state is BatchState.FAILED
+
+    (event,) = metadata.list_incident_events(batch_id=outcome.batch_id)
+    assert event.state is IncidentState.OPEN
+    assert event.actor_subject == PLATFORM_SUBJECT
+    assert event.signature, "a failure with errors has a signature"
+    # The same failure again is the same incident continuing — one row.
+    incidents.on_batch_failed(outcome.batch_id)
+    assert len(metadata.list_incident_events(batch_id=outcome.batch_id)) == 1
+
+
 # ── duplicate member within one file ─────────────────────────────────────────
 def test_one_duplicated_member_does_not_fail_the_roster(rig) -> None:
     """Found by this suite during T8. Before in-batch deduplication, a single

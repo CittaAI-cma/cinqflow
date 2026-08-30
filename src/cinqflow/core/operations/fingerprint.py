@@ -724,3 +724,84 @@ def measure_precision(
 #: half has to be a rounding error inside that, since retrieval and the model's
 #: explanation of a NOVEL failure also have to fit.
 FINGERPRINT_BUDGET = timedelta(seconds=5)
+
+
+# ── the ledger's view of an incident · CF-V2-E12-04 ──────────────────────────
+#
+# THE EVIDENCE IS RECOMPUTED; THE DECISIONS ARE STORED. An incident's cascade
+# and guide match derive deterministically from control.error_log and the
+# published runbooks — persisting them would create a second source that
+# drifts the day a runbook is superseded. What CANNOT be recomputed is what
+# people did: acknowledged by whom, assigned to whom, resolved with what
+# words. Those are the only facts the ledger holds, and `hydrate` folds them
+# back onto a freshly computed incident.
+
+
+@dataclass(frozen=True)
+class IncidentEvent:
+    """One row in `ops.incident_event` — an incident's operational state at
+    one moment, written by whoever moved it.
+
+    Append-only like every ops ledger: a transition is a NEW event, so "what
+    did this look like when it was acknowledged" stays a fact rather than a
+    version somebody overwrote. The current state is the newest event.
+    """
+
+    incident_id: str
+    batch_id: str
+    feed_id: str
+    signature: str
+    state: IncidentState
+    actor_subject: str
+    occurred_ts: datetime
+    opened_ts: datetime
+    acknowledged_by: str = ""
+    assigned_to: str = ""
+    resolution: str = ""
+    resolved_ts: datetime | None = None
+
+
+def event_for(incident: Incident, *, actor_subject: str, occurred_ts: datetime) -> IncidentEvent:
+    """The row a transition writes — the incident's decisions, never its
+    evidence. `actor_subject` is the person (or, for the opening event, the
+    platform principal) who caused THIS state."""
+    return IncidentEvent(
+        incident_id=incident.incident_id,
+        batch_id=incident.batch_id,
+        feed_id=incident.feed_id,
+        signature=incident.signature,
+        state=incident.state,
+        actor_subject=actor_subject,
+        occurred_ts=occurred_ts,
+        opened_ts=incident.opened_ts,
+        acknowledged_by=incident.acknowledged_by,
+        assigned_to=incident.assigned_to,
+        resolution=incident.resolution,
+        resolved_ts=incident.resolved_ts,
+    )
+
+
+def hydrate(incident: Incident, event: IncidentEvent | None) -> Incident:
+    """Fold the ledger's decisions onto a freshly computed incident.
+
+    The computed half (cascade, signature, match) is kept from `incident`;
+    the human half (state, acknowledgement, resolution) comes from the newest
+    event. With no event, the incident is exactly as computed — OPEN, which
+    is true: nobody has touched it.
+    """
+    if event is None:
+        return incident
+    if event.incident_id != incident.incident_id:
+        raise FingerprintError(
+            f"event {event.incident_id} cannot hydrate incident {incident.incident_id} — "
+            "folding one incident's decisions onto another's evidence would fabricate history"
+        )
+    return replace(
+        incident,
+        state=event.state,
+        opened_ts=event.opened_ts,
+        acknowledged_by=event.acknowledged_by,
+        assigned_to=event.assigned_to,
+        resolution=event.resolution,
+        resolved_ts=event.resolved_ts,
+    )

@@ -953,6 +953,40 @@ OPS_SCHEMA = Schema(
             ),
             append_only=True,
         ),
+        Table(
+            name="incident_event",
+            comment=(
+                "CF-V2-E12-04 — an incident's OPERATIONAL state, one row per transition. "
+                "The evidence (cascade, guide match) is recomputed from control.error_log "
+                "and the published runbooks on every read — persisting it would be a second "
+                "source that drifts the day a runbook is superseded. What cannot be "
+                "recomputed is what PEOPLE did: acknowledged by whom, assigned to whom, "
+                "resolved with what words. Only those live here. NOTE THE ABSENT COLUMN: an "
+                "incident never gains lifecycle_state — it is an operational fact, not a "
+                "governed object; pushing it through Draft -> Approved would require "
+                "somebody to approve that a batch failed. The RUNBOOK an incident produces "
+                "is what travels the governed lifecycle."
+            ),
+            columns=(
+                Column("event_id", TypeName.UUID, nullable=False),
+                Column("incident_id", TypeName.STRING, nullable=False),
+                Column("batch_id", TypeName.STRING, nullable=False),
+                _FEED,
+                Column("signature", TypeName.STRING, nullable=False),
+                Column("state", TypeName.STRING, nullable=False),
+                Column("actor_subject", TypeName.STRING, nullable=False),
+                Column("acknowledged_by", TypeName.STRING),
+                Column("assigned_to", TypeName.STRING),
+                Column("resolution", TypeName.STRING),
+                Column("opened_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("resolved_ts", TypeName.TIMESTAMP_UTC),
+                Column("occurred_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("event_id",),
+            indexes=(("incident_id", "occurred_ts"), ("batch_id",), ("feed_id", "occurred_ts")),
+            check_constraints=("state IN ('open', 'acknowledged', 'resolved', 'closed')",),
+            append_only=True,
+        ),
     ),
     append_only=True,
 )

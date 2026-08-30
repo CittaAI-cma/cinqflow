@@ -19,7 +19,7 @@ that can only be tested the way production runs it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -34,6 +34,7 @@ from cinqflow.api.audit import AuditLog
 from cinqflow.api.deps import NOT_FOUND, CurrentPrincipal, Wiring, require
 from cinqflow.api.schemas import (
     AcceptanceOut,
+    AcknowledgeIncidentIn,
     ActionRecordOut,
     ActionRefusalOut,
     ActionRequestIn,
@@ -91,6 +92,7 @@ from cinqflow.api.schemas import (
     HomeSlotOut,
     ImpactPacketOut,
     IncidentOut,
+    IncidentRowOut,
     InferSchemaIn,
     InheritedOut,
     KeyCandidateOut,
@@ -127,6 +129,7 @@ from cinqflow.api.schemas import (
     RefusalOut,
     RejectProposalIn,
     ReleaseDecisionOut,
+    ResolveIncidentIn,
     ResumeFeedIn,
     ReviewQueueOut,
     RowsOut,
@@ -235,6 +238,7 @@ from cinqflow.ports.metadata_db import (
 )
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.delivery import DeliveryOutcome, DeliveryWorker
+from cinqflow.workers.incidents import priors_for, recovery_guides
 from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
 
 API_PREFIX = "/api"
@@ -3072,17 +3076,164 @@ def create_app(
         precision gate measures the normalisation rather than a model's mood.
         """
         batch = _batch_or_404(control, batch_id, principal)
-        errors = list(control.list_errors(batch_id=batch_id))
-        guides = _recovery_guides(metadata)
-        incident = fingerprinting.fingerprint_batch(
-            batch_id=batch_id,
-            feed_id=batch.feed_id,
-            errors=errors,
-            guides=guides,
-            history=_priors_for(control, metadata, batch, guides, errors),
-            now=datetime.now(UTC),
+        return _incident_out(_incident_for(control, metadata, batch))
+
+    @app.get(
+        f"{API_PREFIX}/operations/incidents",
+        response_model=list[IncidentRowOut],
+        tags=["operations"],
+    )
+    def list_incidents(
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+        state: str | None = None,
+    ) -> list[IncidentRowOut]:
+        """CF-V2-E12-04 — open incidents, newest first, from the ledger.
+
+        The LEDGER's rows, not recomputed evidence: a list that re-derived
+        every incident's cascade would touch the error log once per row, and
+        the operator scanning it needs states and assignments, not bundles.
+        The per-batch route serves the full evidence.
+        """
+        wanted: fingerprinting.IncidentState | None = None
+        if state is not None:
+            try:
+                wanted = fingerprinting.IncidentState(state)
+            except ValueError:
+                states = ", ".join(s.value for s in fingerprinting.IncidentState)
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"{state!r} is not an incident state. This surface offers {states}.",
+                ) from None
+        rows = metadata.list_incident_events(state=wanted)
+        return [
+            IncidentRowOut(
+                incident_id=event.incident_id,
+                batch_id=event.batch_id,
+                feed_id=event.feed_id,
+                state=event.state.value,
+                signature=event.signature,
+                assigned_to=event.assigned_to,
+                opened_ts=event.opened_ts,
+                resolved_ts=event.resolved_ts,
+            )
+            for event in rows
+            if principal.scopes.covers_feed(event.feed_id)
+        ]
+
+    def _move_incident(
+        incident_id: str,
+        control: ControlTablesPort,
+        metadata: MetadataDbPort,
+        principal: Principal,
+        audit: AuditLog,
+        move: Callable[[fingerprinting.Incident], fingerprinting.Incident],
+        action_name: str,
+    ) -> IncidentOut:
+        """One transition: evidence recomputed, decision applied, event
+        appended, audited. The state machine itself refuses illegal moves —
+        this function only carries its answer to the wire."""
+        try:
+            held = metadata.get_incident_event(incident_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        if not principal.scopes.covers_feed(held.feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        batch = control.get_batch(held.batch_id)
+        incident = _incident_for(control, metadata, batch)
+        try:
+            moved = move(incident)
+        except fingerprinting.IncidentTransitionError as refused:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(refused)) from None
+        metadata.record_incident_event(
+            fingerprinting.event_for(
+                moved, actor_subject=principal.subject, occurred_ts=datetime.now(UTC)
+            )
         )
-        return _incident_out(incident)
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=held.feed_id,
+            action=f"incident:{action_name}",
+            actor=principal.as_actor(),
+            detail=f"{incident_id} -> {moved.state.value}",
+        )
+        return _incident_out(moved)
+
+    @app.post(
+        f"{API_PREFIX}/operations/incidents/{{incident_id}}/acknowledge",
+        response_model=IncidentOut,
+        tags=["operations"],
+    )
+    def acknowledge_incident(
+        incident_id: str,
+        body: AcknowledgeIncidentIn,
+        control: Control,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.ACKNOWLEDGE))],
+    ) -> IncidentOut:
+        """ "I have seen this." Names the caller; optionally assigns."""
+        return _move_incident(
+            incident_id,
+            control,
+            metadata,
+            principal,
+            audit,
+            lambda incident: incident.acknowledge(
+                by=principal.subject, assigned_to=body.assigned_to
+            ),
+            "acknowledge",
+        )
+
+    @app.post(
+        f"{API_PREFIX}/operations/incidents/{{incident_id}}/resolve",
+        response_model=IncidentOut,
+        tags=["operations"],
+    )
+    def resolve_incident(
+        incident_id: str,
+        body: ResolveIncidentIn,
+        control: Control,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.ACKNOWLEDGE))],
+    ) -> IncidentOut:
+        """The resolution text is what CF-V2-E16-07 embeds on close — the core
+        refuses an empty one, because it becomes the narrative the next
+        matching incident retrieves."""
+        return _move_incident(
+            incident_id,
+            control,
+            metadata,
+            principal,
+            audit,
+            lambda incident: incident.resolve(resolution=body.resolution, at=datetime.now(UTC)),
+            "resolve",
+        )
+
+    @app.post(
+        f"{API_PREFIX}/operations/incidents/{{incident_id}}/close",
+        response_model=IncidentOut,
+        tags=["operations"],
+    )
+    def close_incident(
+        incident_id: str,
+        control: Control,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.ACKNOWLEDGE))],
+    ) -> IncidentOut:
+        """Closing is what makes the narrative embeddable — "only a closed one
+        teaches." The machine refuses to close anything unresolved."""
+        return _move_incident(
+            incident_id,
+            control,
+            metadata,
+            principal,
+            audit,
+            lambda incident: incident.close(),
+            "close",
+        )
 
     # ── CF-V1-E7-04 · the technical review queue ─────────────────────────
 
@@ -5583,87 +5734,30 @@ def _action_refusal_out(refusal: ops_actions.Refusal) -> ActionRefusalOut:
     )
 
 
-def _recovery_guides(metadata: MetadataDbPort) -> tuple[fingerprinting.RecoveryGuide, ...]:
-    """The recovery library, from PUBLISHED runbooks.
+def _incident_for(
+    control: ControlTablesPort, metadata: MetadataDbPort, batch: BatchControl
+) -> fingerprinting.Incident:
+    """The whole incident: evidence recomputed, decisions from the ledger.
 
-    Published only: a draft guide is one person's account of what worked once,
-    and offering it at 3 AM as the known fix is how a wrong answer becomes the
-    recommended one. CF-V2-E16-07 is what keeps them current.
+    The computed half is deterministic over control.error_log and the
+    published runbooks; the ledger holds only what people did. `hydrate`
+    folds the two, so acknowledging an incident never has to store — and can
+    never contradict — its evidence.
     """
-    return tuple(
-        fingerprinting.RecoveryGuide(
-            guide_id=obj.object_id,
-            title=str(obj.body.get("title") or obj.object_id),
-            signatures=frozenset(str(s) for s in obj.body.get("signatures", ())),
-            steps=tuple(str(step) for step in obj.body.get("steps", ())),
-            remedy=(
-                ops_actions.OpsAction(obj.body["remedy"])
-                if obj.body.get("remedy") in set(ops_actions.OpsAction)
-                else None
-            ),
-            is_transient=bool(obj.body.get("is_transient", False)),
-            stale=bool(obj.body.get("stale", False)),
-        )
-        for obj in metadata.list(ObjectType.RUNBOOK)
-        if obj.lifecycle_state is LifecycleState.PUBLISHED
+    errors = tuple(control.list_errors(batch_id=batch.batch_id))
+    incident = fingerprinting.fingerprint_batch(
+        batch_id=batch.batch_id,
+        feed_id=batch.feed_id,
+        errors=errors,
+        guides=recovery_guides(metadata),
+        history=priors_for(control, feed_id=batch.feed_id, batch_id=batch.batch_id, errors=errors),
+        now=datetime.now(UTC),
     )
-
-
-def _priors_for(
-    control: ControlTablesPort,
-    metadata: MetadataDbPort,
-    batch: BatchControl,
-    guides: tuple[fingerprinting.RecoveryGuide, ...],
-    errors: Sequence[Any],
-) -> tuple[fingerprinting.PriorIncident, ...]:
-    """How often this exact failure has happened on this feed before.
-
-    Computed from the control tables rather than a curated count, so "14 prior
-    occurrences" is a query somebody can run rather than a number in a
-    spreadsheet — the same discipline the board's counters are held to.
-    """
-    cascade = ops_monitor.separate_cascade(errors)
-    root = cascade.first
-    if root is None:
-        return ()
-    found = fingerprinting.signature(
-        stage=root.stage,
-        category=root.category,
-        message=root.message,
-        rule_id=root.rule_id,
-    )
-    _ = guides, metadata
-    priors: list[fingerprinting.PriorIncident] = []
-    for prior in control.list_batches(batch.feed_id, 200):
-        if prior.batch_id == batch.batch_id:
-            continue
-        prior_errors = list(control.list_errors(batch_id=prior.batch_id))
-        prior_root = ops_monitor.separate_cascade(prior_errors).first
-        if prior_root is None:
-            continue
-        if (
-            fingerprinting.signature(
-                stage=prior_root.stage,
-                category=prior_root.category,
-                message=prior_root.message,
-                rule_id=prior_root.rule_id,
-            )
-            != found
-        ):
-            continue
-        priors.append(
-            fingerprinting.PriorIncident(
-                incident_id=f"INC-{prior.batch_id}",
-                occurred_ts=prior.started_ts,
-                fix_minutes=(
-                    int((prior.completed_ts - prior.started_ts).total_seconds() // 60)
-                    if prior.completed_ts
-                    else None
-                ),
-                batch_id=prior.batch_id,
-            )
-        )
-    return tuple(priors)
+    try:
+        held = metadata.get_incident_event(incident.incident_id)
+    except ObjectNotFoundError:
+        return incident
+    return fingerprinting.hydrate(incident, held)
 
 
 def _incident_out(incident: fingerprinting.Incident) -> IncidentOut:
@@ -5675,6 +5769,11 @@ def _incident_out(incident: fingerprinting.Incident) -> IncidentOut:
         opened_ts=incident.opened_ts,
         kind=incident.kind.value,
         status=incident.status,
+        state=incident.state.value,
+        acknowledged_by=incident.acknowledged_by,
+        assigned_to=incident.assigned_to,
+        resolution=incident.resolution,
+        resolved_ts=incident.resolved_ts,
         signature=incident.signature,
         root_cause=_error_out(incident.root_cause) if incident.root_cause else None,
         consequences=[_error_out(e) for e in incident.cascade.consequences],

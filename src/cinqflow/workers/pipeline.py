@@ -17,6 +17,7 @@ until it succeeded could not.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -83,11 +84,17 @@ class PipelineRunner:
         control: ControlTablesPort,
         compute: PostgresCompute,
         source_system: str = "unknown",
+        on_batch_failed: Callable[[str], object] | None = None,
     ) -> None:
         self._storage = storage
         self._control = control
         self._compute = compute
         self._source_system = source_system
+        # CF-V2-E12-04: the incident hook, called AFTER the FAILED state and
+        # error rows are committed facts. Optional, because the runner must
+        # run on rung 0 with nothing but control tables — an incident is a
+        # convenience derived from the errors, never a load-bearing write.
+        self._on_batch_failed = on_batch_failed
 
     def run(
         self,
@@ -226,6 +233,7 @@ class PipelineRunner:
             # records — "the control rows ARE the observable behaviour" only
             # holds if recording a crash cannot itself be undone by the crash.
             self._fail_unexpected(batch, crash)
+            self._open_incident(batch)
             return RunOutcome(
                 batch_id=batch,
                 decision=decision,
@@ -469,6 +477,19 @@ class PipelineRunner:
             )
         )
         self._control.update_batch_state(batch, BatchState.FAILED)
+        self._open_incident(batch)
+
+    def _open_incident(self, batch: str) -> None:
+        """Best-effort, AFTER the failure is recorded. A hook that could turn
+        a recorded failure into an unrecorded crash would invert the priority:
+        the error rows are the truth, the incident is a reading of them, and a
+        reading that fails is re-derivable from the rows any time."""
+        if self._on_batch_failed is None:
+            return
+        try:
+            self._on_batch_failed(batch)
+        except Exception:
+            return
 
     @staticmethod
     def _new_batch_id() -> str:

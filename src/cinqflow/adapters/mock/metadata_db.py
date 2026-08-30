@@ -8,6 +8,7 @@ from typing import Any
 
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
+from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
 from cinqflow.core.proposals import Proposal, ProposalState
 from cinqflow.core.registry.suspension import Suspension, SuspensionEvent, current
 from cinqflow.ports import port
@@ -36,6 +37,7 @@ class MemMetadataDb:
         self._proposals: dict[str, Proposal] = {}
         self._suspensions: list[SuspensionEvent] = []
         self._action_events: list[ActionRecordRow] = []
+        self._incident_events: list[IncidentEvent] = []
 
     def save(self, obj: GovernedObject) -> GovernedObject:
         versions = self._objects.setdefault((obj.object_type, obj.object_id), [])
@@ -217,7 +219,15 @@ class MemMetadataDb:
         phases = [row for row in self._action_events if row.record_id == record_id]
         if not phases:
             raise ObjectNotFoundError(f"action record {record_id} was never written")
-        return max(phases, key=lambda row: row.occurred_ts)
+        # Ties on occurred_ts go to the LATER APPEND — in an append-only
+        # ledger the newest row is the current one even when two writes share
+        # a timestamp. reversed() + max() would keep the earlier; this keeps
+        # insertion order as the tiebreak.
+        current_row = phases[0]
+        for row in phases[1:]:
+            if row.occurred_ts >= current_row.occurred_ts:
+                current_row = row
+        return current_row
 
     def list_action_records(
         self, *, batch_id: str | None = None, feed_id: str | None = None, limit: int = 50
@@ -233,3 +243,43 @@ class MemMetadataDb:
                 newest[row.record_id] = row
         current_rows = sorted(newest.values(), key=lambda row: row.occurred_ts, reverse=True)
         return tuple(current_rows[:limit])
+
+    # ── ops.incident_event · CF-V2-E12-04 ────────────────────────────────────
+    def record_incident_event(self, event: IncidentEvent) -> IncidentEvent:
+        """Append-only — a transition is a new row, never an overwrite."""
+        self._incident_events.append(event)
+        return event
+
+    def get_incident_event(self, incident_id: str) -> IncidentEvent:
+        events = [e for e in self._incident_events if e.incident_id == incident_id]
+        if not events:
+            raise ObjectNotFoundError(f"incident {incident_id} has no events")
+        # Same tiebreak as get_action_record: the later append wins.
+        current_event = events[0]
+        for event in events[1:]:
+            if event.occurred_ts >= current_event.occurred_ts:
+                current_event = event
+        return current_event
+
+    def list_incident_events(
+        self,
+        *,
+        batch_id: str | None = None,
+        feed_id: str | None = None,
+        state: IncidentState | None = None,
+        limit: int = 50,
+    ) -> Sequence[IncidentEvent]:
+        newest: dict[str, IncidentEvent] = {}
+        for event in self._incident_events:
+            if batch_id is not None and event.batch_id != batch_id:
+                continue
+            if feed_id is not None and event.feed_id != feed_id:
+                continue
+            held = newest.get(event.incident_id)
+            if held is None or event.occurred_ts >= held.occurred_ts:
+                newest[event.incident_id] = event
+        # The state filter applies to the CURRENT state, after folding — an
+        # incident that was open and is now closed is not an open incident.
+        current_events = [e for e in newest.values() if state is None or e.state is state]
+        current_events.sort(key=lambda e: e.occurred_ts, reverse=True)
+        return tuple(current_events[:limit])

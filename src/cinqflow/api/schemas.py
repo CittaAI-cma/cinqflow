@@ -2046,6 +2046,35 @@ class GuideMatchOut(BaseModel):
     explanation: str = ""
 
 
+class AcknowledgeIncidentIn(BaseModel):
+    """Acknowledging names the person automatically (the caller); assignment
+    is optional and may name somebody else."""
+
+    assigned_to: str = ""
+
+
+class ResolveIncidentIn(BaseModel):
+    """The resolution text is REQUIRED by the core — it becomes the narrative
+    CF-V2-E16-07 embeds on close, and an empty one teaches nothing."""
+
+    resolution: str
+
+
+class IncidentRowOut(BaseModel):
+    """One line in the incident list — the ledger's current state, cheap
+    enough to serve for every open incident at once. The full evidence bundle
+    stays on the per-batch route, which recomputes it."""
+
+    incident_id: str
+    batch_id: str
+    feed_id: str
+    state: str
+    signature: str = ""
+    assigned_to: str = ""
+    opened_ts: datetime
+    resolved_ts: datetime | None = None
+
+
 class IncidentOut(BaseModel):
     incident_id: str
     batch_id: str
@@ -2053,6 +2082,12 @@ class IncidentOut(BaseModel):
     opened_ts: datetime
     kind: str
     status: StatusWord
+    # ── the operational machine · CF-V2-E12-04 ────────────────────────────
+    state: str = "open"
+    acknowledged_by: str = ""
+    assigned_to: str = ""
+    resolution: str = ""
+    resolved_ts: datetime | None = None
     signature: str = ""
     root_cause: BatchErrorOut | None = None
     consequences: list[BatchErrorOut] = Field(default_factory=list)
