@@ -76,5 +76,6 @@ module = [
     "openpyxl.*",
     "presidio_analyzer.*",
     "presidio_anonymizer.*",
+    "croniter.*",
 ]
 ignore_missing_imports = true
