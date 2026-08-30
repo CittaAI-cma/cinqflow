@@ -242,6 +242,60 @@ test("the browser confirms a name that DOES match, before anything is sent", asy
   await expect(page.locator('[data-verdict="match"]')).toBeVisible();
 });
 
+test("a past delivery stays reachable from the feed page, not only from the redirect", async ({
+  page,
+}) => {
+  // The gap: `deliverFile`'s redirect carries a ONE-TIME link to the profile
+  // it just made (`DeliveryOutcome`'s "What the platform read from it"). Leave
+  // the page — the feed page a person actually returns to had no way back to
+  // it at all, for a delivery whose facts were sitting in the database the
+  // whole time. `GET /api/feeds/{id}/profiles` existed before this test did;
+  // nothing on this page ever called it.
+  //
+  // The filename MUST match the feed's own pattern: profiling only runs for
+  // an ACCEPTED delivery (`DeliveryOutcome.profile` docstring — a rejected or
+  // unexpected file is never profiled, since that would produce facts about
+  // bytes the platform declined to load), so an unmatched name would never
+  // reach `list_profiles` regardless of anything this page renders.
+  await signIn(page);
+  await page.goto(`/data/intake/feed/${FEED}/deliver`);
+  await choose(page, "_CINQDOWNSTATE_Member_Roster_20261225.xlsx", roster());
+  await page.getByRole("button", { name: /^deliver$/i }).click();
+  await page.waitForURL(/outcome=/);
+  await expect(page.locator('[data-outcome="ACCEPTED"]')).toBeVisible();
+
+  // Navigate AWAY and back, the way a person actually returns — not by
+  // following the one-time redirect link this test deliberately does not use.
+  await page.goto("/data/intake");
+  await page.goto(`/data/intake/feed/${FEED}`);
+
+  await expect(page.getByText(/recent deliveries/i)).toBeVisible();
+  const row = page.getByRole("link", { name: "_CINQDOWNSTATE_Member_Roster_20261225.xlsx" });
+  await expect(row).toBeVisible();
+  await row.click();
+  await page.waitForURL(/\/data\/intake\/profile\//);
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+});
+
+test("a feed with nothing delivered yet says so, not an empty table", async ({ page }) => {
+  await signIn(page);
+  await page.goto("/data/intake/new");
+  const id = `no-deliveries-yet-${Date.now()}`;
+  await page.locator('input[name="feed_id"]').fill(id);
+  await page.locator('input[name="domain"]').fill("membership");
+  await page.locator('input[name="source_system"]').fill("fidelis");
+  await page.locator('select[name="file_format"]').selectOption("csv");
+  await page.locator('input[name="landing_path"]').fill(`landing/fidelis/${id}`);
+  await page.locator('input[name="schedule_cron"]').fill("0 6 * * 1");
+  await page.locator('input[name="file_pattern"]').fill(`^${id}\\.csv$`);
+  await page.locator('input[name="sample_filename"]').fill(`${id}.csv`);
+  await page.getByRole("button", { name: /register feed/i }).click();
+  await page.waitForURL(/outcome=/);
+
+  await page.goto(`/data/intake/feed/${id}`);
+  await expect(page.getByText(/nothing delivered yet/i)).toBeVisible();
+});
+
 test("a reader is told they may not deliver, rather than handed a button that 403s", async ({
   page,
 }) => {

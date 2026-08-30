@@ -4,7 +4,7 @@ import { CitationChip } from "@/components/Cited";
 import { RefusalNotice } from "@/components/Refusal";
 import { Status } from "@/components/Status";
 import { attempt, isRefused } from "@/lib/api";
-import type { Feed, FeedSuspension } from "@/lib/types";
+import type { Feed, FeedProfile, FeedSuspension } from "@/lib/types";
 
 /**
  * One feed. The destination a `feed:<id>@v<n>` citation opens.
@@ -30,6 +30,17 @@ export default async function FeedPage({
   // Published, which is why "which version was live in March" keeps answering.
   const suspension = await attempt<FeedSuspension>(
     `/api/feeds/${encodeURIComponent(feedId)}/suspension`,
+  );
+
+  // CF-V1-E3-05/CF-V1-E5-01. `GET /api/feeds/{id}/profiles` has existed since
+  // the delivery step shipped, and until now nothing on this page — the ONE
+  // place a person lands after delivering a sample and coming back later —
+  // ever called it. The redirect from the delivery form carries a one-time
+  // link to the profile it just made; navigate away and there was no way
+  // back to it at all, for a feed with real, already-computed evidence
+  // sitting in the database.
+  const profiles = await attempt<FeedProfile[]>(
+    `/api/feeds/${encodeURIComponent(feedId)}/profiles`,
   );
 
   return (
@@ -170,6 +181,48 @@ export default async function FeedPage({
           </ul>
         </div>
       ) : null}
+
+      <div className="card">
+        <strong>Recent deliveries</strong>
+        {isRefused(profiles) || profiles.length === 0 ? (
+          <p className="note">
+            Nothing delivered yet. Uploading a sample is the first of the five onboarding steps —
+            everything after it reads the file you send.
+          </p>
+        ) : (
+          <div className="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Rows</th>
+                  <th>Columns</th>
+                  <th>Would load</th>
+                  <th>Profiled</th>
+                </tr>
+              </thead>
+              <tbody>
+                {profiles.map((profile) => (
+                  <tr className="row" key={profile.profile_id}>
+                    <td>
+                      <Link
+                        className="cited"
+                        href={`/data/intake/profile/${profile.profile_id}`}
+                      >
+                        {profile.source_key.split("/").pop()}
+                      </Link>
+                    </td>
+                    <td className="num">{profile.structure.data_rows.toLocaleString()}</td>
+                    <td className="num">{profile.structure.column_count}</td>
+                    <td>{profile.would_load ? "Yes" : `No — ${profile.refusal?.reason ?? ""}`}</td>
+                    <td>{new Date(profile.profiled_ts).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       <div className="card">
         <strong>Deliver a file</strong>

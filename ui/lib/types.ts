@@ -437,3 +437,17 @@ export interface DeliverySource {
   source: string;
   detail: string;
 }
+
+/** One profiling run, as the feed page's "Recent deliveries" list shows it —
+ *  a summary, not the full column-by-column profile `FileProfileOut` carries. */
+export interface FeedProfile {
+  profile_id: string;
+  source_key: string;
+  source_fingerprint: string;
+  readable: boolean;
+  would_load: boolean;
+  refusal: { reason: string; explanation: string; ask_the_payer: string } | null;
+  structure: { data_rows: number; column_count: number; file_format: string };
+  profiled_ts: string;
+  profiled_by: string;
+}
