@@ -489,7 +489,7 @@ def test_verifying_against_no_expected_state_is_refused() -> None:
 
 
 def test_a_refusal_becomes_a_row_rather_than_an_exception_that_vanished() -> None:
-    """"the system refuses, notifies a human, and RECORDS the refusal"."""
+    """ "the system refuses, notifies a human, and RECORDS the refusal"."""
     request = retry()
     with pytest.raises(RefusedError) as raised:
         authorize(
