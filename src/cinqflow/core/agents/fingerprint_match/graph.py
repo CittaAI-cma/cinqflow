@@ -144,6 +144,24 @@ RETRIEVE_TOOLS: tuple[str, ...] = ("list_incidents", "get_incident", "lookup_ref
 #: the guide is published.
 MAX_NEAR_MISS = 3
 
+#: How many `consequences` and how many `other_actionable` errors
+#: `intelligence.agents.fingerprint_match._evidence_text` keeps when it turns
+#: `Incident.evidence_bundle()` into PROMPT input. Each list capped
+#: separately, at this same number.
+#:
+#: NOT A TUNING KNOB — a failure-isolation boundary, `mapping_suggestion
+#: .BATCH_SIZE`'s own lesson applied here. That constant's docstring tells the
+#: story: one call carrying the client's ninety-column Fidelis extract
+#: produced two failures in a row on the real endpoint — first an empty
+#: completion because the answer did not fit the token cap, then a request
+#: timeout once the cap was raised to fit it. A cascade that fans a single
+#: root cause into hundreds of downstream errors is the identical shape of
+#: mistake: the whole fan-out on one round trip. `evidence_bundle()` itself
+#: stays unbounded — the incidents UI page and the `get_incident` tool need
+#: the full picture, and this constant does not change what an incident's
+#: evidence bundle IS, only what one PROMPT gets to see of it.
+MAX_EVIDENCE_ITEMS = 20
+
 NARRATE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["narrative"],
@@ -178,6 +196,18 @@ DRAFT_SCHEMA: dict[str, Any] = {
         "is_transient": {"type": "boolean"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "rationale": {"type": "string"},
+        # Citation ids `steps` or `rationale` actually leaned on, from what
+        # `retrieve` handed the model — the SAME shape and the SAME discipline
+        # `NARRATE_SCHEMA.citations` already has. A drafted guide makes
+        # several claims where a narrative makes one, but the rule does not
+        # change: the model does not get to decide what counts as evidence.
+        # Before this field existed, an unsupported rationale had no citation
+        # to point to and no way to say so either — worse than
+        # `mapping_suggestion`, where an unmapped claim's missing citation is
+        # at least visible. A citation named here that does not resolve to
+        # something `retrieve` actually returned is flagged and dropped, not
+        # silently kept — see `_draft`'s `_resolve_draft_citations`.
+        "citations": {"type": "array", "items": {"type": "string"}},
     },
     "additionalProperties": False,
 }
@@ -196,6 +226,7 @@ __all__ = [
     "CONFIDENCE_FLOOR",
     "DETERMINISTIC_NODES",
     "DRAFT_SCHEMA",
+    "MAX_EVIDENCE_ITEMS",
     "MAX_NEAR_MISS",
     "NARRATE_SCHEMA",
     "NODES",

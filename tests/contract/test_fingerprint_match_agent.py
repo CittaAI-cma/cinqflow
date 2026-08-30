@@ -19,7 +19,7 @@ import ast
 import inspect
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -35,6 +35,7 @@ from cinqflow.core import proposals as proposals_mod
 from cinqflow.core.agents.fingerprint_match.graph import (
     CONFIDENCE_FLOOR,
     DETERMINISTIC_NODES,
+    MAX_EVIDENCE_ITEMS,
     NODE_GATHER,
     NODE_RETRIEVE,
 )
@@ -379,6 +380,131 @@ def test_narrates_hallucinated_citation_is_dropped(
     result = _agent(store, control, llm).propose(incident, caller=BA, run_id="R-3", now=NOW)
     assert result.proposal is not None
     assert "batch:not-a-real-one" not in {str(c) for c in result.proposal.grounding_citations}
+
+
+# ── a drafted guide's OWN citations — the SAME discipline, extended ─────────
+
+
+def test_a_drafts_own_citation_reaches_the_record(
+    store: MemMetadataDb, control: MemStoreControlTables
+) -> None:
+    """`DraftedGuide.draft_citations` is narrower than the proposal's outer
+    `grounding_citations` union — it is only what the model itself claimed in
+    `graph.DRAFT_SCHEMA`'s `citations`, and only once resolved against what
+    `retrieve` actually returned. It lands on the record `as_payload` writes,
+    so a reviewer of THIS draft — not just of the proposal as a whole — can
+    see what specifically backs it."""
+    _seed_sibling(store)
+    incident = _novel_incident()
+    llm = ScriptedLlm(
+        _responder(
+            _narrate_answer(),
+            _draft_answer(citations=[f"batch:{SIBLING_BATCH}"]),
+        )
+    )
+    result = _agent(store, control, llm).propose(incident, caller=BA, run_id="R-dc-1", now=NOW)
+    assert result.proposal is not None
+    record = result.proposal.payload["records"][0]
+    assert record["citations"] == [f"batch:{SIBLING_BATCH}"]
+
+
+def test_drafts_hallucinated_citation_is_flagged_and_dropped(
+    store: MemMetadataDb, control: MemStoreControlTables
+) -> None:
+    """The SAME discipline `test_narrates_hallucinated_citation_is_dropped`
+    proves for `narrate`, extended to `draft`: a citation the model invents
+    for a step or the rationale does not survive to the record — and unlike
+    a silent drop, it leaves a refusal a reviewer (and the audit log) can
+    read, exactly like a discarded remedy does."""
+    _seed_sibling(store)
+    incident = _novel_incident()
+    llm = ScriptedLlm(
+        _responder(
+            _narrate_answer(),
+            _draft_answer(citations=["batch:not-a-real-one"]),
+        )
+    )
+    result = _agent(store, control, llm).propose(incident, caller=BA, run_id="R-dc-2", now=NOW)
+    assert result.proposal is not None
+    record = result.proposal.payload["records"][0]
+    assert record["citations"] == []
+    assert result.drafted is not None
+    assert any("batch:not-a-real-one" in r for r in result.drafted.refusals)
+    actions = store.read_agent_actions(agent="fingerprint-match")
+    assert any("batch:not-a-real-one" in a.detail for a in actions), (
+        "a fabricated citation is flagged, not merely dropped — same as any other refusal"
+    )
+
+
+# ── a cascade has an edge — the evidence a PROMPT sees is capped ────────────
+
+
+def _cascade_errors(batch_id: str, root_occurred: datetime, fanout: int) -> tuple[ErrorRecord, ...]:
+    """One root, followed by `fanout` downstream errors close enough in time,
+    at the same stage, with no distinct rule and no `record_key` — exactly
+    `core.operations.monitor.separate_cascade`'s four-and-a-fifth conditions
+    for "this is fallout from the first", so every one of them lands in
+    `Cascade.consequences` rather than `actionable` or `independent`."""
+    root = ErrorRecord(
+        error_id_hash=f"err-{batch_id}-root",
+        batch_id=batch_id,
+        stage=Layer.SILVER_RAW,
+        category=ErrorCategory.SCHEMA,
+        message=ROOT_MESSAGE,
+        occurred_ts=root_occurred,
+    )
+    consequences = tuple(
+        ErrorRecord(
+            error_id_hash=f"err-{batch_id}-c{i}",
+            batch_id=batch_id,
+            stage=Layer.SILVER_RAW,
+            category=ErrorCategory.SCHEMA,
+            message=f"downstream task #{i} failed reading the same missing key",
+            occurred_ts=root_occurred + timedelta(seconds=i + 1),
+        )
+        for i in range(fanout)
+    )
+    return (root, *consequences)
+
+
+def test_an_oversized_cascade_does_not_crash_and_the_draft_says_it_was_truncated(
+    store: MemMetadataDb, control: MemStoreControlTables
+) -> None:
+    """THE FAILURE THIS GUARDS: `Incident.evidence_bundle()` dumps every
+    `Cascade.consequence` unbounded, by design — the incidents UI page and
+    `get_incident` both need the full picture. A PROMPT is a different
+    consumer with `mapping_suggestion.BATCH_SIZE`'s own failure mode: a
+    single call carrying hundreds of downstream errors is the identical
+    shape of mistake as that constant's own ninety-column production
+    incident. `graph.MAX_EVIDENCE_ITEMS` is the bound; this proves it holds
+    end to end — the run does not crash, and both the prompt and the
+    reviewer-facing record say plainly that the cascade was bigger than what
+    the model saw."""
+    fanout = MAX_EVIDENCE_ITEMS * 10
+    errors = _cascade_errors(BATCH, NOW, fanout)
+    incident = fingerprinting.fingerprint_batch(
+        batch_id=BATCH, feed_id=FEED, errors=errors, guides=(), now=NOW
+    )
+    assert len(incident.cascade.consequences) == fanout, "the fixture must actually fan out"
+    assert len(incident.evidence_bundle()["consequences"]) == fanout, (  # type: ignore[arg-type]
+        "evidence_bundle() itself stays uncapped — this is a prompt-construction concern"
+    )
+
+    llm = ScriptedLlm(_responder(_narrate_answer(), _draft_answer()))
+    result = _agent(store, control, llm).propose(incident, caller=BA, run_id="R-cascade", now=NOW)
+
+    assert result.proposal is not None, "an oversized cascade must not crash the run"
+    record = result.proposal.payload["records"][0]
+    assert record["evidence_truncated"], "the record must say evidence was cut"
+    assert any("consequences" in note for note in record["evidence_truncated"])
+
+    large_calls = [prompt for prompt, task in llm.calls if task is TaskClass.LARGE]
+    assert large_calls, "the draft call must have happened"
+    assert "truncated for prompt size" in large_calls[0], (
+        "the model itself must be told, in the evidence text, that the cascade was cut — "
+        "not left to infer a smaller failure than the one that actually happened"
+    )
+    assert f"showing {MAX_EVIDENCE_ITEMS} of {fanout}" in large_calls[0]
 
 
 # ── the platform, not the model, decides what a remedy is worth ─────────────

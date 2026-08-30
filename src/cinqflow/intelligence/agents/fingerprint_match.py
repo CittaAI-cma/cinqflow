@@ -40,6 +40,7 @@ from cinqflow.core.agents.fingerprint_match.graph import (
     AGENT,
     CAPABILITY,
     CONFIDENCE_FLOOR,
+    MAX_EVIDENCE_ITEMS,
     MAX_NEAR_MISS,
     NODE_DRAFT,
     NODE_GATHER,
@@ -81,12 +82,24 @@ class DraftedGuide:
     `refusals` is not decoration — a discarded or floor-gated remedy is a
     finding a reviewer should be able to see, exactly like
     `mapping_suggestion.SuggestionResult.refusals`.
+
+    `citations` is the OUTER union `propose` folds into `Proposal
+    .grounding_citations` alongside the incident's own — everything
+    `retrieve` found, whether or not the draft actually leaned on it.
+    `draft_citations` is narrower and record-scoped: only the ids the model
+    named in `graph.DRAFT_SCHEMA`'s own `citations` field AND that resolved to
+    something `retrieve` actually returned — a fabricated one is dropped
+    before it reaches here, see `_resolve_draft_citations`. It travels on
+    `as_payload`'s record, not only the proposal's union, so a reviewer
+    looking at THIS draft can see what specifically backs it.
     """
 
     guide: fingerprinting.RecoveryGuide
     confidence: float
     rationale: str
     citations: tuple[CitationId, ...] = ()
+    draft_citations: tuple[CitationId, ...] = ()
+    evidence_truncated: tuple[str, ...] = ()
     refusals: tuple[str, ...] = ()
 
     def as_payload(self, incident: fingerprinting.Incident) -> dict[str, Any]:
@@ -106,6 +119,14 @@ class DraftedGuide:
                     "signatures": sorted(self.guide.signatures),
                     "confidence": self.confidence,
                     "rationale": self.rationale,
+                    # This record's own grounding — see the class docstring
+                    # for why it is narrower than `Proposal.grounding_citations`.
+                    "citations": [str(c) for c in self.draft_citations],
+                    # Non-empty only when `_evidence_text` had to cut
+                    # `consequences`/`other_actionable` to fit a prompt — a
+                    # reviewer reading `rationale` must be able to tell the
+                    # cascade was bigger than what the model saw.
+                    "evidence_truncated": list(self.evidence_truncated),
                 }
             ],
             "refusals": list(self.refusals),
@@ -416,9 +437,11 @@ class FingerprintMatchAgent:
             input_text=_evidence_text(state["evidence"]),
         )
         drafted_raw = completed.value if isinstance(completed.value, dict) else {}
-        guide, confidence, rationale, refusals = _build_guide(
-            incident, drafted_raw, floor=self.confidence_floor
+        available = {str(c): c for c in state.get("retrieved_citations", ())}
+        guide, confidence, rationale, refusals, draft_citations = _build_guide(
+            incident, drafted_raw, floor=self.confidence_floor, available_citations=available
         )
+        _, evidence_notes = _capped_evidence(state["evidence"])
         citations = tuple(
             dict.fromkeys(
                 (*state.get("retrieved_citations", ()), *state.get("narrative_citations", ()))
@@ -430,6 +453,8 @@ class FingerprintMatchAgent:
                 confidence=confidence,
                 rationale=rationale,
                 citations=citations,
+                draft_citations=draft_citations,
+                evidence_truncated=evidence_notes,
                 refusals=tuple(refusals),
             )
         }
@@ -480,13 +505,83 @@ def _pack_retrieval(state: dict[str, Any]) -> str:
     return "\n".join(lines) or "no precedent retrieved — this failure is genuinely novel"
 
 
+def _capped_evidence(evidence: dict[str, Any]) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Cap `consequences` and `other_actionable` for a PROMPT alone.
+
+    `Incident.evidence_bundle()` dumps both unbounded, correctly — the
+    incidents UI page and the `get_incident` tool both need the full cascade,
+    and this function does not touch that method or its callers. A model
+    call is a different consumer with a different failure mode: see
+    `graph.MAX_EVIDENCE_ITEMS`'s own note for the production incident a
+    fan-out of hundreds of downstream errors on one call would reproduce.
+
+    Returns the (possibly capped) bundle and, only when something was
+    actually cut, the sentence(s) saying so — so a caller building the
+    prompt text and a caller building the reviewer-facing payload both work
+    from the same true account of what got left out.
+    """
+    capped = dict(evidence)
+    notes: list[str] = []
+    for key in ("consequences", "other_actionable"):
+        items = evidence.get(key)
+        if isinstance(items, list) and len(items) > MAX_EVIDENCE_ITEMS:
+            total = len(items)
+            capped[key] = items[:MAX_EVIDENCE_ITEMS]
+            notes.append(
+                f"{key}: showing {MAX_EVIDENCE_ITEMS} of {total} — truncated for prompt size, "
+                "the cascade itself is not smaller than this"
+            )
+    return capped, tuple(notes)
+
+
 def _evidence_text(evidence: dict[str, Any]) -> str:
-    return json.dumps(evidence, default=str, sort_keys=True)
+    capped, notes = _capped_evidence(evidence)
+    if notes:
+        # In the text itself, not only in a sibling field — the model (and
+        # anyone reading its rationale afterward) must see the cut, not
+        # infer a smaller cascade than the one that actually happened.
+        capped = {**capped, "_evidence_truncated": list(notes)}
+    return json.dumps(capped, default=str, sort_keys=True)
+
+
+def _resolve_draft_citations(
+    incident: fingerprinting.Incident,
+    claimed: Any,
+    *,
+    available: dict[str, CitationId],
+) -> tuple[tuple[CitationId, ...], list[str]]:
+    """The SAME discipline `_narrate` already applies to its one sentence,
+    for a draft that makes several. A citation the model names in
+    `graph.DRAFT_SCHEMA`'s `citations` must resolve to something `retrieve`
+    actually returned; one that does not is FLAGGED, not silently kept —
+    a reviewer can see, in `refusals`, that a step or the rationale claimed
+    precedent that was never there.
+    """
+    if not isinstance(claimed, list):
+        return (), []
+    kept: list[CitationId] = []
+    refusals: list[str] = []
+    for raw_id in claimed:
+        key = str(raw_id)
+        resolved = available.get(key)
+        if resolved is not None:
+            kept.append(resolved)
+        else:
+            refusals.append(
+                f"{incident.incident_id}: the draft cited {key!r}, which nothing retrieved "
+                "produced. Discarded — a step or the rationale is not backed by evidence "
+                "just because the model named a citation for it."
+            )
+    return tuple(dict.fromkeys(kept)), refusals
 
 
 def _build_guide(
-    incident: fingerprinting.Incident, raw: dict[str, Any], *, floor: float
-) -> tuple[fingerprinting.RecoveryGuide, float, str, list[str]]:
+    incident: fingerprinting.Incident,
+    raw: dict[str, Any],
+    *,
+    floor: float,
+    available_citations: dict[str, CitationId],
+) -> tuple[fingerprinting.RecoveryGuide, float, str, list[str], tuple[CitationId, ...]]:
     """The PLATFORM decides what survives — same discipline
     `mapping_suggestion._from_inference` applies to a proposed target.
 
@@ -496,7 +591,8 @@ def _build_guide(
     land on the SAME `guide_id` and version each other rather than collide.
     What this agent adds beyond that helper is the one thing a resolution-time
     draft correctly refuses to guess at all: a REMEDY, and only above the
-    confidence floor.
+    confidence floor. It also resolves whatever citations the model claimed
+    for its steps and rationale — see `_resolve_draft_citations`.
     """
     refusals: list[str] = []
     title = str(raw.get("title") or "").strip() or _fallback_title(incident)
@@ -525,8 +621,13 @@ def _build_guide(
     elif proposed_remedy:
         remedy = OpsAction(proposed_remedy)
 
+    draft_citations, citation_refusals = _resolve_draft_citations(
+        incident, raw.get("citations"), available=available_citations
+    )
+    refusals.extend(citation_refusals)
+
     guide = replace(base, remedy=remedy, is_transient=bool(raw.get("is_transient", False)))
-    return guide, confidence, rationale, refusals
+    return guide, confidence, rationale, refusals, draft_citations
 
 
 def _fallback_title(incident: fingerprinting.Incident) -> str:
