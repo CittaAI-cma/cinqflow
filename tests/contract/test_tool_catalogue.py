@@ -14,7 +14,7 @@ a test that makes the attempt; a review of seventeen implementations is not.
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -25,11 +25,13 @@ from cinqflow.core.citations import parse
 from cinqflow.core.model.agent_action import ActionOutcome
 from cinqflow.core.model.governed import Actor
 from cinqflow.core.model.vocabulary import ActorType
+from cinqflow.core.operations import fingerprint as fingerprinting
 from cinqflow.core.registry import feed as feed_registry
 from cinqflow.core.tools import (
     CATALOGUE,
     FORBIDDEN_READS,
     READ_ONLY_WHITELIST,
+    READABLE,
     ArgumentError,
     ToolError,
     ToolSpec,
@@ -43,6 +45,7 @@ from cinqflow.intelligence.tools import (
     invoke,
 )
 from cinqflow.ports.authn import Principal, Role, Scopes
+from cinqflow.ports.control_tables import RuleResult, SlaCycle
 from tests.contract.seeded_plane import (
     BATCH_ID,
     CANARY,
@@ -102,9 +105,14 @@ def _every_call() -> list[tuple[str, dict[str, Any]]]:
                     arguments["error_id_hash"] = ERROR_ID_HASH
                 case "fingerprint":
                     arguments["fingerprint"] = FINGERPRINT
+                case "incident_id":
+                    # Plausible, and deliberately not one the plane holds — an
+                    # incident_id nobody ever opened is exactly as ordinary an
+                    # input as a batch_id nobody ever ran.
+                    arguments["incident_id"] = "no-such-incident"
         calls.append((name, arguments))
         # Also the unfiltered variant, where a filter is optional.
-        if spec.name in {"list_feeds", "list_errors"}:
+        if spec.name in {"list_feeds", "list_errors", "list_incidents"}:
             calls.append((spec.name, {k: v for k, v in arguments.items() if k == "batch_id"}))
     return calls
 
@@ -190,8 +198,8 @@ def test_a_tool_declaring_a_data_layer_read_cannot_be_constructed() -> None:
 # ── the catalogue, as a surface ──────────────────────────────────────────────
 
 
-def test_there_are_exactly_seventeen_certified_tools() -> None:
-    assert len(CATALOGUE) == 17
+def test_there_are_exactly_twenty_three_certified_tools() -> None:
+    assert len(CATALOGUE) == 23
     assert set(CATALOGUE) == set(READ_ONLY_WHITELIST)
 
 
@@ -446,3 +454,219 @@ def test_spec_for_refuses_a_name_that_is_not_in_the_catalogue() -> None:
 
     with pytest.raises(UnknownToolError):
         spec_for("get_member")
+
+
+# ── W2-29 · the six ops-ledger tools ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "get_arrival_board",
+        "get_sla_history",
+        "get_incident",
+        "list_incidents",
+        "get_reliability_score",
+        "get_certification",
+    ],
+)
+def test_the_six_ops_ledger_tools_are_certified_and_read_declared_objects(name: str) -> None:
+    spec = spec_for(name)
+    assert spec.cites
+    assert spec.reads <= READABLE
+    assert name in READ_ONLY_WHITELIST
+
+
+def test_get_arrival_board_reads_expected_received_missing_and_at_risk(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    _, control = seeded
+    on = NOW.date()
+    control.upsert_sla_instance(
+        SlaCycle(feed_id=FEED_ID, cycle_date=on, expected_ts=NOW, sla_status="Breached")
+    )
+    result = invoke(
+        _context(seeded),
+        "get_arrival_board",
+        {"feed_id": FEED_ID, "cycle_date": on.isoformat()},
+    )
+    (row,) = result.rows
+    assert (row["expected"], row["received"], row["missing"]) == (1, 0, 1)
+    assert row["why"] == f"expected {NOW.strftime('%-I:%M %p')} — not received"
+    assert result.citations == (parse(row["citation_id"]),)
+
+
+def test_get_arrival_board_defaults_to_today_and_says_so_on_a_bad_date(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    """Never a free-text date parsed by a model — an unparseable value falls
+    back to today, and the fallback is visible in the note, not silent."""
+    result = invoke(
+        _context(seeded), "get_arrival_board", {"feed_id": FEED_ID, "cycle_date": "next tuesday"}
+    )
+    assert "not an ISO date" in result.note
+
+
+def test_get_arrival_board_with_no_cycle_materialised_is_empty_not_an_error(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    result = invoke(_context(seeded), "get_arrival_board", {"feed_id": FEED_ID})
+    assert result.rows == ()
+    assert result.out_of_scope is False
+
+
+def test_get_sla_history_reports_cycles_newest_first_cited_by_feed(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    _, control = seeded
+    control.upsert_sla_instance(
+        SlaCycle(
+            feed_id=FEED_ID,
+            cycle_date=date(2026, 8, 1),
+            expected_ts=NOW,
+            sla_status="On-Time",
+            actual_ts=NOW,
+        )
+    )
+    control.upsert_sla_instance(
+        SlaCycle(
+            feed_id=FEED_ID, cycle_date=date(2026, 8, 2), expected_ts=NOW, sla_status="Breached"
+        )
+    )
+    result = invoke(_context(seeded), "get_sla_history", {"feed_id": FEED_ID, "window_days": 30})
+    assert [row["cycle_date"] for row in result.rows] == ["2026-08-02", "2026-08-01"]
+    assert all(row["citation_id"] == f"feed:{FEED_ID}" for row in result.rows)
+
+
+def _seed_incident(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables], *, batch_id: str = BATCH_ID
+) -> fingerprinting.Incident:
+    store, control = seeded
+    errors = tuple(control.list_errors(batch_id=batch_id))
+    incident = fingerprinting.fingerprint_batch(
+        batch_id=batch_id, feed_id=FEED_ID, errors=errors, now=NOW
+    )
+    store.record_incident_event(
+        fingerprinting.event_for(incident, actor_subject="platform@cinqflow", occurred_ts=NOW)
+    )
+    return incident
+
+
+def test_get_incident_reports_root_cause_and_never_the_record_key(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    incident = _seed_incident(seeded)
+    result = invoke(_context(seeded), "get_incident", {"incident_id": incident.incident_id})
+    (row,) = result.rows
+    assert row["root_cause_error_id_hash"] == ERROR_ID_HASH
+    assert row["batch_id"] == BATCH_ID
+    assert "record_key" not in row
+    assert CANARY not in json.dumps(result.rows, default=str) + result.note
+
+
+def test_get_incident_for_an_unknown_id_is_absent_not_an_error(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    result = invoke(_context(seeded), "get_incident", {"incident_id": "no-such-incident"})
+    assert result.out_of_scope
+    assert result.marker == OUT_OF_SCOPE
+
+
+def test_get_incident_resolves_its_feed_before_the_query_runs(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    """No feed_id or batch_id on this tool's own signature — the ledger event
+    is the only thing that names a feed, so it must be checked before the
+    evidence is ever assembled, the same discipline `get_reconciliation`'s
+    batch_id resolution already gets."""
+    incident = _seed_incident(seeded)
+    context = _context(seeded, feeds=frozenset({"some-other-feed"}))
+    result = invoke(context, "get_incident", {"incident_id": incident.incident_id})
+    assert result.out_of_scope
+    assert result.rows == ()
+
+
+def test_list_incidents_returns_only_open_and_acknowledged_newest_first(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    store, _ = seeded
+    open_incident = _seed_incident(seeded)
+    store.record_incident_event(
+        fingerprinting.IncidentEvent(
+            incident_id="INC-closed-example",
+            batch_id="9999",
+            feed_id=FEED_ID,
+            signature="sig-closed",
+            state=fingerprinting.IncidentState.CLOSED,
+            actor_subject="sam@cinqcare.test",
+            occurred_ts=NOW,
+            opened_ts=NOW,
+            resolution="fixed it",
+        )
+    )
+    result = invoke(_context(seeded), "list_incidents", {"feed_id": FEED_ID})
+    assert [row["incident_id"] for row in result.rows] == [open_incident.incident_id]
+
+
+def test_list_incidents_is_filtered_where_it_is_built(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    _seed_incident(seeded)
+    result = invoke(_context(seeded, feeds=frozenset({"some-other-feed"})), "list_incidents", {})
+    assert result.rows == ()
+
+
+def test_get_reliability_score_reports_six_components_honest_about_the_unmeasured(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    result = invoke(_context(seeded), "get_reliability_score", {"feed_id": FEED_ID})
+    assert len(result.rows) == 6
+    by_signal = {row["signal"]: row for row in result.rows}
+    # The seeded batch has ONE balanced reconciliation and completed cleanly —
+    # so RECONCILIATION and PIPELINE are measured...
+    assert by_signal["reconciliation"]["measured"] is True
+    assert by_signal["reconciliation"]["value"] == 100.0
+    assert by_signal["pipeline"]["measured"] is True
+    # ...but nothing seeded any DQ rule verdicts or SLA cycles for this feed,
+    # so those stay UNMEASURED rather than scored zero.
+    assert by_signal["dq"]["measured"] is False
+    assert by_signal["sla"]["measured"] is False
+    assert "overall" in result.note
+
+
+def test_get_certification_is_pending_until_every_check_completes(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    """No rule verdict has been recorded for this batch — 'silence is not a
+    pass', so DQ_RULES is INCOMPLETE and the verdict stays PENDING even though
+    every other check already passes."""
+    result = invoke(_context(seeded), "get_certification", {"batch_id": BATCH_ID})
+    assert "verdict Pending;" in result.note
+    kinds = {row["kind"] for row in result.rows}
+    assert {"balance", "reconciliation", "drop_ledger", "dq_rules", "schema_contract"} <= kinds
+
+
+def test_get_certification_certifies_once_every_mandatory_check_completes_and_passes(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    _, control = seeded
+    control.record_rule_result(
+        RuleResult(
+            batch_id=BATCH_ID,
+            feed_id=FEED_ID,
+            rule_id="DQ-002",
+            evaluated=22_000,
+            failed=175,
+            excluded=175,
+            recorded_ts=NOW,
+        )
+    )
+    result = invoke(_context(seeded), "get_certification", {"batch_id": BATCH_ID})
+    assert "verdict Certified;" in result.note
+
+
+def test_get_certification_for_an_unknown_batch_is_absent_not_an_error(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    result = invoke(_context(seeded), "get_certification", {"batch_id": "no-such-batch"})
+    assert result.out_of_scope

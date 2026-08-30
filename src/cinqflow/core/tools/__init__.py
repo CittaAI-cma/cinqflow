@@ -105,6 +105,12 @@ READABLE = frozenset(
         "control.batch_reconciliation",
         "control.sla_instance",
         "control.sla_alerts",
+        # Wave-2 Phase 3's ops ledgers and DQ history — CF-V2-E12-04/E13-03/E7-05.
+        # Decisions and rule verdicts, never a member row, so they join the same
+        # vocabulary the eleven control tables already speak.
+        "ops.incident_event",
+        "ops.variance_event",
+        "recon.rule_results",
     }
 )
 
@@ -246,10 +252,16 @@ ERROR_ID_HASH = _p(
     "error_id_hash", ArgType.STRING, "The error's deterministic hash.", required=True
 )
 FINGERPRINT = _p("fingerprint", ArgType.STRING, "The file's content fingerprint.", required=True)
+INCIDENT_ID = _p("incident_id", ArgType.STRING, "The incident's identifier.", required=True)
+CYCLE_DATE = _p(
+    "cycle_date",
+    ArgType.STRING,
+    "The cycle's business date, ISO YYYY-MM-DD. Omit for today.",
+)
 
 
-#: The seventeen. Adding an eighteenth means adding a row here and nothing
-#: else — the schema, the audit row, the citation wrapping and the
+#: The twenty-three. Adding a twenty-fourth means adding a row here and
+#: nothing else — the schema, the audit row, the citation wrapping and the
 #: catalogue-wide guarantees all come from this declaration.
 CATALOGUE: dict[str, ToolSpec] = {
     spec.name: spec
@@ -425,6 +437,106 @@ CATALOGUE: dict[str, ToolSpec] = {
                 "Lexical (tsvector), not semantic. Healthcare vocabulary is code-heavy and "
                 "lexical is what catches NPI, DQ-002 and BH-AF-002 that embeddings blur. "
                 "The vector store stays provisioned and EMPTY until Wave 1."
+            ),
+        ),
+        # ── Wave 2 · the ops ledgers reach the catalogue ──────────────────────
+        ToolSpec(
+            name="get_arrival_board",
+            answers=(
+                "Expected, received, missing and at-risk counts for one feed's cycle "
+                "on a given business date."
+            ),
+            parameters=(FEED_ID, CYCLE_DATE),
+            reads=frozenset({"control.sla_instance"}),
+            cites=(CitationKind.FEED,),
+            note=(
+                "cycle_date is a plain ISO day, never a free-text range — an unparseable "
+                "or omitted date falls back to today, the fallback is never silent."
+            ),
+        ),
+        ToolSpec(
+            name="get_sla_history",
+            answers=(
+                "This feed's arrival record over the trailing window: on time, "
+                "delayed or breached, cycle by cycle."
+            ),
+            parameters=(FEED_ID, WINDOW),
+            reads=frozenset({"control.sla_instance"}),
+            cites=(CitationKind.FEED,),
+        ),
+        ToolSpec(
+            name="get_incident",
+            answers=(
+                "One incident: root cause, its consequences, any matched recovery guide, "
+                "and the evidence behind all three."
+            ),
+            parameters=(INCIDENT_ID,),
+            reads=frozenset(
+                {
+                    "ops.incident_event",
+                    "control.error_log",
+                    "registry.governed_object",
+                    "control.batch_control",
+                }
+            ),
+            cites=(CitationKind.ERROR, CitationKind.BATCH),
+            note=(
+                "The cascade and guide match are RECOMPUTED from the error log on every "
+                "call; only what a human decided (acknowledged, assigned, resolved) comes "
+                "from the ledger, so the two can never drift apart."
+            ),
+        ),
+        ToolSpec(
+            name="list_incidents",
+            answers="Open incidents — not yet resolved or closed — newest first.",
+            parameters=(
+                _p(
+                    "feed_id",
+                    ArgType.STRING,
+                    "Restrict to one feed; omit for every feed in scope.",
+                ),
+            ),
+            reads=frozenset({"ops.incident_event"}),
+            cites=(CitationKind.BATCH,),
+            # A fleet-wide question by default, exactly like `list_feeds`: the
+            # list is built scoped, row by row, rather than checked against one
+            # feed_id up front.
+            scoped_by_feed=False,
+        ),
+        ToolSpec(
+            name="get_reliability_score",
+            answers="The six-signal reliability score for one feed, decomposed, with the overall.",
+            parameters=(FEED_ID,),
+            reads=frozenset(
+                {
+                    "recon.rule_results",
+                    "control.sla_instance",
+                    "control.batch_control",
+                    "control.batch_reconciliation",
+                    "control.schema_drift_log",
+                }
+            ),
+            cites=(CitationKind.FEED,),
+            note="A signal with nothing to measure is UNMEASURED, never scored zero.",
+        ),
+        ToolSpec(
+            name="get_certification",
+            answers="The derived certification verdict for one batch, and every check behind it.",
+            parameters=(BATCH_ID,),
+            reads=frozenset(
+                {
+                    "control.batch_reconciliation",
+                    "recon.rule_results",
+                    "control.schema_drift_log",
+                    "control.sla_instance",
+                    "ops.variance_event",
+                    "control.batch_control",
+                }
+            ),
+            cites=(CitationKind.BATCH,),
+            note=(
+                "Derived fresh on every read from retained history — there is no stored "
+                "verdict to drift."
             ),
         ),
     )

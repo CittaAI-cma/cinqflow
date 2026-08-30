@@ -25,14 +25,21 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from cinqflow.core import certification as batch_certification
+from cinqflow.core import reliability
+from cinqflow.core import sla as sla_core
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.compiler import compile_feed
 from cinqflow.core.model.agent_action import ActionOutcome, AgentAction
 from cinqflow.core.model.governed import Actor, LifecycleState, ObjectType
 from cinqflow.core.model.identity import Principal
+from cinqflow.core.model.vocabulary import BatchState
+from cinqflow.core.operations import fingerprint as fingerprinting
+from cinqflow.core.operations import monitor as ops_monitor
+from cinqflow.core.operations.actions import OpsAction
 from cinqflow.core.registry import contract as contract_registry
 from cinqflow.core.registry import feed as feed_registry
 from cinqflow.core.retrieval import (
@@ -49,7 +56,12 @@ from cinqflow.core.tools import (
     ToolSpec,
     spec_for,
 )
-from cinqflow.ports.control_tables import BatchNotFoundError, ControlTablesPort
+from cinqflow.ports.control_tables import (
+    BatchControl,
+    BatchNotFoundError,
+    ControlTablesPort,
+)
+from cinqflow.ports.control_tables import SlaCycle as SlaCycleRow
 from cinqflow.ports.metadata_db import MetadataDbPort, ObjectNotFoundError
 
 #: The one sentence a caller gets for "not yours" and for "not there". Two
@@ -202,6 +214,14 @@ def _feed_in_scope(context: ToolContext, spec: ToolSpec, args: dict[str, Any]) -
         if input_file is None:
             return _DENIED
         feed_id = input_file.feed_id
+    if feed_id is None and "incident_id" in args:
+        # get_incident carries no feed_id or batch_id of its own — the ledger
+        # event is the only thing that names a feed, so it is read once to
+        # find out, exactly like the batch_id and error_id_hash paths above.
+        try:
+            feed_id = context.metadata.get_incident_event(str(args["incident_id"])).feed_id
+        except ObjectNotFoundError:
+            return _DENIED
     if feed_id is None:
         return None
     return feed_id if context.principal.scopes.covers_feed(str(feed_id)) else _DENIED
@@ -686,6 +706,481 @@ def _lookup_reference(context: ToolContext, args: dict[str, Any]) -> ToolResult:
     )
 
 
+# ── Wave 2 · the ops ledgers, through the same six steps ─────────────────────
+#
+# A NOTE ON DUPLICATION. `get_reliability_score`, `get_certification` and
+# `get_incident` each mirror wiring that already exists once in
+# `api.app` (`_reliability_observations`, `_weights_of`, `_bands_of`,
+# `_certification_checks`, `_incident_for`) and once in `workers.incidents`
+# (`recovery_guides`, `priors_for`). Importing either would be the honest fix —
+# and `.importlinter`'s `layers` contract forbids it both ways: `api` sits
+# ABOVE `intelligence`, and `workers` sits ABOVE `intelligence` too, so a tool
+# runner can call neither module's helpers, only the same `core` functions and
+# port verbs they call. What follows is that same wiring, written once here,
+# so a caller asking a model is answered by the identical arithmetic a human
+# reading the screen would see — never a second, slightly different, opinion.
+
+
+def _cycle_date(context: ToolContext, args: dict[str, Any]) -> tuple[date, str]:
+    """A plain ISO day, never a free-text range. An omitted or unparseable
+    value falls back to today — and says so in the note, because a fallback
+    nobody can see is indistinguishable from a wrong answer."""
+    raw = args.get("cycle_date")
+    if not raw:
+        return context.now.date(), ""
+    try:
+        return date.fromisoformat(str(raw)), ""
+    except ValueError:
+        return (
+            context.now.date(),
+            f"{raw!r} is not an ISO date (YYYY-MM-DD); showing today instead",
+        )
+
+
+def _cycle_from_sla_row(row: SlaCycleRow) -> sla_core.Cycle:
+    """Mirrors `workers.sla._cycle_from_row` exactly — the adapter-boundary
+    conversion this port's own row and `core.sla.Cycle` both need, and one of
+    the two places it is written for the layering reason above."""
+    return sla_core.Cycle(
+        feed_id=row.feed_id,
+        cycle_date=row.cycle_date,
+        expected_ts=row.expected_ts,
+        actual_ts=row.actual_ts,
+        batch_id=row.batch_id,
+        files_received=1 if row.actual_ts is not None else 0,
+    )
+
+
+def _get_arrival_board(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    feed_id = str(args["feed_id"])
+    on, note = _cycle_date(context, args)
+    cycles = tuple(
+        _cycle_from_sla_row(row)
+        for row in context.control.sla_instances(cycle_date=on, feed_ids=(feed_id,))
+    )
+    citation = CitationId(CitationKind.FEED, feed_id)
+    if not cycles:
+        return ToolResult(
+            tool="get_arrival_board",
+            note=note or f"no SLA cycle materialised for {feed_id} on {on.isoformat()}",
+        )
+    board = sla_core.ArrivalBoard(cycles=cycles, now=context.now)
+    counters = board.counters()
+    cycle = cycles[0]
+    row = {
+        "feed_id": feed_id,
+        "cycle_date": on.isoformat(),
+        **counters,
+        "status": cycle.user_status(context.now).value,
+        "why": cycle.why(context.now),
+        "citation_id": str(citation),
+    }
+    return ToolResult(tool="get_arrival_board", rows=(row,), citations=(citation,), note=note)
+
+
+def _get_sla_history(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    feed_id = str(args["feed_id"])
+    days = int(args.get("window_days", 30))
+    cycles = context.control.sla_history(feed_id, days=days)
+    citation = CitationId(CitationKind.FEED, feed_id)
+    rows = tuple(
+        {
+            "cycle_date": c.cycle_date.isoformat(),
+            "expected_ts": c.expected_ts.isoformat(),
+            "actual_ts": c.actual_ts.isoformat() if c.actual_ts else None,
+            "sla_status": c.sla_status,
+            "batch_id": c.batch_id,
+            "citation_id": str(citation),
+        }
+        for c in cycles
+    )
+    return ToolResult(tool="get_sla_history", rows=rows, citations=(citation,) if rows else ())
+
+
+def _recovery_guides(metadata: MetadataDbPort) -> tuple[fingerprinting.RecoveryGuide, ...]:
+    """Mirrors `workers.incidents.recovery_guides` — published runbooks only.
+    See the module note above for why this is written here rather than
+    imported."""
+    return tuple(
+        fingerprinting.RecoveryGuide(
+            guide_id=obj.object_id,
+            title=str(obj.body.get("title") or obj.object_id),
+            signatures=frozenset(str(s) for s in obj.body.get("signatures", ())),
+            steps=tuple(str(step) for step in obj.body.get("steps", ())),
+            remedy=(
+                OpsAction(obj.body["remedy"]) if obj.body.get("remedy") in set(OpsAction) else None
+            ),
+            is_transient=bool(obj.body.get("is_transient", False)),
+            stale=bool(obj.body.get("stale", False)),
+        )
+        for obj in metadata.list(ObjectType.RUNBOOK)
+        if obj.lifecycle_state is LifecycleState.PUBLISHED
+    )
+
+
+def _priors_for(
+    control: ControlTablesPort,
+    *,
+    feed_id: str,
+    batch_id: str,
+    errors: Sequence[ops_monitor.ErrorLike],
+) -> tuple[fingerprinting.PriorIncident, ...]:
+    """Mirrors `workers.incidents.priors_for` — how often this exact failure
+    has happened on this feed before, computed rather than curated. See the
+    module note above for why this is written here rather than imported."""
+    cascade = ops_monitor.separate_cascade(errors)
+    root = cascade.first
+    if root is None:
+        return ()
+    found = fingerprinting.signature(
+        stage=root.stage, category=root.category, message=root.message, rule_id=root.rule_id
+    )
+    priors: list[fingerprinting.PriorIncident] = []
+    for prior in control.list_batches(feed_id, 200):
+        if prior.batch_id == batch_id:
+            continue
+        prior_errors = list(control.list_errors(batch_id=prior.batch_id))
+        prior_root = ops_monitor.separate_cascade(prior_errors).first
+        if prior_root is None:
+            continue
+        if (
+            fingerprinting.signature(
+                stage=prior_root.stage,
+                category=prior_root.category,
+                message=prior_root.message,
+                rule_id=prior_root.rule_id,
+            )
+            != found
+        ):
+            continue
+        priors.append(
+            fingerprinting.PriorIncident(
+                incident_id=f"INC-{prior.batch_id}",
+                occurred_ts=prior.started_ts,
+                fix_minutes=(
+                    int((prior.completed_ts - prior.started_ts).total_seconds() // 60)
+                    if prior.completed_ts
+                    else None
+                ),
+                batch_id=prior.batch_id,
+            )
+        )
+    return tuple(priors)
+
+
+def _get_incident(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    incident_id = str(args["incident_id"])
+    try:
+        event = context.metadata.get_incident_event(incident_id)
+    except ObjectNotFoundError:
+        return _absent("get_incident")
+
+    errors = tuple(context.control.list_errors(batch_id=event.batch_id))
+    computed = fingerprinting.fingerprint_batch(
+        batch_id=event.batch_id,
+        feed_id=event.feed_id,
+        errors=errors,
+        guides=_recovery_guides(context.metadata),
+        history=_priors_for(
+            context.control, feed_id=event.feed_id, batch_id=event.batch_id, errors=errors
+        ),
+        now=context.now,
+    )
+    try:
+        incident = fingerprinting.hydrate(computed, event)
+        note = ""
+    except fingerprinting.FingerprintError:
+        # Today's error log no longer recomputes the same signature the
+        # ledger's event was opened with — the evidence below is still
+        # honest, but folding decisions onto evidence they were not made
+        # against would fabricate history, so they are omitted instead.
+        incident = computed
+        note = "recomputed evidence no longer matches the ledger's signature; decisions omitted"
+
+    batch_citation = CitationId(CitationKind.BATCH, incident.batch_id)
+    citations = [batch_citation]
+    root = incident.root_cause
+    if root is not None:
+        citations.append(CitationId(CitationKind.ERROR, root.error_id_hash))
+    row = {
+        "incident_id": incident.incident_id,
+        "batch_id": incident.batch_id,
+        "feed_id": incident.feed_id,
+        "kind": incident.kind.value,
+        "state": incident.state.value,
+        "signature": incident.signature,
+        "root_cause_error_id_hash": root.error_id_hash if root else None,
+        "root_cause_message": root.message if root else None,
+        "consequence_count": len(incident.cascade.consequences),
+        "guide_id": incident.match.guide.guide_id if incident.match else None,
+        "prior_occurrences": incident.match.occurrences if incident.match else 0,
+        "acknowledged_by": incident.acknowledged_by,
+        "assigned_to": incident.assigned_to,
+        "resolution": incident.resolution,
+        "explanation": incident.explain(),
+        "citation_id": str(batch_citation),
+    }
+    return ToolResult(tool="get_incident", rows=(row,), citations=tuple(citations), note=note)
+
+
+#: "Open" for `list_incidents` — not yet resolved or closed. Acknowledged is
+#: still open work; only a human's resolution or close moves an incident out
+#: of this list, exactly as `IncidentState`'s own transition graph says.
+_OPEN_INCIDENT_STATES = frozenset(
+    {fingerprinting.IncidentState.OPEN, fingerprinting.IncidentState.ACKNOWLEDGED}
+)
+
+
+def _list_incidents(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    requested_feed = args.get("feed_id")
+    events = context.metadata.list_incident_events(
+        feed_id=str(requested_feed) if requested_feed else None, limit=50
+    )
+    rows = []
+    citations = []
+    for event in events:
+        if event.state not in _OPEN_INCIDENT_STATES:
+            continue
+        # Filtered where the list is BUILT, never applied to a finished
+        # answer — the same discipline `_list_feeds` uses.
+        if not context.principal.scopes.covers_feed(event.feed_id):
+            continue
+        citation = CitationId(CitationKind.BATCH, event.batch_id)
+        citations.append(citation)
+        rows.append(
+            {
+                "incident_id": event.incident_id,
+                "batch_id": event.batch_id,
+                "feed_id": event.feed_id,
+                "state": event.state.value,
+                "signature": event.signature,
+                "assigned_to": event.assigned_to,
+                "opened_ts": event.opened_ts.isoformat(),
+                "citation_id": str(citation),
+            }
+        )
+    return ToolResult(tool="list_incidents", rows=tuple(rows), citations=tuple(citations))
+
+
+def _reliability_observations(
+    control: ControlTablesPort, feed_id: str
+) -> dict[reliability.Signal, tuple[float, str, int]]:
+    """Mirrors `api.app._reliability_observations` — six signals, each a
+    control-plane query, absent from the map rather than zero when there is
+    nothing to read. See the module note above for why this is written here
+    rather than imported."""
+    observations: dict[reliability.Signal, tuple[float, str, int]] = {}
+
+    rule_history = control.rule_result_history(feed_id, limit=200)
+    evaluated = sum(r.evaluated for r in rule_history)
+    failed = sum(r.failed for r in rule_history)
+    if evaluated > 0:
+        observations[reliability.Signal.DQ] = (
+            round(100.0 * (evaluated - failed) / evaluated, 1),
+            f"{failed:,} of {evaluated:,} evaluations failed across {len(rule_history)} rule runs",
+            len(rule_history),
+        )
+
+    cycles = control.sla_history(feed_id, days=90)
+    if cycles:
+        on_time = sum(1 for c in cycles if c.sla_status == "On-Time")
+        observations[reliability.Signal.SLA] = (
+            round(100.0 * on_time / len(cycles), 1),
+            f"{on_time} of {len(cycles)} cycles on time over 90 days",
+            len(cycles),
+        )
+
+    batches = control.list_batches(feed_id, 30)
+    recons = [r for b in batches for r in control.get_reconciliation(b.batch_id)]
+    if recons:
+        balanced = sum(1 for r in recons if r.balances)
+        observations[reliability.Signal.RECONCILIATION] = (
+            round(100.0 * balanced / len(recons), 1),
+            f"{balanced} of {len(recons)} stage reconciliations balanced",
+            len(recons),
+        )
+
+    terminal = [b for b in batches if b.state in {BatchState.COMPLETED, BatchState.FAILED}]
+    if terminal:
+        completed = sum(1 for b in terminal if b.state is BatchState.COMPLETED)
+        observations[reliability.Signal.PIPELINE] = (
+            round(100.0 * completed / len(terminal), 1),
+            f"{completed} of {len(terminal)} recent batches completed",
+            len(terminal),
+        )
+
+    if batches:
+        drifted = sum(
+            1 for b in batches if any(d.blocked_batch for d in control.get_schema_drift(b.batch_id))
+        )
+        observations[reliability.Signal.SCHEMA] = (
+            round(100.0 * (len(batches) - drifted) / len(batches), 1),
+            f"{drifted} of {len(batches)} recent batches blocked by schema drift",
+            len(batches),
+        )
+
+    # IDENTITY is deliberately absent until Wave 3 — unmeasured, never zero.
+    return observations
+
+
+def _get_reliability_score(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    feed_id = str(args["feed_id"])
+    score = reliability.score_for(
+        feed_id=feed_id,
+        as_of=context.now.date(),
+        observations=_reliability_observations(context.control, feed_id),
+        weights=reliability.Weights(),
+        bands=reliability.Bands(),
+    )
+    citation = score.citation
+    rows = tuple(
+        {
+            "signal": component.signal.value,
+            "value": component.value,
+            "weight": component.weight,
+            "measured": component.measured,
+            "sample_size": component.sample_size,
+            "evidence": component.evidence,
+            "citation_id": str(citation),
+        }
+        for component in score.components
+    )
+    return ToolResult(
+        tool="get_reliability_score",
+        rows=rows,
+        citations=(citation,) if rows else (),
+        note=f"overall {score.overall} ({score.band.value}); confidence {score.confidence:.2f}",
+    )
+
+
+def _certification_checks(
+    control: ControlTablesPort, batch: BatchControl
+) -> tuple[batch_certification.Check, ...]:
+    """Mirrors `api.app._certification_checks` — every check a control-plane
+    read, INCOMPLETE (never assumed passed) when nothing is recorded yet. See
+    the module note above for why this is written here rather than imported."""
+    checks: list[batch_certification.Check] = []
+    recons = control.get_reconciliation(batch.batch_id)
+    balanced = all(r.balances for r in recons)
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.BALANCE,
+            passed=bool(recons) and balanced,
+            completed=bool(recons),
+            evidence=(
+                f"rows_in == rows_out + quarantined + attributed_drops on {len(recons)} stage(s)"
+                if recons
+                else "no reconciliation recorded yet"
+            ),
+        )
+    )
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.RECONCILIATION,
+            passed=bool(recons) and all(r.unexplained == 0 for r in recons),
+            completed=bool(recons),
+            evidence=(
+                f"{sum(r.unexplained for r in recons)} unexplained rows across "
+                f"{len(recons)} stage(s)"
+                if recons
+                else "no reconciliation recorded yet"
+            ),
+        )
+    )
+    total_drops = sum(entry.record_count for recon in recons for entry in recon.drop_ledger)
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.DROP_LEDGER,
+            passed=bool(recons)
+            and all(
+                entry.rule_id not in {"other", "unknown", ""}
+                for recon in recons
+                for entry in recon.drop_ledger
+            ),
+            completed=bool(recons),
+            evidence=f"{total_drops} excluded row(s), every one attributed to a rule",
+        )
+    )
+    results = control.rule_results(batch.batch_id)
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.DQ_RULES,
+            passed=bool(results),
+            completed=bool(results),
+            evidence=(
+                f"{len(results)} rule(s) recorded a verdict; "
+                f"{sum(r.failed for r in results)} row(s) flagged, all attributed"
+                if results
+                else "no rule verdicts recorded — silence is not a pass"
+            ),
+        )
+    )
+    drift = control.get_schema_drift(batch.batch_id)
+    checks.append(
+        batch_certification.Check(
+            kind=batch_certification.CheckKind.SCHEMA_CONTRACT,
+            passed=not any(d.blocked_batch for d in drift),
+            completed=True,
+            evidence=(
+                f"{len(drift)} drift finding(s), none blocking"
+                if not any(d.blocked_batch for d in drift)
+                else f"blocking drift: {', '.join(d.column_name for d in drift if d.blocked_batch)}"
+            ),
+        )
+    )
+    owed = next(
+        (
+            cycle
+            for cycle in control.sla_history(batch.feed_id, days=90)
+            if cycle.batch_id == batch.batch_id
+        ),
+        None,
+    )
+    if owed is not None:
+        checks.append(
+            batch_certification.Check(
+                kind=batch_certification.CheckKind.SLA_WINDOW,
+                passed=owed.sla_status == "On-Time",
+                completed=True,
+                evidence=f"cycle {owed.cycle_date.isoformat()} was {owed.sla_status}",
+            )
+        )
+    return tuple(checks)
+
+
+def _get_certification(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    batch_id = str(args["batch_id"])
+    try:
+        batch = context.control.get_batch(batch_id)
+    except BatchNotFoundError:
+        return _absent("get_certification")
+
+    verdict = batch_certification.certify(
+        batch_id=batch_id,
+        feed_id=batch.feed_id,
+        checks=_certification_checks(context.control, batch),
+        variances=context.metadata.list_variances(batch_id=batch_id),
+        now=context.now,
+    )
+    citation = verdict.citation
+    rows = tuple(
+        {
+            "kind": check.kind.value,
+            "passed": check.passed,
+            "completed": check.completed,
+            "evidence": check.evidence,
+            "citation_id": str(citation),
+        }
+        for check in verdict.checks
+    )
+    return ToolResult(
+        tool="get_certification",
+        rows=rows,
+        citations=(citation,) if rows else (),
+        note=f"verdict {verdict.verdict.value}; publishable={verdict.publishable}",
+    )
+
+
 _RUNNERS = {
     "list_feeds": _list_feeds,
     "get_feed": _get_feed,
@@ -704,6 +1199,12 @@ _RUNNERS = {
     "list_batch_inputs": _list_batch_inputs,
     "get_file_by_fingerprint": _get_file_by_fingerprint,
     "lookup_reference": _lookup_reference,
+    "get_arrival_board": _get_arrival_board,
+    "get_sla_history": _get_sla_history,
+    "get_incident": _get_incident,
+    "list_incidents": _list_incidents,
+    "get_reliability_score": _get_reliability_score,
+    "get_certification": _get_certification,
 }
 
 assert set(_RUNNERS) == set(CATALOGUE), "every declared tool has exactly one runner"
