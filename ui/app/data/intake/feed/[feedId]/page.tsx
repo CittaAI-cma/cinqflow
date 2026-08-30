@@ -183,6 +183,17 @@ export default async function FeedPage({
       </div>
 
       <div className="card">
+        <strong>Data-quality rules</strong>
+        <p className="note">
+          What each rule catches on the sampled delivery — tested, passed and failed counts, with
+          the failing rows. Trust is built in the preview, not the prose.
+        </p>
+        <Link className="cited" href={`/data/intake/rules/${feed.feed_id}`}>
+          Preview the rules →
+        </Link>
+      </div>
+
+      <div className="card">
         <strong>History</strong>
         <p className="note">
           Every version is still here — &ldquo;which version was live in March?&rdquo; is one

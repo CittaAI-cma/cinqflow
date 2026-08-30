@@ -386,7 +386,24 @@ def test_every_api_route_states_the_permission_it_requires(app: FastAPI) -> None
 #: whitelist contains read tools only, asserted in
 #: tests/contract/test_pipeline_insight_agent.py. Listed explicitly, and short:
 #: an exception nobody has to justify is a rule that erodes.
-READ_ONLY_POSTS = frozenset({"/api/ask"})
+#: POSTs that write nothing. A POST because they take a body, not because
+#: they change anything — and each one is listed here EXPLICITLY so the
+#: exception is a decision somebody made rather than a route that slipped
+#: through with a VIEW permission.
+#:
+#: `test_the_read_only_post_exceptions_stay_read_only` is what keeps the list
+#: honest: a write cannot be smuggled in here, because the permission would
+#: have to be a write permission and that test would fail.
+READ_ONLY_POSTS = frozenset(
+    {
+        "/api/ask",
+        # CF-V1-E7-02. Running a draft rule over a stored sample and reporting
+        # the counts. Seeing what a rule catches is READING — and a reviewer
+        # who cannot preview the rule they are being asked to approve is being
+        # asked to approve prose.
+        "/api/feeds/{feed_id}/preview-rules",
+    }
+)
 
 
 def test_the_read_only_post_exceptions_stay_read_only(app: FastAPI) -> None:

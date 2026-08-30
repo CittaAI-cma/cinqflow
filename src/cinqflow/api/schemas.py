@@ -943,6 +943,99 @@ class PhiColumnOut(BaseModel):
     citations: list[str] = Field(default_factory=list)
 
 
+# ── NL rules and their preview · CF-V1-E7-01, CF-V1-E7-02 ────────────────────
+
+
+class AuthorRulesIn(BaseModel):
+    """Sentences a BA typed. CF-V1-E7-01.
+
+    Plain English in, a governed rule out — and the model in between never
+    writes SQL: it chooses a check from a closed vocabulary and the platform
+    renders every notation from it.
+    """
+
+    stated: list[str] = Field(default_factory=list)
+    #: The stored profile to preview against. Optional: a BA may want the rule
+    #: written before a sample exists, and a preview that could not run says so
+    #: rather than reporting nothing found.
+    profile_id: str | None = None
+
+
+class ProposedRuleOut(BaseModel):
+    """One proposed rule, as the reviewer reads it.
+
+    BOTH TEXTS. `stated` is the BA's own sentence, verbatim; `explanation` is
+    generated from the check, so it cannot drift from what runs. Where the two
+    disagree the rule is wrong, and a screen showing one of them would hide it.
+    """
+
+    stated: str
+    unsupported: bool = False
+    unsupported_reason: str = ""
+    rule_id: str | None = None
+    name: str = ""
+    explanation: str = ""
+    check_kind: str | None = None
+    column: str | None = None
+    dimension: str | None = None
+    severity: str | None = None
+    glossary_id: str | None = None
+    confidence: float | None = None
+    settled_by: str = "inference"
+    rationale: str = ""
+    #: Rendered by the PLATFORM from the check, never by the model. Shown so an
+    #: engineer can read exactly what will run.
+    sql: str = ""
+    pyspark: str = ""
+
+
+class FailingRowOut(BaseModel):
+    """One row a rule caught, already masked. CF-V1-E7-02.
+
+    The masking happens where the row is BUILT, not here — this shape never
+    holds an unmasked value, so there is no moment at which a route could
+    serialise one.
+    """
+
+    row_number: int
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+class RulePreviewOut(BaseModel):
+    """What one rule does to the sample. The evidence an approval rests on."""
+
+    rule_id: str
+    stated: str
+    explanation: str
+    tested: int = 0
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    failure_rate: float = 0.0
+    failing_rows: list[FailingRowOut] = Field(default_factory=list)
+    masked_columns: list[str] = Field(default_factory=list)
+    #: Set when the check could not be run against a sample at all. Distinct
+    #: from "ran and found nothing", which is the whole point.
+    not_previewable: str = ""
+    summary: str = ""
+
+
+class RulePreviewPackOut(BaseModel):
+    """Every preview for a feed's rules, with the sample size.
+
+    `sample_rows` travels because "3 rows failed" means one thing in 200 rows
+    and another in 200,000 — a stored figure whose denominator is missing is
+    one somebody will quote wrongly.
+    """
+
+    feed_id: str
+    sample_rows: int
+    rules_previewed: int
+    rules_not_previewable: int
+    total_failures: int
+    previews: list[RulePreviewOut] = Field(default_factory=list)
+
+
 class ProposedMappingOut(BaseModel):
     """One proposed mapping line. CF-V1-E6-02.
 
@@ -1006,6 +1099,7 @@ class ProposalOut(BaseModel):
     # either without knowing the agent's name.
     phi_columns: list[PhiColumnOut] = Field(default_factory=list)
     mapping_lines: list[ProposedMappingOut] = Field(default_factory=list)
+    rules: list[ProposedRuleOut] = Field(default_factory=list)
     needs_steward_review: list[str] = Field(default_factory=list)
     masked_columns: list[str] = Field(default_factory=list)
 

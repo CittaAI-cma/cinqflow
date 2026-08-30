@@ -39,6 +39,7 @@ from cinqflow.api.schemas import (
     AskIn,
     AskOut,
     AuditOut,
+    AuthorRulesIn,
     BatchOut,
     BudgetOut,
     CanonicalEntityOut,
@@ -56,6 +57,7 @@ from cinqflow.api.schemas import (
     DestinationOut,
     DetectPhiIn,
     DifferenceOut,
+    FailingRowOut,
     FeedIn,
     FeedOut,
     FileProfileOut,
@@ -87,6 +89,7 @@ from cinqflow.api.schemas import (
     ProposalOut,
     ProposedColumnOut,
     ProposedMappingOut,
+    ProposedRuleOut,
     ReadinessOut,
     ReclassifyIn,
     ReferenceOut,
@@ -95,6 +98,8 @@ from cinqflow.api.schemas import (
     RejectProposalIn,
     ResumeFeedIn,
     RowsOut,
+    RulePreviewOut,
+    RulePreviewPackOut,
     SimilarFeedOut,
     SourceIn,
     SourceOut,
@@ -113,9 +118,11 @@ from cinqflow.api.schemas import (
 )
 from cinqflow.core import lifecycle, proposals
 from cinqflow.core import mapping as mapping_core
+from cinqflow.core import rules as rules_core
 from cinqflow.core.agents.mapping_suggestion.graph import AGENT as MAPPING_SUGGESTION_AGENT
 from cinqflow.core.agents.phi_detection.graph import AGENT as PHI_DETECTION_AGENT
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
+from cinqflow.core.agents.rule_authoring.graph import AGENT as RULE_AUTHORING_AGENT
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.impact import ImpactPacket, ImpactUnknownError, Touched, build_packet
 from cinqflow.core.intelligence import Budget
@@ -128,6 +135,7 @@ from cinqflow.core.model.governed import (
     ObjectType,
 )
 from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
+from cinqflow.core.parsers import parse
 from cinqflow.core.persona import home_for
 from cinqflow.core.phi import Basis, ColumnClassification, PhiDowngradeRefusedError, reclassify
 from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
@@ -142,12 +150,14 @@ from cinqflow.core.registry.contract import SchemaContract
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.core.registry.wave0 import wave_0_register
+from cinqflow.core.rules import preview as rule_preview
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.core.security import Action, may
 from cinqflow.core.tools import CATALOGUE, ToolError
 from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
 from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent, RecallGateFailedError
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
+from cinqflow.intelligence.agents.rule_authoring import RuleAuthoringAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.tools import ToolContext, ToolResult, all_dq_rule_entries, invoke
 from cinqflow.ports.authn import AuthnPort, Principal
@@ -170,6 +180,9 @@ PHI_AGENT = PHI_DETECTION_AGENT
 #: CF-V1-E6-02's agent name, imported for the same reason.
 MAPPING_AGENT = MAPPING_SUGGESTION_AGENT
 
+#: CF-V1-E7-01's, likewise.
+RULE_AGENT = RULE_AUTHORING_AGENT
+
 #: Build an agent for ONE caller. Never a shared agent — a shared agent is a
 #: shared scope, and the tool context is where the caller's RBAC lives.
 AgentFactory = Callable[[Principal, "ControlTablesPort", MetadataDbPort], PipelineInsightAgent]
@@ -184,6 +197,9 @@ PhiDetectionFactory = Callable[[MetadataDbPort], PhiDetectionAgent]
 
 #: Same reasoning, same lifetime. CF-V1-E6-02.
 MappingSuggestionFactory = Callable[[MetadataDbPort], MappingSuggestionAgent]
+
+#: Same reasoning, same lifetime. CF-V1-E7-01.
+RuleAuthoringFactory = Callable[[MetadataDbPort], RuleAuthoringAgent]
 
 
 @unique
@@ -260,6 +276,7 @@ def create_app(
     schema_inference_factory: SchemaInferenceFactory | None = None,
     phi_detection_factory: PhiDetectionFactory | None = None,
     mapping_suggestion_factory: MappingSuggestionFactory | None = None,
+    rule_authoring_factory: RuleAuthoringFactory | None = None,
     budget: Budget | None = None,
 ) -> FastAPI:
     """Build the app from PINS.
@@ -290,6 +307,7 @@ def create_app(
     app.state.schema_inference_factory = schema_inference_factory
     app.state.phi_detection_factory = phi_detection_factory
     app.state.mapping_suggestion_factory = mapping_suggestion_factory
+    app.state.rule_authoring_factory = rule_authoring_factory
     # The cap the observability screen reports against. A screen showing spend
     # with no cap beside it is a number, not a control.
     app.state.llm_budget = budget or Budget(
@@ -1435,6 +1453,103 @@ def create_app(
             ),
         )
         return _proposal_out(result.proposal, model_called=result.model_called)
+
+    # ── NL rule authoring and preview · CF-V1-E7-01, CF-V1-E7-02 ─────────────
+    #
+    # The model in this path never produces SQL. It names a check from
+    # `core.rules.CheckKind` and gives its parameters; the platform renders the
+    # SQL, the PySpark and the row predicate. There is therefore no route here
+    # that could accept an executable string, and none that needs to.
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/author-rules",
+        response_model=ProposalOut,
+        tags=["intelligence"],
+    )
+    def author_rules(
+        feed_id: str,
+        body: AuthorRulesIn,
+        request: Request,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        audit: Audit,
+    ) -> ProposalOut:
+        """Plain English in, one proposal out — with a preview attached.
+
+        The PREVIEW travels with the proposal (CF-V1-E7-02) rather than being a
+        second call somebody might not make. Trust is built in the preview, not
+        the prose: a rule reading "member first name must be populated" is
+        agreeable on any screen, and what a reviewer needs is that it fails 3
+        of 200 rows.
+        """
+        agent_factory = request.app.state.rule_authoring_factory
+        if agent_factory is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no LLM pin is fitted on this deployment, so rule authoring is not "
+                "available. The rule editor and the preview both still work — a rule "
+                "written by hand previews exactly the same way.",
+            )
+        if not [line for line in body.stated if line.strip()]:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "there is nothing to write a rule from"
+            )
+        contract = _contract_of(metadata, feed_id)
+        if contract is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"feed {feed_id!r} has no schema contract yet. A rule checks a contracted "
+                "column, so approve a contract first.",
+            )
+
+        result = agent_factory(metadata).propose(
+            tuple(body.stated),
+            feed_id=feed_id,
+            contract=contract,
+            glossary=_glossary_of(metadata),
+            caller=principal.as_actor(),
+            published=_published_rules(metadata, feed_id),
+        )
+        audit.record(
+            object_type=ObjectType.DQ_RULE,
+            object_id=feed_id,
+            action="author_rules",
+            actor=principal.as_actor(),
+            detail=(
+                f"{result.proposal.proposal_id} · {len(result.rules)} rule(s) written, "
+                f"{len(result.needs_review)} needing technical review, "
+                f"model_called={result.model_called}"
+            ),
+        )
+        return _proposal_out(result.proposal, model_called=result.model_called)
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/preview-rules",
+        response_model=RulePreviewPackOut,
+        tags=["intelligence"],
+    )
+    def preview_rules(
+        feed_id: str,
+        body: AuthorRulesIn,
+        request: Request,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> RulePreviewPackOut:
+        """Run this feed's DRAFT rules over a stored sample. CF-V1-E7-02.
+
+        VIEW rather than EDIT_FEED: seeing what a rule catches is reading, and
+        a reviewer who cannot preview the rule they are being asked to approve
+        is being asked to approve prose.
+        """
+        try:
+            rules = rules_core.rules_from_governed(metadata.get(ObjectType.DQ_RULE, feed_id))
+        except (ObjectNotFoundError, rules_core.RuleError):
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"feed {feed_id!r} has no rules yet — write some first",
+            ) from None
+        rows = _sample_rows(metadata, request.app.state.storage, feed_id, body.profile_id)
+        return _preview_pack_out(feed_id, rules, rows, _contract_of(metadata, feed_id))
 
     @app.get(
         f"{API_PREFIX}/proposals/{{proposal_id}}/recall",
@@ -2885,6 +3000,147 @@ def _accept_mapping_proposal(
     return _proposal_out(stored)
 
 
+# ── NL rules and their preview · CF-V1-E7-01, CF-V1-E7-02 ────────────────────
+
+
+def _published_rules(metadata: MetadataDbPort, feed_id: str) -> tuple[rules_core.RuleSpec, ...]:
+    """This feed's PUBLISHED rules. House style, and the "already stated" check.
+
+    Published only. A draft is somebody's unreviewed work, and treating it as
+    already-decided would let an unapproved rule silence the agent about the
+    sentence it came from.
+    """
+    try:
+        obj = metadata.get(ObjectType.DQ_RULE, feed_id)
+    except ObjectNotFoundError:
+        return ()
+    if not obj.is_executable:
+        return ()
+    try:
+        return rules_core.rules_from_governed(obj)
+    except rules_core.RuleError:
+        return ()
+
+
+def _sample_rows(
+    metadata: MetadataDbPort,
+    storage: StoragePort | None,
+    feed_id: str,
+    profile_id: str | None,
+) -> tuple[dict[str, Any], ...]:
+    """The rows a preview runs over, read from the profiled sample.
+
+    From the SAME file the profile was taken of, so the counts a BA sees and
+    the statistics they were shown describe one delivery. A preview over a
+    different file would be a preview of a different question.
+    """
+    if storage is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "no storage pin is fitted on this deployment, so there is no sample to "
+            "preview against. The rules themselves are unaffected.",
+        )
+    found = (
+        [metadata.get_profile(profile_id, feed_id)]
+        if profile_id
+        else list(metadata.list_profiles(feed_id=feed_id, limit=1))
+    )
+    if not found:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"feed {feed_id!r} has no profiled sample — profile a delivery first, so the "
+            "preview and the statistics describe the same file.",
+        )
+    record = found[0]
+    try:
+        content = storage.read_bytes(record.profile.source_key)
+    except Exception:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "the profiled sample is no longer in landing, so there is nothing to preview "
+            "against. Profiling a fresh delivery restores it.",
+        ) from None
+    parsed = parse(
+        content,
+        file_format=record.profile.structure.file_format,
+        encoding=record.profile.structure.encoding,
+    )
+    return tuple(parsed.table.to_pylist())
+
+
+def _preview_pack_out(
+    feed_id: str,
+    rules: tuple[rules_core.RuleSpec, ...],
+    rows: tuple[dict[str, Any], ...],
+    contract: SchemaContract | None,
+) -> RulePreviewPackOut:
+    previews = rule_preview.preview_all(rules, rows, contract=contract)
+    pack = rule_preview.evidence_pack(previews, sample_rows=len(rows))
+    return RulePreviewPackOut(
+        feed_id=feed_id,
+        sample_rows=pack["sample_rows"],
+        rules_previewed=pack["rules_previewed"],
+        rules_not_previewable=pack["rules_not_previewable"],
+        total_failures=pack["total_failures"],
+        previews=[
+            RulePreviewOut(
+                rule_id=one.rule_id,
+                stated=one.stated,
+                explanation=one.explanation,
+                tested=one.tested,
+                passed=one.passed,
+                failed=one.failed,
+                skipped=one.skipped,
+                failure_rate=one.failure_rate,
+                failing_rows=[
+                    FailingRowOut(row_number=row.row_number, values=dict(row.values))
+                    for row in one.failing_rows
+                ],
+                masked_columns=list(one.masked_columns),
+                not_previewable=one.not_previewable,
+                summary=one.summary(),
+            )
+            for one in previews
+        ],
+    )
+
+
+def _rule_record_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """One proposed rule, as the reviewer reads it. CF-V1-E7-01.
+
+    `sql` and `pyspark` are rendered HERE, by the platform, from the stored
+    check — never read from the payload, because the payload is what a model
+    produced and the whole design is that a model produces no query.
+    """
+    stored = record.get("rule") or {}
+    sql = pyspark = ""
+    if stored:
+        try:
+            rebuilt = rules_core.rule_from_dict(stored)
+            sql = rebuilt.sql(table="silver_raw")
+            pyspark = rebuilt.pyspark()
+        except rules_core.RuleError:  # pragma: no cover - stored rules are validated
+            sql = pyspark = ""
+    return {
+        "stated": str(record.get("stated", "")),
+        "unsupported": bool(record.get("unsupported", False)),
+        "unsupported_reason": str(record.get("unsupported_reason", "")),
+        "rule_id": record.get("rule_id"),
+        "name": str(stored.get("name", "")),
+        "explanation": str(record.get("explanation", "")),
+        "check_kind": record.get("check_kind"),
+        "column": record.get("column"),
+        "dimension": stored.get("dimension"),
+        "severity": record.get("severity"),
+        "glossary_id": stored.get("glossary_id"),
+        "confidence": record.get("confidence"),
+        "settled_by": str(record.get("settled_by", "inference")),
+        "rationale": str(stored.get("rationale", "")),
+        "sql": sql,
+        "pyspark": pyspark,
+    }
+
+
 def _canonical_of(metadata: MetadataDbPort) -> canonical.CanonicalModel:
     """Built per request from the spec and the CURRENT glossary.
 
@@ -3235,6 +3491,7 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
     # actually determines the shape.
     is_phi_agent = proposal.agent == PHI_AGENT
     is_mapping_agent = proposal.agent == MAPPING_AGENT
+    is_rule_agent = proposal.agent == RULE_AGENT
     return ProposalOut(
         proposal_id=proposal.proposal_id,
         agent=proposal.agent,
@@ -3258,7 +3515,7 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
         grounding_citations=[str(c) for c in proposal.grounding_citations],
         columns=(
             []
-            if is_phi_agent or is_mapping_agent
+            if is_phi_agent or is_mapping_agent or is_rule_agent
             else [ProposedColumnOut(**_column_fields(r)) for r in records]
         ),
         phi_columns=(
@@ -3268,6 +3525,9 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
             [ProposedMappingOut(**_mapping_record_fields(r)) for r in records]
             if is_mapping_agent
             else []
+        ),
+        rules=(
+            [ProposedRuleOut(**_rule_record_fields(r)) for r in records] if is_rule_agent else []
         ),
         needs_steward_review=list(proposal.payload.get("needs_steward_review", ())),
         masked_columns=list(proposal.payload.get("masked_columns", ())),

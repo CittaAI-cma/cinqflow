@@ -345,3 +345,65 @@ export interface MappingDiff {
   fields_losing_their_source: string[];
   summary: string;
 }
+
+// ── NL rules and their preview · CF-V1-E7-01, CF-V1-E7-02 ────────────────────
+
+/**
+ * One proposed rule, as the reviewer reads it.
+ *
+ * BOTH TEXTS travel. `stated` is the BA's own sentence, verbatim; `explanation`
+ * is generated from the check, so it cannot drift from what runs. Where the two
+ * disagree the rule is wrong, and a screen showing one of them would hide it.
+ *
+ * `sql` and `pyspark` are rendered by the PLATFORM from the check — the model
+ * never writes either, which is what makes approving a rule a matter of
+ * reading configuration rather than reading a dialect.
+ */
+export interface ProposedRule {
+  stated: string;
+  unsupported: boolean;
+  unsupported_reason: string;
+  rule_id: string | null;
+  name: string;
+  explanation: string;
+  check_kind: string | null;
+  column: string | null;
+  dimension: string | null;
+  severity: string | null;
+  glossary_id: string | null;
+  confidence: number | null;
+  settled_by: string;
+  rationale: string;
+  sql: string;
+  pyspark: string;
+}
+
+/** One row a rule caught, already masked before it reached the wire. */
+export interface FailingRow {
+  row_number: number;
+  values: Record<string, string>;
+}
+
+export interface RulePreview {
+  rule_id: string;
+  stated: string;
+  explanation: string;
+  tested: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  failure_rate: number;
+  failing_rows: FailingRow[];
+  masked_columns: string[];
+  not_previewable: string;
+  summary: string;
+}
+
+export interface RulePreviewPack {
+  feed_id: string;
+  sample_rows: number;
+  rules_previewed: number;
+  rules_not_previewable: number;
+  total_failures: number;
+  previews: RulePreview[];
+}
