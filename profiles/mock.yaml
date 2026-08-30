@@ -17,6 +17,7 @@ pins:
   compute_job:    { adapter: mock }
   orchestration:  { adapter: mock }
   storage:        { adapter: mock }
+  connector:      { adapter: mock }
   control_tables: { adapter: mock }
   catalog:        { adapter: mock }
   sql_query:      { adapter: mock }

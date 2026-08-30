@@ -23,6 +23,12 @@ pins:
   compute_job:    { adapter: none }
   orchestration:  { adapter: pg-scheduler }   # queue.schedule / queue.scheduled_run — W1 (CF-V1-E8-03)
   storage:        { adapter: localfs, root: ".cinqflow/landing" }
+  # CF-V1-E3-05 — the 21st pin. How a file gets IN; `storage` only reads.
+  # `upload` is the endpoint the wizard's first step needs; `folder-drop` is the
+  # pull shape every poller has, and its drop directory is NOT the landing zone —
+  # files are read from there and DELIVERED into the zone, so nothing that can
+  # write a file can also choose its landing key.
+  connector:      { adapter: upload, drop_root: ".cinqflow/drop" }
   control_tables: { adapter: pg-control, schema: control }
   catalog:        { adapter: none }
   sql_query:      { adapter: pg-readonly }    # W1 (CF-V1-E7-02) — NOT on any agent whitelist

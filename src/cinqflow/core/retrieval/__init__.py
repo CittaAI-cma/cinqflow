@@ -11,7 +11,7 @@
 
 THE IDEA WORTH THE FILE: the platform's own vocabulary is not typed out here.
 It is GENERATED from the enums that define it — the seven status words, six
-layers, five gates, eleven control tables, twenty pins, five risk classes,
+layers, five gates, eleven control tables, twenty-one pins, five risk classes,
 three test lanes, the lifecycle states, the landing outcomes. So the glossary
 cannot drift from the code, because it IS the code, read at import time. Add a
 status word and the glossary gains an entry; rename one and every definition

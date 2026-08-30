@@ -13,17 +13,35 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
+from cinqflow.adapters.local.localfs_storage import LocalFsStorage
+from cinqflow.adapters.local.upload_connector import UploadConnector
 from cinqflow.adapters.mock.authn import StaticAuthn
 from cinqflow.api import create_app
 from cinqflow.intelligence.demo import BUDGET, agent_for, plane, schema_inference_for
 
+#: The same root `profiles/local.yaml` names, so a file delivered through the
+#: dev server and one delivered by `cinqflow ingest` land in one zone.
+DEFAULT_LANDING_ROOT = ".cinqflow/landing"
 
-def build() -> Any:
+
+def build(landing_root: str | None = None) -> Any:
+    """The mock socket, with ONE real seat: the landing zone.
+
+    CF-V1-E3-05. A memfs landing zone would let a BA upload a file, watch it
+    land, and find nothing there after a restart — so the dev server fits the
+    REAL localfs storage and the REAL upload connector, rooted in a directory
+    somebody can open. Everything else stays in memory, which is what rung 0
+    is for: the delivery path is the one thing you cannot honestly demonstrate
+    without a disk.
+    """
     store, control = plane()
+    landing = LocalFsStorage(root=landing_root or DEFAULT_LANDING_ROOT)
     return create_app(
         authn=StaticAuthn(),
         metadata_db=store,
         control_tables=control,
+        storage=landing,
+        connector=UploadConnector(landing),
         agent_factory=agent_for,
         schema_inference_factory=schema_inference_for,
         budget=BUDGET,
@@ -35,9 +53,19 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--landing-root",
+        default=DEFAULT_LANDING_ROOT,
+        help="Where delivered files land. A real directory, so you can open it.",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     arguments = parser.parse_args()
-    uvicorn.run(build(), host=arguments.host, port=arguments.port, log_level="warning")
+    uvicorn.run(
+        build(arguments.landing_root),
+        host=arguments.host,
+        port=arguments.port,
+        log_level="warning",
+    )
 
 
 if __name__ == "__main__":

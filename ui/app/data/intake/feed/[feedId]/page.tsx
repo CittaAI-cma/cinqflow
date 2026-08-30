@@ -172,6 +172,18 @@ export default async function FeedPage({
       ) : null}
 
       <div className="card">
+        <strong>Deliver a file</strong>
+        <p className="note">
+          Send a sample the payer has actually delivered. It lands through the same controls as
+          an SFTP poller&rsquo;s file — registered, fingerprinted and classified — and what comes
+          back is the landing decision, not just &ldquo;uploaded&rdquo;.
+        </p>
+        <Link className="cited" href={`/data/intake/feed/${feed.feed_id}/deliver`}>
+          Upload a sample file →
+        </Link>
+      </div>
+
+      <div className="card">
         <strong>Column mapping</strong>
         <p className="note">
           Which canonical field each source column populates, and — just as importantly — which

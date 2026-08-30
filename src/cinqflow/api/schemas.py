@@ -875,6 +875,64 @@ class FileProfileOut(BaseModel):
     route: str
 
 
+# ── CF-V1-E3-05 · delivery ───────────────────────────────────────────────────
+class DeliveryOut(BaseModel):
+    """What happened to a file somebody just sent.
+
+    The landing DECISION is the headline, not the upload's success. A request
+    that returns 200 has delivered the bytes; whether the platform accepted
+    them is a separate fact, and conflating the two is how a rejected file
+    reads as a loaded one on the screen that matters most.
+    """
+
+    outcome: str
+    headline: str
+    reason: str | None = None
+    check_name: str | None = None
+    feed_id: str
+    filename: str
+    key: str
+    size_bytes: int
+    fingerprint: str
+    business_date: str
+    #: The PERSON who pressed Upload.
+    delivered_by: str
+    #: The CONNECTOR that landed it — `upload-endpoint`, `folder-drop`,
+    #: `fidelis-sftp`. Separate from `delivered_by` because a poller has a
+    #: source and no person, and an approver asking "who put this here" wants
+    #: the person.
+    source: str
+    #: `file:<fingerprint>` — the address the explorer routes and the insight
+    #: agent cites. A delivery needed no new citation kind.
+    citation_id: str
+    route: str
+    #: Present only for an ACCEPTED file. Profiling a rejected one would
+    #: produce facts about bytes the platform declined to load.
+    profile_id: str | None = None
+    profile: FileProfileOut | None = None
+    #: What a person should do next, in their words. Empty when the answer is
+    #: "nothing — it worked".
+    next_step: str = ""
+
+
+class DeliveriesOut(BaseModel):
+    """Everything one poll of a pull connector landed."""
+
+    source: str
+    delivered: list[DeliveryOut]
+    #: Said out loud rather than left as an empty list, because "the poller ran
+    #: and found nothing" and "the poller did not run" look identical otherwise.
+    summary: str
+
+
+class ConnectionCheckOut(BaseModel):
+    """Whether the delivery source can be reached at all."""
+
+    reachable: bool
+    source: str
+    detail: str = ""
+
+
 class ProfileIn(BaseModel):
     """Profile a file that is already in the landing zone.
 

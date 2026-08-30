@@ -22,6 +22,7 @@ from cinqflow.adapters.mock import (  # noqa: F401  — imported for registratio
     cache,
     catalog,
     compute_job,
+    connector,
     control_tables,
     http_edge,
     identity,

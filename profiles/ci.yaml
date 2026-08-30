@@ -18,6 +18,7 @@ pins:
   compute_job:    { adapter: none }
   orchestration:  { adapter: none }
   storage:        { adapter: none }
+  connector:      { adapter: none }   # nothing is delivered in CI
   control_tables: { adapter: pg-control, schema: control }
   catalog:        { adapter: none }
   sql_query:      { adapter: none }

@@ -98,3 +98,42 @@ export async function attempt<T>(path: string, init?: RequestInit): Promise<T | 
 export function isRefused<T>(value: T | Refused): value is Refused {
   return value instanceof Refused;
 }
+
+/**
+ * A multipart POST. CF-V1-E3-05 — the one request that is not JSON.
+ *
+ * Separate from `api()` rather than a flag on it, because the two differ in a
+ * way a flag would hide: `content-type` must be ABSENT here so the runtime can
+ * set it with the multipart boundary it generated. Setting it by hand — which
+ * `api()` does, correctly, for every other call — produces a request the
+ * server cannot parse, with an error that names the boundary and not the
+ * cause.
+ */
+export async function upload<T>(path: string, form: FormData): Promise<T> {
+  const bearer = await token();
+  const url = `${API}${path}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      body: form,
+      headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
+      cache: "no-store",
+    });
+  } catch (cause) {
+    throw new Unreachable(url, { cause });
+  }
+
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = await response.json();
+      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {
+      /* a non-JSON error body is still an error */
+    }
+    throw new Refused(response.status, detail);
+  }
+  return (await response.json()) as T;
+}

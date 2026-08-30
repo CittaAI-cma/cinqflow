@@ -9,6 +9,7 @@ in seconds, with no cloud account and no container.
 """
 
 from cinqflow.adapters.local import (  # noqa: F401  — imported for registration
+    folder_connector,
     localfs_storage,
     pg_compute,
     pg_control_tables,
@@ -19,5 +20,6 @@ from cinqflow.adapters.local import (  # noqa: F401  — imported for registrati
     pg_vector,
     presidio_scrub,
     secrets,
+    upload_connector,
     webhook_notification,
 )

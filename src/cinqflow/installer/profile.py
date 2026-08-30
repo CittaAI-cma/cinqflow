@@ -3,7 +3,7 @@
 The SHAPE and the credential rule live in `core/model/profile.py`, so an
 adapter can be handed a profile without importing the installer. What stays
 here is what only the installer can do: read a file, and check the profile
-against the twenty pins the platform actually has.
+against the twenty-one pins the platform actually has.
 
     "all environment difference lives in the connection profile, nowhere else"
     — docs/architecture/INVARIANTS.md, chip discipline
@@ -59,7 +59,7 @@ def load(path: str | Path) -> Profile:
     unknown = set(pins) - set(PORTS)
     if unknown:
         raise ProfileError(
-            f"{profile_path}: {', '.join(sorted(unknown))} are not pins. The twenty pins "
+            f"{profile_path}: {', '.join(sorted(unknown))} are not pins. The twenty-one pins "
             "are declared on docs/architecture/plates/04-pin-out-map.md."
         )
 

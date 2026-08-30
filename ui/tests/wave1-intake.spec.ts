@@ -84,3 +84,41 @@ test("a read-only user may still read the mapping and the rules", async ({ page 
     expect(response?.status(), `${route} must not 403 a reader`).not.toBe(403);
   }
 });
+
+// ── CF-V1-E3-05 · the delivery step ─────────────────────────────────────────
+
+test("the feed page offers the upload step the wizard names", async ({ page }) => {
+  await signIn(page);
+  await page.goto(`/data/intake/feed/${FEED}`);
+  await expect(page.getByRole("link", { name: /upload a sample file/i })).toBeVisible();
+});
+
+test("the upload form asks for a file, a business date, and nothing it does not need", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.goto(`/data/intake/feed/${FEED}/deliver`);
+  await expect(page.getByRole("heading", { name: /upload a sample file/i })).toBeVisible();
+  await expect(page.locator('input[type="file"]')).toBeVisible();
+  await expect(page.locator('input[name="business_date"]')).toBeVisible();
+  // The pattern is SHOWN, so a rejection for not matching it is not a surprise.
+  await expect(page.getByText(/file-name pattern/i)).toBeVisible();
+});
+
+test("the page says where a delivered file goes", async ({ page }) => {
+  // "Where does it land" is the first question anybody asks, and an answer
+  // that requires reading a profile is an answer nobody gets.
+  await signIn(page);
+  await page.goto(`/data/intake/feed/${FEED}/deliver`);
+  await expect(page.getByText(/incoming/)).toBeVisible();
+  await expect(page.getByText(/skipped/i)).toBeVisible();
+});
+
+test("a reader is not offered the upload step as if it would work", async ({ page }) => {
+  // Delivering is EDIT_FEED. The route refuses at the server; what this
+  // asserts is that the page still renders rather than erroring, so a reader
+  // who follows a link sees an explanation instead of a stack trace.
+  await signIn(page, "dev-analyst@cinqcare.test");
+  const response = await page.goto(`/data/intake/feed/${FEED}/deliver`);
+  expect(response?.status()).toBeLessThan(500);
+});

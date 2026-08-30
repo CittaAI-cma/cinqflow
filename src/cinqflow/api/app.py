@@ -27,7 +27,7 @@ from enum import StrEnum, unique
 from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 
 from cinqflow.adapters.mock.control_tables import MemStoreControlTables
 from cinqflow.api.audit import AuditLog
@@ -62,11 +62,13 @@ from cinqflow.api.schemas import (
     CloneFeedIn,
     CloneOut,
     ColumnProfileOut,
+    ConnectionCheckOut,
     ConsequenceOut,
     ContractOut,
     CorrectionOut,
     CounterOut,
     DateFormatOut,
+    DeliveryOut,
     DependencyPictureOut,
     DestinationOut,
     DetectPhiIn,
@@ -154,6 +156,7 @@ from cinqflow.api.schemas import (
     WizardStepOut,
     WorkQueueOut,
 )
+from cinqflow.core import delivery as delivery_core
 from cinqflow.core import lifecycle, onboarding, proposals, scheduling
 from cinqflow.core import mapping as mapping_core
 from cinqflow.core import operations as ops_board
@@ -167,6 +170,7 @@ from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.citations import parse as parse_citation
 from cinqflow.core.impact import ImpactPacket, ImpactUnknownError, Touched, build_packet
 from cinqflow.core.intelligence import Budget
+from cinqflow.core.landing import LandingOutcome
 from cinqflow.core.mapping import versioning as mapping_versioning
 from cinqflow.core.mapping.versioning import UnacknowledgedLossError, refuse_unacknowledged_loss
 from cinqflow.core.model.governed import (
@@ -212,6 +216,11 @@ from cinqflow.intelligence.agents.rule_authoring import RuleAuthoringAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.tools import ToolContext, ToolResult, all_dq_rule_entries, invoke
 from cinqflow.ports.authn import AuthnPort, Principal
+from cinqflow.ports.connector import (
+    AlreadyDeliveredError,
+    ConnectorError,
+    ConnectorPort,
+)
 from cinqflow.ports.control_tables import (
     BatchControl,
     BatchNotFoundError,
@@ -220,6 +229,7 @@ from cinqflow.ports.control_tables import (
 )
 from cinqflow.ports.metadata_db import FileProfileRecord, MetadataDbPort, ObjectNotFoundError
 from cinqflow.ports.storage import StoragePort
+from cinqflow.workers.delivery import DeliveryOutcome, DeliveryWorker
 from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
 
 API_PREFIX = "/api"
@@ -336,6 +346,7 @@ def create_app(
     plane_register: ExecutionPlaneRegister | None = None,
     control_tables: ControlTablesPort | None = None,
     storage: StoragePort | None = None,
+    connector: ConnectorPort | None = None,
     agent_factory: AgentFactory | None = None,
     schema_inference_factory: SchemaInferenceFactory | None = None,
     phi_detection_factory: PhiDetectionFactory | None = None,
@@ -371,6 +382,12 @@ def create_app(
     # that would be honest here: a profiler pointed at an empty store would
     # answer "file not found" for every real sample.
     app.state.storage = storage
+    # CF-V1-E3-05. No default either, and for a stronger reason: a deployment
+    # with no connector CANNOT accept a delivery, and answering "not
+    # configured" is the truth. Defaulting to something that accepted uploads
+    # into memory would mean a BA uploads a file, sees it land, and finds
+    # nothing there after a restart.
+    app.state.connector = connector
     app.state.agent_factory = agent_factory
     # None leaves the inference route answering "not configured" rather than
     # 500ing — the deterministic profile and the manual editor still work,
@@ -1213,6 +1230,115 @@ def create_app(
     # the file's bytes: no model is called, nothing is inferred, and the AI
     # stories downstream cite `profile:<id>#<column>` for every fact they
     # interpret.
+
+    # ── CF-V1-E3-05 · deliveries ─────────────────────────────────────────
+    #
+    # THE DOOR. Plate 09 named seven connectors from Wave 0 and none of them
+    # had a pin, so the platform could read a landing zone it had no way to
+    # fill — and the wizard's first step said "Upload a sample file" beside no
+    # way to upload one. This is that step, and it is a CONNECTOR rather than a
+    # route that writes bytes: an uploaded file and an SFTP-fetched one are
+    # indistinguishable by the time landing controls see them.
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/deliveries",
+        response_model=DeliveryOut,
+        tags=["delivery"],
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def deliver_file(
+        feed_id: str,
+        request: Request,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        audit: Audit,
+        file: Annotated[UploadFile, File(description="The payer's file.")],
+        business_date: Annotated[str, Form()],
+        checksum: Annotated[str | None, Form()] = None,
+        declared_row_count: Annotated[int | None, Form()] = None,
+    ) -> DeliveryOut:
+        """Land a file, register it, and profile it. CF-V1-E3-05.
+
+        EDIT_FEED, not VIEW: a delivery changes what the platform holds, and a
+        reader who could deliver could put content into the estate.
+
+        200-with-a-rejection rather than a 4xx for a file landing controls
+        decline. The request succeeded — the bytes arrived, the row exists, the
+        file is parked where somebody can look at it. Returning 400 would say
+        the caller made a mistake, when what happened is that the PAYER sent
+        something the feed does not expect, and that is a finding to act on
+        rather than an error to retry.
+        """
+        worker = _delivery_worker(request, metadata)
+        if worker is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no connector pin is fitted on this deployment, so there is nowhere for a "
+                "delivery to land. Fit one in the connection profile — `connector: "
+                "{ adapter: upload }` at rung 0.5.",
+            )
+        governed = _load(metadata, feed_id)
+        record = feed_registry.from_governed(governed)
+        content = await file.read()
+        try:
+            outcome = worker.deliver(
+                content,
+                filename=file.filename or "",
+                feed=record,
+                feed_version=governed.version,
+                business_date=business_date,
+                delivered_by=principal.subject,
+                manifest=delivery_core.Manifest(
+                    checksum=checksum, declared_row_count=declared_row_count
+                ),
+            )
+        except delivery_core.DeliveryError as refused:
+            # A path for a filename, a checksum that does not match, a business
+            # date that is not one. None of these is a file arriving.
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(refused)) from None
+        except AlreadyDeliveredError as refused:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(refused)) from None
+        except ConnectorError as failure:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(failure)) from None
+
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=feed_id,
+            action="deliver_file",
+            actor=principal.as_actor(),
+            detail=(
+                f"{outcome.delivery.file.filename} -> {outcome.decision.outcome.value}"
+                f" ({outcome.delivery.fingerprint})"
+            ),
+        )
+        return _delivery_out(outcome, principal)
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/deliveries/source",
+        response_model=ConnectionCheckOut,
+        tags=["delivery"],
+    )
+    def delivery_source(
+        feed_id: str,
+        request: Request,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> ConnectionCheckOut:
+        """Can the delivery source be reached at all?
+
+        Asked separately from listing, so an expired credential reports as an
+        expired credential rather than as an empty directory.
+        """
+        connector = getattr(request.app.state, "connector", None)
+        if connector is None:
+            return ConnectionCheckOut(
+                reachable=False,
+                source="none",
+                detail="no connector pin is fitted on this deployment",
+            )
+        check = connector.connect()
+        return ConnectionCheckOut(
+            reachable=check.reachable, source=check.source, detail=check.detail
+        )
 
     @app.post(
         f"{API_PREFIX}/feeds/{{feed_id}}/profile",
@@ -3091,6 +3217,81 @@ def create_app(
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _delivery_worker(request: Request, metadata: MetadataDbPort) -> DeliveryWorker | None:
+    """The worker, or None when this deployment cannot accept a delivery.
+
+    None rather than a stub, for the same reason `_profiler` returns None: a
+    stub that accepted uploads into nowhere would let a BA upload a file, watch
+    it land, and find nothing there afterwards.
+    """
+    connector = getattr(request.app.state, "connector", None)
+    storage = request.app.state.storage
+    if connector is None or storage is None:
+        return None
+    return DeliveryWorker(
+        connector=connector,
+        storage=storage,
+        control=request.app.state.control_tables,
+        metadata=metadata,
+    )
+
+
+def _delivery_out(outcome: DeliveryOutcome, principal: Principal) -> DeliveryOut:
+    """The receipt, in the words of the person who pressed Upload."""
+    delivery = outcome.delivery
+    citation = parse_citation(outcome.citation)
+    return DeliveryOut(
+        outcome=outcome.decision.outcome.value,
+        headline=outcome.headline(),
+        reason=outcome.decision.reason,
+        check_name=outcome.decision.check_name,
+        feed_id=delivery.feed_id,
+        filename=delivery.file.filename,
+        key=delivery.file.key,
+        size_bytes=delivery.file.size_bytes,
+        fingerprint=delivery.fingerprint,
+        business_date=delivery.business_date,
+        delivered_by=outcome.requested_by or delivery.delivered_by,
+        source=outcome.source,
+        citation_id=outcome.citation,
+        route=citation.route,
+        profile_id=outcome.profile_id,
+        profile=None,
+        next_step=_next_step(outcome),
+    )
+
+
+def _next_step(outcome: DeliveryOutcome) -> str:
+    """What to do now, in the BA's words rather than the platform's.
+
+    Every branch here is a landing outcome, and each one has a genuinely
+    different next action — which is why this is not one sentence with the
+    outcome interpolated into it.
+    """
+    if outcome.accepted:
+        return (
+            "Approve the schema next. The columns were profiled by computation, so the "
+            "types and counts on that screen are measured rather than guessed."
+        )
+    outcome_value = outcome.decision.outcome
+    if outcome_value is LandingOutcome.SKIPPED:
+        return (
+            "This exact content has already been processed, so nothing was loaded twice. "
+            "Ask the batch it arrived in what happened to it."
+        )
+    if outcome_value is LandingOutcome.UNEXPECTED:
+        return (
+            "The file is parked, not lost. Either the payer sent something new, or this "
+            "feed's file-name pattern needs to admit it — check the pattern before "
+            "changing it, because widening one to fit a stray file is how the next "
+            "wrong file gets in."
+        )
+    return (
+        "The file is in the rejected folder with its reason. Send the reason to the "
+        "payer rather than re-uploading — the same bytes will be rejected again."
+    )
 
 
 def _load(metadata: MetadataDbPort, feed_id: str, version: int | None = None) -> GovernedObject:

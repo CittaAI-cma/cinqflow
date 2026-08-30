@@ -6,7 +6,7 @@
 The failure this guards against is the one the invariant names: three
 implementations drifting onto three test suites. So the registry is the single
 place a port is declared, and these tests assert that the declaration matches
-plate 04 — twenty pins, each with a business verb and a ladder of
+plate 04 — twenty-one pins, each with a business verb and a ladder of
 implementations — and that no adapter can be fitted without a contract suite.
 """
 
@@ -21,6 +21,7 @@ PLATE_04_PINS = {
     "compute_job",
     "orchestration",
     "storage",
+    "connector",
     "control_tables",
     "catalog",
     "sql_query",
@@ -43,10 +44,15 @@ PLATE_04_PINS = {
 
 
 @pytest.mark.contract
-def test_there_are_exactly_twenty_pins() -> None:
-    """FIG 04: ports.count == 20. A twenty-first pin needs a plate change."""
+def test_there_are_exactly_twenty_one_pins() -> None:
+    """FIG 04: ports.count == 21. A twenty-second pin needs a plate change.
+
+    The twenty-first is `connector`, added by CF-V1-E3-05. Plate 09 had named
+    seven connectors since Wave 0 and plate 04 gave none of them a pin, so the
+    platform could read a landing zone it had no way to fill.
+    """
     assert set(PORTS) == PLATE_04_PINS
-    assert len(PORTS) == 20
+    assert len(PORTS) == 21
 
 
 @pytest.mark.contract

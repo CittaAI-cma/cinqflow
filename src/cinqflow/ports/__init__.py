@@ -1,4 +1,4 @@
-"""The twenty pins.
+"""The twenty-one pins.
 
     "Every touch of the outside world goes through a port interface, in
      business language."
@@ -91,6 +91,20 @@ _GROUP_A: tuple[PortSpec, ...] = (
         mock="memfs",
         dev="localfs_or_minio",
         target="adls_gen2",
+    ),
+    _spec(
+        "connector",
+        "deliver_a_file_into_the_landing_zone",
+        "How a file gets IN. Plate 09 named seven connectors from the start and gave "
+        "none of them a pin, so the platform could read a zone it had no way to fill — "
+        "the only paths to a landed file were the simulator and a CLI that generated "
+        "its own roster. `storage` reads the zone and has no write verb on purpose; "
+        "this writes it, and is separate for exactly that reason. Only a connector "
+        "delivers, and everything it delivers goes through landing controls, so ADR-0011's "
+        "'there is no second door' stays a property rather than a convention.",
+        mock="scripted",
+        dev="upload_or_folder_drop",
+        target="sftp_poller_or_storage_event",
     ),
     _spec(
         "control_tables",
@@ -278,8 +292,8 @@ def port(pin: str, adapter: str) -> Callable[[type[T]], type[T]]:
     def decorate(cls: type[T]) -> type[T]:
         if pin not in PORTS:
             raise KeyError(
-                f"{pin!r} is not a pin. The twenty pins are declared on {_PLATE}; "
-                "a twenty-first is a plate change, not a registration."
+                f"{pin!r} is not a pin. The twenty-one pins are declared on {_PLATE}; "
+                "a twenty-second is a plate change, not a registration."
             )
         adapters = PORTS[pin].adapters
         if adapter in adapters:

@@ -407,3 +407,30 @@ export interface RulePreviewPack {
   total_failures: number;
   previews: RulePreview[];
 }
+
+/** CF-V1-E3-05. What happened to a file somebody just sent. */
+export interface Delivery {
+  outcome: "ACCEPTED" | "REJECTED" | "UNEXPECTED" | "SKIPPED";
+  headline: string;
+  reason: string | null;
+  check_name: string | null;
+  feed_id: string;
+  filename: string;
+  key: string;
+  size_bytes: number;
+  fingerprint: string;
+  business_date: string;
+  delivered_by: string;
+  source: string;
+  citation_id: string;
+  route: string;
+  profile_id: string | null;
+  next_step: string;
+}
+
+/** Whether the delivery source can be reached at all. */
+export interface DeliverySource {
+  reachable: boolean;
+  source: string;
+  detail: string;
+}

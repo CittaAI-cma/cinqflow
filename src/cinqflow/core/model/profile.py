@@ -8,7 +8,7 @@ Law 3 makes the profile a first-class domain concept, so its SHAPE belongs
 here, where an adapter can depend on it without depending on the installer.
 
 `installer/profile.py` keeps `load()` — which reads a file, validates against
-the twenty pins, and REFUSES any literal credential. All three are things only
+the twenty-one pins, and REFUSES any literal credential. All three are things only
 the loader does, and the last is why the credential-shaped detector lives
 there: a regex that matches credentials is not a credential, but core's purity
 lint cannot tell them apart, and the right answer to that is to put the
