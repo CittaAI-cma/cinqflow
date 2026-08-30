@@ -176,6 +176,7 @@ from cinqflow.core import mapping as mapping_core
 from cinqflow.core import operations as ops_board
 from cinqflow.core import rules as rules_core
 from cinqflow.core import variance as variances_core
+from cinqflow.core.agents.fingerprint_match.graph import AGENT as FINGERPRINT_MATCH_AGENT_NAME
 from cinqflow.core.agents.mapping_suggestion.graph import AGENT as MAPPING_SUGGESTION_AGENT
 from cinqflow.core.agents.phi_detection.graph import AGENT as PHI_DETECTION_AGENT
 from cinqflow.core.agents.pipeline_insight.graph import AGENT
@@ -270,6 +271,9 @@ MAPPING_AGENT = MAPPING_SUGGESTION_AGENT
 
 #: CF-V1-E7-01's, likewise.
 RULE_AGENT = RULE_AUTHORING_AGENT
+
+#: CF-V2-E12-04's, likewise — a drafted runbook, not a contract.
+FINGERPRINT_MATCH_AGENT = FINGERPRINT_MATCH_AGENT_NAME
 
 #: Build an agent for ONE caller. Never a shared agent — a shared agent is a
 #: shared scope, and the tool context is where the caller's RBAC lives.
@@ -2000,6 +2004,15 @@ def create_app(
             # version sequence — four differences, which is a second path and
             # not a third conditional.
             return _accept_mapping_proposal(metadata, proposal, body, principal, audit)
+
+        if proposal.agent == FINGERPRINT_MATCH_AGENT:
+            # A fingerprint-match proposal produces a DRAFT RUNBOOK — a
+            # drafted incident-recovery guide, not a contract. Its payload
+            # carries title/steps/remedy/signatures
+            # (`DraftedGuide.as_payload`), none of which is a contract column,
+            # so routed out here for the same reason mapping is: a different
+            # object type, keyed differently, with nothing below that applies.
+            return _accept_runbook_proposal(metadata, proposal, body, principal, audit)
 
         accepted = _apply_decisions(proposal.payload, body)
         corrections = proposals.diff_fields(
@@ -4388,6 +4401,103 @@ def _accept_mapping_proposal(
     return _proposal_out(stored)
 
 
+def _runbook_record(payload: dict[str, Any]) -> dict[str, Any]:
+    """The one record a fingerprint-match payload carries.
+
+    `DraftedGuide.as_payload` always writes exactly one — this agent drafts
+    one guide per novel incident, never a batch of them — so there is no
+    "which record" ambiguity the way a contract's or a mapping's many-column
+    payload has.
+    """
+    records = tuple(r for r in payload.get("records", ()) if isinstance(r, dict))
+    return records[0] if records else {}
+
+
+def _runbook_body_from(record: dict[str, Any]) -> dict[str, Any]:
+    """A governed RUNBOOK body — the same fields `workers.incidents
+    .recovery_guides` reads back, and `core.operations.fingerprint
+    .RecoveryGuide` carries. `guide_id` travels in the body too, alongside
+    being the object's own id, so the body is a complete, self-describing
+    record of what was published rather than one that depends on its own
+    key to be read."""
+    return {
+        "guide_id": record.get("guide_id"),
+        "title": record.get("title"),
+        "signatures": list(record.get("signatures", ())),
+        "steps": list(record.get("steps", ())),
+        "remedy": record.get("remedy"),
+        "is_transient": bool(record.get("is_transient", False)),
+    }
+
+
+def _next_runbook_version(metadata: MetadataDbPort, guide_id: str) -> int:
+    history = metadata.history(ObjectType.RUNBOOK, guide_id)
+    return max((obj.version for obj in history), default=0) + 1
+
+
+def _accept_runbook_proposal(
+    metadata: MetadataDbPort,
+    proposal: Proposal,
+    body: ApproveProposalIn,
+    principal: Principal,
+    audit: AuditLog,
+) -> ProposalOut:
+    """Accept a drafted recovery guide, producing a DRAFT RUNBOOK.
+
+    A runbook proposal has no per-column corrections to apply: it is one
+    title/steps/remedy record, not a set of records a reviewer redirects
+    field by field, and `ApproveProposalIn.columns`/`.mappings` describe
+    contract fields and mapping lines respectively — neither shape fits a
+    guide. Rather than force one of those correction models onto a payload it
+    was never built to describe, this door offers exactly what the payload
+    supports: accept the draft as written, with a comment. A reviewer who
+    wants the guide to say something different edits it after acceptance,
+    the same as they would a hand-typed draft.
+
+    Keyed by `guide_id`, not by feed — a guide answers one FINGERPRINT, and
+    the same fingerprint can recur on any feed, so tying it to the feed the
+    first incident happened to land on would make a genuinely known failure
+    on a second feed look novel again.
+    """
+    record = _runbook_record(proposal.payload)
+    guide_id = str(record.get("guide_id") or "")
+    try:
+        decided = proposals.approve(
+            proposal,
+            approver=principal.as_actor(),
+            comment=body.comment,
+            corrections=(),
+        )
+        applied, draft = proposals.apply(
+            decided,
+            object_type=ObjectType.RUNBOOK,
+            object_id=guide_id,
+            body=_runbook_body_from(record),
+            version=_next_runbook_version(metadata, guide_id),
+        )
+    except proposals.ProposalError as refused:
+        audit.record(
+            object_type=ObjectType.RUNBOOK,
+            object_id=guide_id or proposal.proposal_id,
+            action="refused:approve_proposal",
+            actor=principal.as_actor(),
+            detail=str(refused),
+        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(refused)) from None
+
+    metadata.save(draft)
+    stored = metadata.record_proposal(applied)
+    audit.record(
+        object_type=ObjectType.RUNBOOK,
+        object_id=draft.object_id,
+        version=draft.version,
+        action="applied_proposal",
+        actor=principal.as_actor(),
+        detail=f"{proposal.proposal_id} · accepted as drafted",
+    )
+    return _proposal_out(stored)
+
+
 # ── NL rules and their preview · CF-V1-E7-01, CF-V1-E7-02 ────────────────────
 
 
@@ -4902,6 +5012,7 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
     is_phi_agent = proposal.agent == PHI_AGENT
     is_mapping_agent = proposal.agent == MAPPING_AGENT
     is_rule_agent = proposal.agent == RULE_AGENT
+    is_fingerprint_agent = proposal.agent == FINGERPRINT_MATCH_AGENT
     return ProposalOut(
         proposal_id=proposal.proposal_id,
         agent=proposal.agent,
@@ -4925,7 +5036,7 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
         grounding_citations=[str(c) for c in proposal.grounding_citations],
         columns=(
             []
-            if is_phi_agent or is_mapping_agent or is_rule_agent
+            if is_phi_agent or is_mapping_agent or is_rule_agent or is_fingerprint_agent
             else [ProposedColumnOut(**_column_fields(r)) for r in records]
         ),
         phi_columns=(
