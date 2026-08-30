@@ -26,7 +26,7 @@ machine.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -45,6 +45,7 @@ from cinqflow.core.rules import CheckKind
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.intelligence.agents.rule_authoring import RuleAuthoringAgent
 from cinqflow.intelligence.gateway import LlmGateway
+from tests.conftest import require_corpus
 
 pytestmark = [pytest.mark.evaluation, pytest.mark.lane3]
 
@@ -99,8 +100,21 @@ GRADED_SUB_DIMENSIONS: dict[str, CheckKind] = {
     "Staleness": CheckKind.FRESHNESS,
 }
 
-#: How many rules go into one run. Batched for the reason CF-V1-E6-02 was:
-#: one call for everything returned nothing at all, twice.
+#: How many rules go into one CALL. Batched for the reason CF-V1-E6-02 was:
+#: one call for everything returned nothing at all, twice. A failed batch then
+#: costs its own sentences and not the run.
+#:
+#: IT IS A BATCH SIZE AND NOT A SAMPLE SIZE, which it used to be. Grading
+#: `graded[:BATCH]` measured the first twelve rows of a spreadsheet, and the
+#: client's sheet is sorted by sub-dimension, so all twelve were "Mandatory
+#: Field" — the gate exercised ONE of the eight check kinds and reported a
+#: number that read like a verdict on all of them. The agent's whole job is
+#: choosing BETWEEN kinds; a sample that offers one choice cannot grade it.
+#:
+#: Every gradeable row now runs. The platform's own rule about this is in
+#: `TargetVocabulary`: no silent truncation, because a model shown a third of
+#: a list declines perfectly good work — and a GATE shown a sixth of a corpus
+#: reports a quality it never measured.
 BATCH = 12
 
 
@@ -117,16 +131,14 @@ def _published(obj: Any) -> Any:
 def golden() -> tuple[dict[str, Any], ...]:
     from cinqflow.adapters.local.workbook_glossary import load_dq_rule_rows
 
-    if not WORKBOOK.exists():
-        pytest.skip(f"the client corpus is not on this machine ({WORKBOOK.name} absent)")
+    require_corpus(WORKBOOK)
     rows = load_dq_rule_rows(WORKBOOK)
-    graded = tuple(
+    return tuple(
         row
         for row in rows
         if str(row.get("DQ Sub-Dimension") or "").strip() in GRADED_SUB_DIMENSIONS
         and str(row.get("Corrected Column(s)") or "").strip()
     )
-    return graded[:BATCH]
 
 
 @pytest.fixture(scope="module")
@@ -185,19 +197,72 @@ def agent(lane3_llm: Any) -> RuleAuthoringAgent:
 _RUN: list[Any] = []
 
 
+@dataclass(frozen=True)
+class _Graded:
+    """Every batch's result, as one thing to grade.
+
+    The agent is called once per `BATCH` sentences and the batches are folded
+    together here rather than inside the agent, because batching is this
+    EVAL's concern: `propose` is what a BA calls with the sentences they just
+    wrote, and that is a handful, not a corpus.
+    """
+
+    rules: tuple[Any, ...]
+    needs_review: tuple[Any, ...]
+    refusals: tuple[str, ...]
+    cost_usd: Decimal
+    manual_path: bool
+    batches: int
+    failed_batches: tuple[str, ...]
+
+
 @pytest.fixture
 def proposed(agent, contract, golden):  # type: ignore[no-untyped-def]
     if not _RUN:
+        sentences = tuple(str(row["Rule Description"]).strip() for row in golden)
+        rules: list[Any] = []
+        review: list[Any] = []
+        refusals: list[str] = []
+        failed: list[str] = []
+        cost = Decimal("0")
+        manual = False
+        batches = 0
+
+        for start in range(0, len(sentences), BATCH):
+            chunk = sentences[start : start + BATCH]
+            batches += 1
+            try:
+                result = agent.propose(
+                    chunk,
+                    feed_id=FEED,
+                    contract=contract,
+                    # EMPTY. The client's glossary covers business terms, and
+                    # seeding it with the answers would not be a glossary.
+                    glossary=Glossary(terms=()),
+                    caller=BA,
+                    now=NOW,
+                )
+            except Exception as failure:
+                # The lesson CF-V1-E6-02 paid for: a batch that dies costs its
+                # own sentences, and the run says so instead of reporting a
+                # careful agent that declined everything.
+                failed.append(f"rules {start + 1}-{start + len(chunk)}: {failure!r}")
+                continue
+            rules.extend(result.rules)
+            review.extend(result.needs_review)
+            refusals.extend(result.refusals)
+            cost += result.cost_usd
+            manual = manual or result.manual_path
+
         _RUN.append(
-            agent.propose(
-                tuple(str(row["Rule Description"]).strip() for row in golden),
-                feed_id=FEED,
-                contract=contract,
-                # EMPTY. The client's glossary covers business terms, and
-                # seeding it with the answers would not be a glossary.
-                glossary=Glossary(terms=()),
-                caller=BA,
-                now=NOW,
+            _Graded(
+                rules=tuple(rules),
+                needs_review=tuple(review),
+                refusals=tuple(refusals),
+                cost_usd=cost,
+                manual_path=manual,
+                batches=batches,
+                failed_batches=tuple(failed),
             )
         )
     return _RUN[0]
@@ -227,6 +292,11 @@ def test_the_agent_re_derives_the_analysts_checks(proposed, golden) -> None:  # 
     assert not proposed.manual_path, (
         "the gateway escalated to the manual path — every sentence came back as "
         "technical review. A broken run, and grading it would report a careful agent."
+    )
+    assert not proposed.failed_batches, (
+        "a batch died, so its sentences were never asked and would be graded as "
+        "declines — a degraded run must not read as a careful one:\n  "
+        + "\n  ".join(proposed.failed_batches)
     )
 
     key = _expected(golden)

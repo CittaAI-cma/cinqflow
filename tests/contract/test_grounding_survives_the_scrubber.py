@@ -38,6 +38,7 @@ from cinqflow.core.registry.canonical import build
 from cinqflow.core.registry.contract import ContractColumn, SchemaContract
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.core.schema_spec import Column, Schema, Table, TypeName
+from tests.conftest import require_corpus
 
 pytestmark = [pytest.mark.contract, pytest.mark.lane1]
 
@@ -196,8 +197,7 @@ def test_every_real_canonical_name_survives_the_scrubber(scrub) -> None:  # type
         identifier,
     )
 
-    if not WORKBOOK.exists():
-        pytest.skip(f"the client corpus is not on this machine ({WORKBOOK.name} absent)")
+    require_corpus(WORKBOOK)
     rows = distinct_pairs(load_mappings(WORKBOOK, "Fidelis to Silver Raw"))
 
     targets = {(row.target_entity.lower(), row.target_field): row.description for row in rows}

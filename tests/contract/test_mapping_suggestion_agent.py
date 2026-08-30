@@ -655,3 +655,97 @@ def test_a_failed_run_never_reads_as_a_careful_one(store: MemMetadataDb) -> None
 def test_a_healthy_run_reports_no_manual_path(store: MemMetadataDb) -> None:
     result = _propose(store, ScriptedLlm(lambda p, t: _answer()))
     assert result.manual_path is False
+
+
+# ── the number is the answer ─────────────────────────────────────────────────
+#
+# `target_ref` is the PRIMARY field of `SUGGEST_SCHEMA` and the reason this
+# agent survives its own scrubber, and until now no test in any lane below
+# Lane 3 sent one. Every scripted answer here carried a resolvable
+# `glossary_id`, which settles at branch 1 of `_resolve_target` and returns
+# before the number is ever read — so the branch the real model actually takes
+# was exercised only against the real endpoint, in a suite that is deselected
+# by default.
+#
+# The numbering in this fixture, for anyone reading the refs below:
+#
+#   1 = [members] [date_of_birth]     4 = [members] [record_hash]
+#   2 = [members] [line_of_business]  5 = [members] [relationship_code]
+#   3 = [members] [member_row_id]
+
+
+def test_the_target_list_reaches_the_prompt_numbered(store: MemMetadataDb) -> None:
+    """A model told to answer with a number must be shown the numbers."""
+    llm = ScriptedLlm(lambda p, t: _answer())
+    _propose(store, llm)
+    sent = "\n".join(prompt for prompt, _ in llm.calls)
+    assert "5 = " in sent and "relationship_code" in sent
+
+
+def test_the_target_is_resolved_from_the_number_not_the_name(store: MemMetadataDb) -> None:
+    """The number wins over the names beside it. Same rule as the glossary
+    branch — the model picks, the platform spells — one source down."""
+    result = _propose(
+        store,
+        ScriptedLlm(
+            lambda p, t: _answer(
+                glossary_id="", target_ref=2, target_entity="whatever", target_field="whatever"
+            )
+        ),
+    )
+    line = next(line for line in result.lines if line.source_column == "SUBSCR_REL_CD")
+    assert (line.line.target_entity, line.line.target_field) == ("members", "line_of_business")
+
+
+def test_a_redacted_target_name_still_resolves_through_its_number(store: MemMetadataDb) -> None:
+    """THE REGRESSION TEST FOR THE TWENTY-FOUR MINUTES CF-V1-E6-02 PAID.
+
+    Presidio reads `date_of_birth` beside its own definition as `<PERSON>` and
+    `claim_header.source_claim_id` as a hostname. With names as the answer the
+    model copies back the redaction, the platform matches nothing, and every
+    column on the feed is refused as "not in the canonical model" — two correct
+    components and an agent that proposes nothing.
+
+    Here the model answers the way a scrubbed one does: the right number, and a
+    name that came back mangled. The platform must still land the target.
+    """
+    result = _propose(
+        store,
+        ScriptedLlm(
+            lambda p, t: _answer(
+                glossary_id="", target_ref=1, target_entity="<PERSON>", target_field="<PERSON>"
+            )
+        ),
+    )
+    line = next(line for line in result.lines if line.source_column == "SUBSCR_REL_CD")
+    assert (line.line.target_entity, line.line.target_field) == ("members", "date_of_birth")
+
+
+def test_a_target_number_outside_the_list_is_refused_rather_than_guessed(
+    store: MemMetadataDb,
+) -> None:
+    """A number the list does not have is not a near miss to round toward."""
+    result = _propose(
+        store,
+        ScriptedLlm(
+            lambda p, t: _answer(glossary_id="", target_ref=99, target_entity="", target_field="")
+        ),
+    )
+    line = next(line for line in result.lines if line.source_column == "SUBSCR_REL_CD")
+    assert line.line.status is LineStatus.UNMAPPED
+    assert any("target #99" in refusal for refusal in result.refusals)
+
+
+def test_a_number_beats_the_names_when_the_two_disagree(store: MemMetadataDb) -> None:
+    """Both resolvable, and pointing at different fields. The number is the
+    one the prompt asked for, so the number is the one that counts."""
+    result = _propose(
+        store,
+        ScriptedLlm(
+            lambda p, t: _answer(
+                glossary_id="", target_ref=5, target_entity="members", target_field="record_hash"
+            )
+        ),
+    )
+    line = next(line for line in result.lines if line.source_column == "SUBSCR_REL_CD")
+    assert line.line.target_field == "relationship_code"

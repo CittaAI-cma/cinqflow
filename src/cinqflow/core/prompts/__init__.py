@@ -23,6 +23,7 @@ follow.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum, unique
@@ -190,6 +191,35 @@ class AssembledPrompt:
         return f"{self.prompt_id}@v{self.prompt_version}"
 
 
+def _schema_clause(schema: dict[str, Any]) -> str:
+    """The response contract, SHOWN rather than paraphrased.
+
+    Every template that wants JSON already declares `response_schema`, and the
+    text used to describe it in English — "Return JSON matching the schema" —
+    while the schema itself was shown only in the gateway's REPAIR string,
+    after the first answer had already been rejected.
+
+    Measured on the real endpoint, that cost a repair on EVERY call: the router
+    wrapped its ids in an `identifiers` object, the planner called its list
+    `tool_calls` where the schema says `calls`, and the answer omitted
+    `confidence` — three prompts, three rejections, three second attempts, and
+    every one of them succeeded the moment the repair showed the schema. Two
+    calls where one would do is twice the latency and twice the money, on every
+    run of every agent, for a contract the template was already carrying.
+
+    It is emitted inside CONSTRAINTS rather than as a seventh section because
+    there is no seventh section, and it is emitted by `assemble` rather than
+    typed into each template because a schema copied into prose is a second
+    copy to keep true. The text is hashed with everything else, so the audit
+    row still identifies exactly what was sent.
+    """
+    return (
+        "- Return ONLY JSON matching this exact schema — every required key "
+        "present, no other keys, no wrapper object:\n"
+        f"{json.dumps(schema, sort_keys=True)}"
+    )
+
+
 def assemble(
     template: PromptTemplate,
     *,
@@ -206,6 +236,11 @@ def assemble(
     the scope held.
     """
     supplied: dict[PromptSection, str] = dict(template.sections)
+    if template.response_schema is not None:
+        supplied[PromptSection.CONSTRAINTS] = (
+            f"{supplied.get(PromptSection.CONSTRAINTS, '').strip()}\n"
+            f"{_schema_clause(template.response_schema)}"
+        ).strip()
     if few_shots is not None:
         supplied[PromptSection.FEW_SHOTS] = few_shots
     if grounding:

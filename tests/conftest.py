@@ -37,6 +37,45 @@ CREDENTIAL_ENV_VARS = (
 )
 
 
+#: Set in any environment that is entitled to make a claim about AI quality.
+#: See `require_corpus`.
+REQUIRE_CORPUS_ENV = "CINQFLOW_REQUIRE_CORPUS"
+
+
+def require_corpus(workbook: Path) -> None:
+    """Skip when the client corpus is absent — unless somebody is counting.
+
+    The corpus lives outside this repository, so a clone alone cannot run the
+    tests that grade against it: the answer keys are the client's own workbooks.
+    Skipping is right for a developer who has only the code, and a suite that
+    hard-failed there would train people to ignore failures.
+
+    IT IS WRONG FOR CI, AND SILENTLY SO. Every Lane-3 gate reads its answer key
+    from this corpus, and CI checks out the repository and nothing else — so
+    the job named "the only lane that may make a quality claim" skipped all of
+    them and went green. The job guards the missing-credentials case in a
+    comment and produces an identical tick for the missing-corpus one, which is
+    the difference between "measured and fine" and "not measured" going
+    unnoticed for as long as nobody looks.
+
+    So: where `CINQFLOW_REQUIRE_CORPUS` is set, an absent corpus FAILS. A green
+    Lane 3 then means the gates ran, which is the only thing a green Lane 3 was
+    ever supposed to mean.
+    """
+    if workbook.exists():
+        return
+    absent = f"the client corpus is not on this machine ({workbook.name} absent)"
+    if os.environ.get(REQUIRE_CORPUS_ENV, "").strip().lower() in {"1", "true", "yes"}:
+        pytest.fail(
+            f"{absent}, and {REQUIRE_CORPUS_ENV} is set. This environment is "
+            f"configured to make quality claims, and a claim needs its answer "
+            f"key: mount the corpus at {workbook.parents[2]} or unset the "
+            f"variable and stop reporting these gates as measured.\n"
+            f"  expected: {workbook}"
+        )
+    pytest.skip(absent)
+
+
 @pytest.fixture(autouse=True)
 def _lanes_1_and_2_hold_no_credentials(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch

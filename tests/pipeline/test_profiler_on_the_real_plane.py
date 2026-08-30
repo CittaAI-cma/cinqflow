@@ -29,6 +29,7 @@ from cinqflow.core.profiling import Quirk, RefusalReason, TypeName, profile_byte
 from cinqflow.core.schema_spec import TypeName as SpecTypeName
 from cinqflow.simulator import FIDELIS_DOWNSTATE_ROSTER, Injection, PayerSimulator
 from cinqflow.workers.profiler import Profiler
+from tests.conftest import require_corpus
 
 pytestmark = [pytest.mark.pipeline, pytest.mark.postgres]
 
@@ -407,8 +408,7 @@ def test_the_client_s_own_workbook_profiles_without_special_handling(
         / "2-Design"
         / "Data lake data model.xlsx"
     )
-    if not workbook.exists():
-        pytest.skip("the client corpus is not on this machine")
+    require_corpus(workbook)
 
     key = "reference/design/data-lake-data-model.xlsx"
     landing.place(key, workbook.read_bytes())

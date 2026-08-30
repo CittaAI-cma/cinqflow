@@ -59,6 +59,7 @@ from cinqflow.core.registry.glossary import Glossary
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
 from cinqflow.intelligence.gateway import LlmGateway
+from tests.conftest import require_corpus
 
 pytestmark = [pytest.mark.evaluation, pytest.mark.lane3]
 
@@ -121,8 +122,7 @@ def _published(obj: Any) -> Any:
 def golden():  # type: ignore[no-untyped-def]
     from cinqflow.adapters.local.workbook_mappings import distinct_decisions, load_mappings
 
-    if not WORKBOOK.exists():
-        pytest.skip(f"the client corpus is not on this machine ({WORKBOOK.name} absent)")
+    require_corpus(WORKBOOK)
     return distinct_decisions(load_mappings(WORKBOOK, SHEET))
 
 

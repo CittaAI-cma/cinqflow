@@ -345,8 +345,8 @@ def render_sql(check: Check, *, table: str) -> str:
     travel beside the query in `sql_parameters`.
     """
     column = safe_identifier(check.column)
-    safe_identifier(table)
-    condition, _ = _failing_condition(check, column)
+    table = safe_identifier(table)
+    condition, _ = _failing_condition(check, column, table=table)
     return f"SELECT * FROM {table} WHERE {condition}"  # noqa: S608 - identifiers validated above
 
 
@@ -355,7 +355,21 @@ def sql_parameters(check: Check) -> tuple[Any, ...]:
     return _failing_condition(check, safe_identifier(check.column))[1]
 
 
-def _failing_condition(check: Check, column: str) -> tuple[str, tuple[Any, ...]]:
+def _failing_condition(
+    check: Check, column: str, *, table: str | None = None
+) -> tuple[str, tuple[Any, ...]]:
+    """The condition selecting failing rows, and the values it binds.
+
+    `table` is the SCOPE, and only a set-level check needs it: `UNIQUE` asks
+    "does this value repeat *in this delivery*", which is a question no
+    row-level predicate can phrase. It is optional here because
+    `sql_parameters` wants the values and not the text — and where it is
+    absent, the set-level arms return NO CONDITION rather than an unscoped
+    one. That is deliberate. An unscoped `SELECT col GROUP BY col` is legal
+    SQL, returns zero rows forever, and reports a duplicate-free delivery on
+    a table full of duplicates: the one failure mode a data-quality rule must
+    never have is passing silently.
+    """
     match check.kind:
         case CheckKind.NOT_NULL:
             return f"{column} IS NULL OR TRIM({column}) = ''", ()
@@ -387,13 +401,29 @@ def _failing_condition(check: Check, column: str) -> tuple[str, tuple[Any, ...]]
                 (),
             )
         case CheckKind.UNIQUE:
+            if table is None:
+                return "", ()
             keys = ", ".join(safe_identifier(name) for name in (column, *check.also_by))
             # Every name in this string has passed `safe_identifier`, and every
             # VALUE is a bound placeholder — there is no path from a model, a
             # payer or a registry row to query text. The suppression is the one
             # place that claim is made, so it is worth reading twice.
+            #
+            # Two things this shape gets right, both of which read as pedantry
+            # until the rule is wrong in production:
+            #
+            #   the subquery names its own FROM — without it the statement
+            #   still parses, `column` simply binds to the outer row, every
+            #   group counts one, and the rule passes on every delivery;
+            #
+            #   the comparison is the WHOLE KEY as a row, not its first
+            #   column — `line_no IN (SELECT line_no ... GROUP BY line_no,
+            #   claim_id)` flags every row sharing a line number with some
+            #   duplicated pair, which is a false accusation against data
+            #   that is fine.
             return (
-                f"{column} IN (SELECT {column} GROUP BY {keys} HAVING COUNT(*) > 1)",
+                f"({keys}) IN (SELECT {keys} FROM {table} "  # noqa: S608
+                f"GROUP BY {keys} HAVING COUNT(*) > 1)",
                 (),
             )
         case CheckKind.EXISTS_IN:

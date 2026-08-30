@@ -25,6 +25,7 @@ import pytest
 from cinqflow.adapters.local.workbook_glossary import load_glossary
 from cinqflow.core.registry.canonical import build, canonical_schemas
 from cinqflow.core.registry.glossary import Glossary
+from tests.conftest import require_corpus
 
 pytestmark = pytest.mark.pipeline
 
@@ -39,8 +40,7 @@ WORKBOOK = (
 
 @pytest.fixture(scope="module")
 def glossary() -> Glossary:
-    if not WORKBOOK.exists():
-        pytest.skip(f"the client corpus is not on this machine ({WORKBOOK.name} absent)")
+    require_corpus(WORKBOOK)
     return load_glossary(WORKBOOK)
 
 

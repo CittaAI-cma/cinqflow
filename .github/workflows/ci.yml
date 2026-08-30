@@ -143,6 +143,15 @@ jobs:
     # evaluation threshold may be claimed from Lane 1 (mock) or Lane 2 (replay),
     # so a green tick here without those secrets means "not measured", never
     # "measured and fine". The job prints which variables are unset.
+    #
+    # THE SECOND WAY THIS JOB WENT GREEN WITHOUT MEASURING ANYTHING: every gate
+    # grades against the client's workbooks, which live OUTSIDE this repository
+    # in `clientdata/`. A checkout does not have them, so all of them skipped
+    # and the tick above meant nothing — the comment guarded the credentials
+    # and not the answer key. `CINQFLOW_REQUIRE_CORPUS` now turns that skip
+    # into a failure wherever the corpus is expected, so this job is honest in
+    # both directions or it is red. It is set only when the corpus is actually
+    # mounted; until then the skip is still the truthful outcome and says so.
     name: agent-evals · Lane 3, the only lane that may make a quality claim
     runs-on: ubuntu-latest
     steps:
@@ -152,12 +161,28 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
       - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
+      - name: the corpus, where this runner has it
+        id: corpus
+        # The gates read `../clientdata` relative to the repository root — the
+        # layout every developer machine already has. Where a runner mounts it
+        # (a self-hosted one, or a checkout of the corpus repository into the
+        # parent directory), say so and the gates become mandatory.
+        run: |
+          if [ -d "${GITHUB_WORKSPACE}/../clientdata/Uploads" ]; then
+            echo "require=1" >> "$GITHUB_OUTPUT"
+            echo "corpus present — Lane 3 gates are MANDATORY in this run"
+          else
+            echo "require=" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Lane 3 not measured::the client corpus is absent, so every"\
+                 "gate that grades against it will SKIP. This run makes no quality claim."
+          fi
       - name: Lane 3
         env:
           CINQFLOW_SECRET_LLM_ENDPOINT: ${{ secrets.CINQFLOW_SECRET_LLM_ENDPOINT }}
           CINQFLOW_SECRET_LLM_KEY: ${{ secrets.CINQFLOW_SECRET_LLM_KEY }}
           CINQFLOW_SECRET_LLM_MODEL_SMALL: ${{ secrets.CINQFLOW_SECRET_LLM_MODEL_SMALL }}
           CINQFLOW_SECRET_LLM_MODEL_LARGE: ${{ secrets.CINQFLOW_SECRET_LLM_MODEL_LARGE }}
+          CINQFLOW_REQUIRE_CORPUS: ${{ steps.corpus.outputs.require }}
         run: pytest -m evaluation -q -rs
 
   architecture-drift:

@@ -230,3 +230,138 @@ def test_the_preview_evidence_survives_the_proposal_row(plane: object) -> None:
     assert back == evidence
     assert back["previews"][0]["failing_rows"][0]["values"]["first_name"] == MASKED
     assert "Ada" not in repr(back), "an unmasked value survived into the stored row"
+
+
+# ── the set-level checks, which no predicate can cross-examine ───────────────
+#
+# `test_the_predicate_and_the_sql_agree_on_real_types` cannot reach `UNIQUE` or
+# `EXISTS_IN`: `is_row_level` is False for both, so there is no predicate to
+# disagree with and the parametrisation excludes them by construction. That
+# exclusion is correct and it left the two kinds whose SQL nothing executed.
+#
+# It cost exactly what an untested rendering costs. `UNIQUE` rendered a
+# subquery with no FROM — legal SQL, zero rows returned forever, a
+# duplicate-free verdict on a delivery full of duplicates — and then compared
+# only the first key column, accusing every row that shared a line number with
+# some duplicated pair. Both are gone; these are the tests that would have
+# refused them.
+#
+# The comparison is against the PLATFORM'S OWN answer — `preview`, which counts
+# uniqueness in Python over the same sample — because "one spec, two
+# renderings, identical semantics" is the claim, and a hand-written expected
+# set would only prove that SQL matches whatever the author typed today.
+
+#: A composite key with three things in it that matter: a genuine repeat, a
+#: DECOY sharing one key column with that repeat, and a NULL.
+DUP_ROWS: tuple[tuple[str | None, int | None], ...] = (
+    ("CLM-A", 1),
+    ("CLM-A", 1),  # the repeat
+    ("CLM-B", 1),  # shares line_no with it, and is perfectly fine
+    (None, 2),
+)
+
+
+@pytest.fixture
+def duplicates(plane: object):  # type: ignore[no-untyped-def]
+    plane.execute(  # type: ignore[attr-defined]
+        "CREATE TEMPORARY TABLE dup_sample (n INTEGER, claim_id TEXT, line_no INTEGER) "
+        "ON COMMIT DROP"
+    )
+    for index, (claim_id, line_no) in enumerate(DUP_ROWS):
+        plane.execute(  # type: ignore[attr-defined]
+            "INSERT INTO dup_sample VALUES (%s, %s, %s)", (index, claim_id, line_no)
+        )
+    return plane
+
+
+def _dup_rows_as_dicts() -> tuple[dict[str, object], ...]:
+    return tuple({"claim_id": claim_id, "line_no": line_no} for claim_id, line_no in DUP_ROWS)
+
+
+UNIQUE_CHECKS = (
+    Check(kind=CheckKind.UNIQUE, column="claim_id"),
+    Check(kind=CheckKind.UNIQUE, column="line_no", also_by=("claim_id",)),
+)
+
+
+@pytest.mark.parametrize("check", UNIQUE_CHECKS, ids=lambda c: f"unique:{c.column}")
+def test_a_uniqueness_check_finds_in_postgres_what_the_preview_found(
+    duplicates: object, check: Check
+) -> None:
+    """The rendering and the preview must name the SAME rows.
+
+    A BA approves on the preview's counts and the pipeline runs the SQL. Where
+    those two disagree, the approval was given for a different rule than the
+    one that ships.
+    """
+    from cinqflow.core.rules.preview import preview
+
+    spec = RuleSpec(
+        rule_id="DQ-UNIQ",
+        name="no repeats",
+        stated="the key must not repeat",
+        check=check,
+    )
+    in_preview = {row.row_number - 1 for row in preview(spec, _dup_rows_as_dicts()).failing_rows}
+
+    sql = render_sql(check, table="dup_sample").replace("SELECT *", "SELECT n")
+    in_sql = {
+        row[0]
+        for row in duplicates.fetch_all(  # type: ignore[attr-defined]
+            sql.replace("?", "%s"), sql_parameters(check)
+        )
+    }
+
+    assert in_sql == in_preview, (
+        f"the preview and real Postgres disagree about {check.kind.value} on "
+        f"{check.column}: preview {sorted(in_preview)}, SQL {sorted(in_sql)}\n  {sql}"
+    )
+    assert in_sql, "a sample built around a real duplicate must catch something"
+
+
+def test_a_uniqueness_check_does_not_accuse_the_row_that_merely_shares_a_key(
+    duplicates: object,
+) -> None:
+    """The decoy, named. `CLM-B` shares `line_no` with the duplicated pair and
+    repeats nothing, so a rendering that compares only the first key column
+    reports it as a duplicate — a false accusation against clean data, which a
+    steward chases and finds nothing."""
+    check = Check(kind=CheckKind.UNIQUE, column="line_no", also_by=("claim_id",))
+    sql = render_sql(check, table="dup_sample").replace("SELECT *", "SELECT n")
+    found = {
+        row[0]
+        for row in duplicates.fetch_all(  # type: ignore[attr-defined]
+            sql.replace("?", "%s"), sql_parameters(check)
+        )
+    }
+    assert found == {0, 1}, "only the genuinely repeated (CLM-A, 1) pair fails"
+    assert 2 not in found, "row 2 is CLM-B — a different claim, and not a duplicate"
+
+
+def test_a_referential_check_finds_the_orphan_on_the_real_engine(plane: object) -> None:
+    """`EXISTS_IN` is the other kind no predicate can cross-examine, and the
+    other one nothing executed until now."""
+    plane.execute(  # type: ignore[attr-defined]
+        "CREATE TEMPORARY TABLE plan_ref (code TEXT) ON COMMIT DROP"
+    )
+    plane.execute("INSERT INTO plan_ref VALUES ('P1')")  # type: ignore[attr-defined]
+    plane.execute(  # type: ignore[attr-defined]
+        "CREATE TEMPORARY TABLE claim_sample (n INTEGER, plan_code TEXT) ON COMMIT DROP"
+    )
+    for row in ((0, "P1"), (1, "P9"), (2, None)):
+        plane.execute("INSERT INTO claim_sample VALUES (%s, %s)", row)  # type: ignore[attr-defined]
+
+    check = Check(
+        kind=CheckKind.EXISTS_IN,
+        column="plan_code",
+        reference_table="plan_ref",
+        reference_column="code",
+    )
+    sql = render_sql(check, table="claim_sample").replace("SELECT *", "SELECT n")
+    found = {
+        row[0]
+        for row in plane.fetch_all(  # type: ignore[attr-defined]
+            sql.replace("?", "%s"), sql_parameters(check)
+        )
+    }
+    assert found == {1}, "P9 references no plan; P1 does, and NULL is NOT_NULL's question"

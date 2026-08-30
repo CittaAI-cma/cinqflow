@@ -92,6 +92,79 @@ def test_claiming_a_step_the_wave_0_plan_does_not_run_is_an_invention() -> None:
     assert not fidelity.passes
 
 
+# ── the accusation this gate used to make ────────────────────────────────────
+
+
+#: WORD FOR WORD what the Pipeline Insight Agent answered on the real endpoint
+#: when asked what the roster plan does. Every claim is true, every step it
+#: names is in the plan, and it names no step that is not — and the gate failed
+#: it for an invented `resolve_identity`, because `match` was an alias for that
+#: step and the roster's file names match a pattern.
+#:
+#: Kept verbatim rather than paraphrased: a paraphrase would drift away from
+#: the sentence that actually broke this, which is the only sentence that
+#: proves the fix.
+A_REAL_ANSWER = (
+    "The plan reads files whose names match the pattern "
+    "^_CINQDOWNSTATE_Member_Roster_\\d{8}\\.xlsx$. "
+    "It validates that each file has exactly 3 columns. "
+    "It lands the data to a bronze layer in append-only mode. "
+    "It casts the date_of_birth column to the expected type. "
+    "It applies a mapping using mapping_version 1. "
+    "It evaluates data quality rule DQ-002. "
+    "It loads the processed data into the silver_raw.members table. "
+    "It performs reconciliation at the silver_raw terminal layer."
+)
+
+
+def test_a_true_answer_is_not_accused_of_inventing_a_step() -> None:
+    """The false positive that made this gate unusable.
+
+    A gate that fails correct answers is not a strict gate; it is a broken one,
+    and the failure mode is that somebody mutes it and stops reading the two
+    real hallucinations it would have caught next week.
+    """
+    fidelity = plan_fidelity(_plan(), A_REAL_ANSWER)
+    assert fidelity.invented == (), fidelity.explain()
+    assert fidelity.coverage == 1.0
+    assert fidelity.passes
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "It reads files whose names match the pattern.",
+        "It writes the rows the contract expects.",
+        "The counts balance at the end of the run.",
+        "It checks the types of every column.",
+        "It renames the source columns.",
+    ],
+)
+def test_an_ordinary_english_verb_is_not_a_claimed_step(sentence: str) -> None:
+    """`match`, `writes`, `balance`, `types` and `renames` all earn COVERAGE
+    credit for the steps they describe, and none of them may accuse an answer
+    of claiming a step that will not run. Two questions, two tables."""
+    fidelity = plan_fidelity(_plan(), f"{FULL} {sentence}")
+    assert fidelity.invented == (), fidelity.explain()
+
+
+def test_naming_an_absent_step_outright_is_still_caught() -> None:
+    """The fix narrows the accusation; it does not withdraw it."""
+    for named in ("resolve_identity", "it performs identity resolution"):
+        fidelity = plan_fidelity(_plan(), f"{FULL} Then {named}.")
+        assert "resolve_identity" in fidelity.invented, named
+
+
+def test_every_step_can_be_named_unambiguously() -> None:
+    """A step with no unambiguous word could never be reported as invented, so
+    a new `StepKind` that nobody adds a word for would silently leave the gate."""
+    from cinqflow.core.compiler.plan import StepKind as Kinds
+    from cinqflow.intelligence.evals import _UNAMBIGUOUS
+
+    assert set(_UNAMBIGUOUS) == {kind.value for kind in Kinds}
+    assert all(_UNAMBIGUOUS[kind.value] for kind in Kinds)
+
+
 def test_numeric_fidelity_accepts_numbers_the_grounding_supports() -> None:
     result = numeric_fidelity(
         "22,000 rows arrived; 21,820 loaded and 175 were quarantined.",

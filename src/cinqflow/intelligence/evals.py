@@ -49,6 +49,42 @@ _ALIASES: dict[str, frozenset[str]] = {
     ),
 }
 
+#: The words that can ONLY mean a step, used to detect INVENTION.
+#:
+#: `_ALIASES` above is deliberately generous, and must stay that way: an answer
+#: that says the plan "writes" rather than "loads" has described the load step,
+#: and coverage should credit it. Generosity is right when the question is
+#: "did they mention this step?"
+#:
+#: It is ruinous when the question is "did they claim a step that will not
+#: run?", because a false positive there accuses a correct answer of
+#: hallucinating. One table asked both questions, and it cost this gate its
+#: credibility: the plan for the roster feed terminates at Silver Raw and has
+#: no identity step, the agent correctly never mentioned one, and the sentence
+#:
+#:     "reads files whose names MATCH the pattern ..."
+#:
+#: was read as a claim about identity resolution, because `match` was an alias
+#: for `resolve_identity`. The gate reported an invented step for an answer
+#: whose every claim was true, and it did so for as long as nobody read the
+#: answer. A gate nobody trusts is worse than no gate: it gets muted.
+#:
+#: So invention is now judged only on words with no ordinary-English career —
+#: `identity` and `reconciliation` mean the step; `match`, `writes`, `balance`
+#: and `types` are things sentences do. A model that invents a step names it,
+#: and a model that names it lands here.
+_UNAMBIGUOUS: dict[str, frozenset[str]] = {
+    StepKind.READ.value: frozenset({"read", "reads", "reading"}),
+    StepKind.VALIDATE.value: frozenset({"validate", "validates", "validating"}),
+    StepKind.LAND_BRONZE.value: frozenset({"land_bronze", "bronze"}),
+    StepKind.CAST.value: frozenset({"cast", "casts", "casting"}),
+    StepKind.MAP.value: frozenset({"map", "maps", "mapping"}),
+    StepKind.EVALUATE_RULES.value: frozenset({"evaluate_rules"}),
+    StepKind.RESOLVE_IDENTITY.value: frozenset({"resolve_identity", "identity"}),
+    StepKind.LOAD.value: frozenset({"load", "loads", "loading"}),
+    StepKind.RECONCILE.value: frozenset({"reconcile", "reconciles", "reconciliation"}),
+}
+
 #: Steps a model might invent because they sound like data engineering. Matched
 #: as STEMS, so "deduplicates", "deduplicating" and "deduplication" are all
 #: caught — an invention that escapes the gate by conjugating is still an
@@ -109,7 +145,7 @@ def plan_fidelity(plan: LogicalPlan, explanation: str) -> PlanFidelity:
     absent = KNOWN_STEPS - set(expected)
     fabricated = {word for word in words for stem in _PLAUSIBLE_INVENTIONS if word.startswith(stem)}
     invented = sorted(
-        {name for name in absent if words & _ALIASES.get(name, frozenset({name}))} | fabricated
+        {name for name in absent if words & _UNAMBIGUOUS.get(name, frozenset({name}))} | fabricated
     )
     return PlanFidelity(tuple(covered), tuple(missed), tuple(invented))
 
@@ -178,7 +214,20 @@ def citation_fidelity(citation_ids: tuple[str, ...]) -> CitationFidelity:
 
 @dataclass(frozen=True)
 class RunBudget:
-    """The per-run gates the story states: p95 under 6s, at most $0.05 a run."""
+    """The per-run gates the story states: p95 under 6s, at most $0.05 a run.
+
+    READ `p95` HONESTLY AT SMALL n. The index below is `round(0.95n) - 1`,
+    which for any n under about twenty is the LAST element — the slowest run,
+    not a 95th percentile. Callers sampling three runs are gating on their
+    worst one. That is a defensible thing to gate on and it is not what the
+    word says, so the word is explained here rather than trusted.
+
+    The bound itself is CF-V0-E16-10's and is deliberately left where the story
+    put it. It was exceeded 2.5x for as long as every call was silently made
+    twice (see `core.prompts._schema_clause`); with that fixed the median run
+    sits under it and the tail sits just over. Moving the number to meet the
+    measurement would be the one change that cannot be undone by evidence.
+    """
 
     max_p95_ms: int = 6_000
     max_cost_usd: Decimal = Decimal("0.05")

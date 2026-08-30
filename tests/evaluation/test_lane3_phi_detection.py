@@ -51,6 +51,7 @@ from cinqflow.core.registry.glossary import Glossary
 from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent
 from cinqflow.intelligence.gateway import LlmGateway
 from cinqflow.simulator import PayerSimulator
+from tests.conftest import require_corpus
 
 pytestmark = [pytest.mark.evaluation, pytest.mark.lane3]
 
@@ -104,8 +105,7 @@ def _published(obj: Any) -> Any:
 def glossary() -> Glossary:
     """The client's real workbook. Skips rather than substituting a stand-in —
     a quality claim made against an invented glossary is not a quality claim."""
-    if not WORKBOOK.exists():
-        pytest.skip(f"the client corpus is not on this machine ({WORKBOOK.name} absent)")
+    require_corpus(WORKBOOK)
     return load_glossary(WORKBOOK)
 
 
