@@ -143,15 +143,6 @@ def signature(
     return "fp-" + hashlib.sha256(material.encode()).hexdigest()[:16]
 
 
-def signature_of(error: ErrorLike) -> str:
-    return signature(
-        stage=error.stage,
-        category=error.category,
-        message=error.message,
-        rule_id=error.rule_id,
-    )
-
-
 # ── the library ──────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class PriorIncident:
