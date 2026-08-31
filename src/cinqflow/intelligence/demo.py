@@ -26,15 +26,32 @@ from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
+from cinqflow.core import mapping as mapping_core
 from cinqflow.core.agents.fingerprint_match.graph import AGENT as FINGERPRINT_MATCH_AGENT_NAME
 from cinqflow.core.agents.fingerprint_match.prompts import TEMPLATES as FINGERPRINT_TEMPLATES
+from cinqflow.core.agents.mapping_suggestion.graph import (
+    AGENT as MAPPING_SUGGESTION_AGENT_NAME,
+)
+from cinqflow.core.agents.mapping_suggestion.graph import (
+    CAPABILITY as MAPPING_SUGGESTION_CAPABILITY,
+)
+from cinqflow.core.agents.mapping_suggestion.graph import NO_CONFIDENT_TARGET
 from cinqflow.core.agents.phi_detection.prompts import TEMPLATES as PHI_TEMPLATES
 from cinqflow.core.agents.pipeline_insight.prompts import TEMPLATES
 from cinqflow.core.agents.schema_inference.prompts import TEMPLATES as SCHEMA_TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState
 from cinqflow.core.model.identity import Principal, Scopes
-from cinqflow.core.model.vocabulary import ActorType, BatchState, ErrorCategory, FileState, Layer
+from cinqflow.core.model.vocabulary import (
+    ActorType,
+    BatchState,
+    ErrorCategory,
+    FileState,
+    Layer,
+    RiskClass,
+)
+from cinqflow.core.proposals import Proposal
+from cinqflow.core.proposals import submit as submit_proposal
 from cinqflow.core.registry import contract as contract_registry
 from cinqflow.core.registry.contract import ContractColumn, DqRule, SchemaContract, Severity
 from cinqflow.core.registry.feed import FeedRecord
@@ -61,9 +78,24 @@ BUDGET = Budget(per_run_usd=Decimal("0.25"), per_agent_per_day_usd=Decimal("5.00
 FEED_ID = "fidelis-downstate-roster"
 BATCH_ID = "8842"
 
+#: W1-31 (CF-V1-E6-03) — a SEPARATE feed from `FEED_ID`, deliberately. That
+#: feed's absence of a mapping is itself the assertion in
+#: `wave1-intake.spec.ts` ("the mapping editor says there is no mapping
+#: rather than showing an empty one"), and giving it a published mapping here
+#: would turn that assertion false out from under it. The write-capable
+#: proposal-review screen needs its own real mapping-suggestion PROPOSAL to
+#: act on, so it gets its own feed to act on it against.
+MAPPING_REVIEW_FEED_ID = "meridian-member-roster"
+MAPPING_PROPOSAL_ID = "mapping-suggestion-meridian-member-roster-1"
+
 AUTHOR = Actor(subject="arun@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Arun Menon")
 REVIEWER = Actor(
     subject="priya@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Priya Nair"
+)
+MAPPING_SUGGESTION_ACTOR = Actor(
+    subject=MAPPING_SUGGESTION_AGENT_NAME,
+    actor_type=ActorType.AI,
+    display_name="Mapping suggestion",
 )
 
 #: `fingerprint_match_agent_for`'s tool-scope principal. Not duplicated from
@@ -229,6 +261,146 @@ def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
             state=FileState.PROCESSED,
             arrived_ts=started,
             record_count=22_000,
+        )
+    )
+    _seed_mapping_review(store, now=now)
+
+
+def _seed_mapping_review(store: MetadataDbPort, *, now: datetime) -> None:
+    """W1-31 (CF-V1-E6-03) — a real, pending mapping-suggestion PROPOSAL, so
+    the first write-capable proposal-review screen has something genuine to
+    act on: edit a line's target, accept a loss, submit, approve, publish.
+
+    Built the same way `tests/pipeline/test_proposals_on_the_real_plane.py`
+    builds its fixtures — a `Proposal` constructed directly and carried to
+    PENDING_REVIEW through `proposals.submit`, never through the agent's own
+    `propose()` — because `mapping_suggestion_factory` is wired to no LLM pin
+    on the dev socket (rung 0's own "nothing runs but Python"), the same
+    absence `phi_detection_factory` and `rule_authoring_factory` already have
+    here. That gap is a demo-wiring question for a later slab, not this one.
+
+    `MAPPING_REVIEW_FEED_ID` already carries a PUBLISHED v1 (below), so the
+    proposal can pose a real CF-V1-E6-04 question: it repeats v1's two settled
+    columns verbatim, proposes a fresh (if middling-confidence) target for the
+    one v1 left unmapped, and — the point of the exercise — proposes DROPPING
+    the source for a field v1 populates. A reviewer keeping that drop is
+    exactly the silent-row-loss scenario `accepts_loss` exists to make
+    someone name out loud, not click past.
+    """
+    store.save(
+        _published(
+            mapping_core.mapping_as_governed(
+                mapping_core.FeedMapping(
+                    feed_id=MAPPING_REVIEW_FEED_ID,
+                    version=1,
+                    lines=(
+                        mapping_core.MappingLine(
+                            target_entity="members",
+                            target_field="source_member_id",
+                            source_columns=("member_id",),
+                            confidence=1.0,
+                            notes="Direct match on name and shape.",
+                        ),
+                        mapping_core.MappingLine(
+                            target_entity="members",
+                            target_field="date_of_birth",
+                            source_columns=("dob",),
+                            confidence=1.0,
+                            notes="Direct match on name and shape.",
+                        ),
+                        mapping_core.MappingLine(
+                            target_entity="members",
+                            target_field="effective_date",
+                            source_columns=("eff_dt",),
+                            confidence=1.0,
+                            notes="Direct match on name and shape.",
+                        ),
+                        mapping_core.MappingLine(
+                            target_entity="members",
+                            target_field="line_of_business",
+                            unmapped_reason=(
+                                "No payer-supplied plan taxonomy at initial onboarding."
+                            ),
+                        ),
+                    ),
+                ),
+                author=AUTHOR,
+            )
+        )
+    )
+    records = [
+        {
+            "source_column": "member_id",
+            "target_entity": "members",
+            "target_field": "source_member_id",
+            "unmapped": False,
+            "unmapped_reason": "",
+            "glossary_id": None,
+            "confidence": 1.0,
+            "settled_by": "published_mapping",
+            "rationale": "Matches this feed's own currently published mapping.",
+            "like_feed_id": None,
+        },
+        {
+            "source_column": "dob",
+            "target_entity": "members",
+            "target_field": "date_of_birth",
+            "unmapped": False,
+            "unmapped_reason": "",
+            "glossary_id": None,
+            "confidence": 1.0,
+            "settled_by": "published_mapping",
+            "rationale": "Matches this feed's own currently published mapping.",
+            "like_feed_id": None,
+        },
+        {
+            "source_column": "eff_dt",
+            "target_entity": "members",
+            "target_field": "effective_date",
+            "unmapped": True,
+            "unmapped_reason": NO_CONFIDENT_TARGET,
+            "glossary_id": None,
+            "confidence": 0.0,
+            "settled_by": "inference",
+            "rationale": (
+                "The refreshed sample's eff_dt values no longer parse as dates — three of "
+                "five rows read 'TBD'."
+            ),
+            "like_feed_id": None,
+        },
+        {
+            "source_column": "plan_cd",
+            "target_entity": "members",
+            "target_field": "line_of_business",
+            "unmapped": False,
+            "unmapped_reason": "",
+            "glossary_id": None,
+            "confidence": 0.82,
+            "settled_by": "inference",
+            "rationale": (
+                "plan_cd's three-letter values (HMO, PPO, EPO) match the shape "
+                "line_of_business takes on every other approved mapping."
+            ),
+            "like_feed_id": None,
+        },
+    ]
+    store.record_proposal(
+        submit_proposal(
+            Proposal(
+                proposal_id=MAPPING_PROPOSAL_ID,
+                agent=MAPPING_SUGGESTION_AGENT_NAME,
+                capability=MAPPING_SUGGESTION_CAPABILITY,
+                risk_class=RiskClass.R2,
+                run_id="seed-mapping-suggestion-1",
+                feed_id=MAPPING_REVIEW_FEED_ID,
+                payload={"records": records},
+                created_by=MAPPING_SUGGESTION_ACTOR,
+                created_ts=now - timedelta(hours=2),
+                # The weakest column, not the mean — `eff_dt`'s proposed drop
+                # is the one line a reviewer must actually look at.
+                confidence=0.0,
+            ),
+            now=now - timedelta(hours=2),
         )
     )
 

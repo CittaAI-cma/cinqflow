@@ -94,7 +94,7 @@ export default async function ProposalQueuePage({
             {result.map((p) => (
               <tr key={p.proposal_id}>
                 <td>
-                  <Link href={`/data/intake/proposal/${p.proposal_id}`}>
+                  <Link href={`/data/intake/proposals/${p.proposal_id}`}>
                     {p.feed_id ?? p.proposal_id}
                   </Link>
                 </td>
