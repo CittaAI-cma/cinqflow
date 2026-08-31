@@ -28,13 +28,20 @@ import uuid
 from datetime import UTC, datetime
 
 from cinqflow.core.agents.mapping_suggestion.graph import AGENT as MAPPING_SUGGESTION_AGENT
+from cinqflow.core.agents.mapping_suggestion.graph import (
+    CAPABILITY as MAPPING_SUGGESTION_CAPABILITY,
+)
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.drift import Rename
 from cinqflow.core.mapping import FeedMapping
 from cinqflow.core.model.governed import Actor
 from cinqflow.core.model.vocabulary import ActorType, RiskClass
 from cinqflow.core.proposals import Proposal, ProposalState, submit
-from cinqflow.core.registry.contract import SchemaContract
+from cinqflow.core.registry.canonical import CanonicalModel
+from cinqflow.core.registry.contract import ContractColumn, SchemaContract
+from cinqflow.core.registry.glossary import Glossary
+from cinqflow.core.schema_spec import TypeName
+from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
 from cinqflow.ports.metadata_db import MetadataDbPort
 
 AGENT = "drift-detection"
@@ -66,6 +73,17 @@ MAPPING_REDIRECT_ACTOR = Actor(
 #: this: the estate's own vocabulary was already enough to know a column just
 #: moved.
 SETTLED_BY_REDIRECT = "rename_redirect"
+
+#: W1-33 (F3) — `caller` on the automatic trigger below, every time. SYSTEM,
+#: not AI, for the same reason `workers.incidents.PLATFORM_ACTOR` is: this
+#: names WHO ASKED (an UNMAPPED_COLUMN finding, with no human principal in
+#: hand), never the suggestion agent's own authored work — that is
+#: `intelligence.agents.mapping_suggestion.AGENT_ACTOR`, which names
+#: `created_by` on the proposal itself and is asserted `ActorType.AI` there,
+#: unconditionally. This module never touches that field.
+UNMAPPED_COLUMN_CALLER = Actor(
+    subject=AGENT, actor_type=ActorType.SYSTEM, display_name="Drift detection"
+)
 
 
 def propose_contract_update(
@@ -296,3 +314,107 @@ def propose_mapping_redirect(
         now=stamp,
     )
     return metadata.record_proposal(proposal)
+
+
+def propose_mapping_for_unmapped_columns(
+    agent: MappingSuggestionAgent,
+    *,
+    feed_id: str,
+    unmapped_columns: tuple[str, ...],
+    contract_version: int,
+    glossary: Glossary,
+    model: CanonicalModel,
+    published_mapping: FeedMapping | None,
+    run_id: str,
+    now: datetime | None = None,
+) -> Proposal | None:
+    """W1-33 (F3) — the mapping-suggestion agent, finally asked.
+
+    `core.drift.classify` (W1-32) already computes the exact question:
+    `DriftKind.UNMAPPED_COLUMN` IS "additive, contract-unknown, and no line of
+    the published mapping reads it" — a column arriving under no governance
+    at all. Until this slab, nothing acted on that finding; it sat in
+    `control.schema_drift`'s `detail` for a human to happen to read it.
+    `workers.pipeline` (W1-33) now carries the finding's own column names out
+    on `RunOutcome.unmapped_columns`, and this is what a caller does with
+    them: ask the SAME agent CF-V1-E6-02 built, scoped to exactly these
+    columns, the moment the finding exists — not on a schedule, not behind a
+    button a steward has to remember to press.
+
+    A SYNTHETIC STUB CONTRACT, not the real one. `MappingSuggestionAgent.
+    propose` takes a whole `SchemaContract`, and `ground()` (`core.agents.
+    mapping_suggestion.grounding`) reads only `.reads_from` off each of its
+    columns to decide what to ask about — so a contract built from nothing
+    but the newly-arrived names, typed `STRING` because nobody has typed them
+    yet, mechanically drives the exact same ground -> suggest -> assemble
+    pipeline a real one would, scoped to precisely these columns and no
+    others. `contract_version` names the REAL contract these columns arrived
+    beyond, so a reviewer opening this suggestion is not told it is "against
+    contract v0".
+
+    `published_mapping` — the feed's REAL, PUBLISHED `FeedMapping`, the very
+    one `classify` just read to call these columns unmapped — travels as
+    `published_mappings`: precedent a human already approved, per `propose`'s
+    own contract. It settles nothing about the NEW columns (`classify` only
+    calls a column unmapped once it has confirmed no line reads it already),
+    but passing it lets `ground()`'s own settle logic answer "is anything
+    else about this feed already decided" correctly, exactly as it would for
+    any other caller of `propose`.
+
+    IDEMPOTENT PER UNMAPPED-COLUMN SET, the same discipline `propose_
+    contract_update` and `propose_mapping_redirect` keep above: an undecided
+    mapping-suggestion proposal already covering EXACTLY this set of columns
+    stands, and a second is not written under it — a feed that keeps
+    delivering the same ungoverned column must not grow a proposal per
+    delivery. Matched on `capability`, not just `agent`, because
+    `propose_mapping_redirect` writes to the SAME agent identity for a
+    different reason (see its own module note) and must not be mistaken for
+    a standing suggestion here.
+
+    NEVER DOUBLES UP WITH THE REDIRECT ABOVE. A settled rename's column can
+    never reach this function in the first place: `classify` excludes a
+    renamed column from `additions` before `UNMAPPED_COLUMN` is ever
+    considered, so the two triggers partition the same drift assessment by
+    construction rather than by a check either one has to remember to make.
+
+    ADDITIVE AND NON-BLOCKING, like the finding it answers
+    (`blocks_batch=False`, always) — the batch this run produced has already
+    reached its own terminal state by the time a caller reaches this
+    function, so nothing here can retroactively affect it. This function
+    still raises on a genuine failure (an unreachable metadata store, a
+    malformed stub); a caller that must never let an agent call disturb an
+    otherwise-successful `ingest` — the same posture `workers.pipeline.
+    PipelineRunner._open_incident` takes toward its own agent call — is
+    responsible for making that best-effort at the call site, not here.
+    """
+    if not unmapped_columns:
+        return None
+    stamp = now or datetime.now(UTC)
+    wanted = frozenset(unmapped_columns)
+    for pending in agent.metadata.list_proposals(feed_id=feed_id, agent=MAPPING_SUGGESTION_AGENT):
+        if (
+            pending.capability == MAPPING_SUGGESTION_CAPABILITY
+            and pending.state in {ProposalState.DRAFT, ProposalState.PENDING_REVIEW}
+            and {str(r.get("source_column")) for r in pending.payload.get("records", ())} == wanted
+        ):
+            return None
+
+    stub_contract = SchemaContract(
+        feed_id=feed_id,
+        version=contract_version,
+        columns=tuple(
+            ContractColumn(name=column, type=TypeName.STRING, source_name=column)
+            for column in unmapped_columns
+        ),
+    )
+    result = agent.propose(
+        stub_contract,
+        feed_id=feed_id,
+        glossary=glossary,
+        model=model,
+        caller=UNMAPPED_COLUMN_CALLER,
+        published_mappings=(published_mapping,) if published_mapping is not None else (),
+        run_id=run_id,
+        now=stamp,
+    )
+    return result.proposal

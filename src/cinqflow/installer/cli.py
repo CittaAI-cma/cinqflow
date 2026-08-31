@@ -421,10 +421,18 @@ def ingest(
         from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
         from cinqflow.core import mapping as mapping_core
         from cinqflow.core.model.governed import ObjectType
+        from cinqflow.core.registry import canonical
         from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
-        from cinqflow.intelligence.demo import fingerprint_match_agent_for
+        from cinqflow.intelligence.demo import (
+            fingerprint_match_agent_for,
+            mapping_suggestion_agent_for,
+        )
         from cinqflow.ports.metadata_db import ObjectNotFoundError
-        from cinqflow.workers.drift import propose_contract_update, propose_mapping_redirect
+        from cinqflow.workers.drift import (
+            propose_contract_update,
+            propose_mapping_for_unmapped_columns,
+            propose_mapping_redirect,
+        )
         from cinqflow.workers.incidents import IncidentWorker
         from cinqflow.workers.ops import OpsVerifier
 
@@ -445,6 +453,12 @@ def ingest(
             metadata=metadata_db,
             fingerprint_agent=fingerprint_match_agent_for(control_tables, metadata_db),
         )
+        # W1-33: the SAME scripted-intelligence-plane wiring `fingerprint_
+        # match_agent_for` uses just above, for the same reason — a real
+        # metadata pin, the scripted stand-in, until the real LLM endpoint
+        # gets its own pass. `workers.drift.propose_mapping_for_unmapped_
+        # columns` is the only caller.
+        mapping_suggestion_agent = mapping_suggestion_agent_for(metadata_db)
         runner = PipelineRunner(
             storage=storage,
             control=control_tables,
@@ -461,6 +475,11 @@ def ingest(
                 for obj in metadata_db.list(ObjectType.GLOSSARY_TERM)
             )
         )
+        # W1-33: built the SAME way `api.app._canonical_of` builds it for the
+        # canonical browser — from the spec and the CURRENT glossary, not
+        # cached — because `propose_mapping_for_unmapped_columns` needs one to
+        # ground a suggestion against.
+        canonical_model = canonical.build(canonical.canonical_schemas(), glossary)
         # W1-30: the feed's PUBLISHED FeedMapping, when it has one. PUBLISHED
         # only — `is_executable` is the same gate CF-V1-E6-02's exemplar pool
         # already uses (api/app.py's `_own_published_mapping`), because the
@@ -513,6 +532,28 @@ def ingest(
                     renames=outcome.renames,
                     run_id=outcome.batch_id,
                 )
+        if outcome.unmapped_columns and outcome.batch_id is not None:
+            # W1-33 (F3): the SAME drift classification, asked a third
+            # question — a column that is additive AND ungoverned earns its
+            # own mapping-suggestion proposal, scoped to just the columns
+            # this run found, the moment the finding exists. ADDITIVE AND
+            # NON-BLOCKING, like the finding itself: best-effort, the same
+            # posture `PipelineRunner._open_incident` takes toward its own
+            # agent call, so a broken model call cannot turn an otherwise
+            # successful ingest into a failed one.
+            try:
+                propose_mapping_for_unmapped_columns(
+                    mapping_suggestion_agent,
+                    feed_id=FEED.feed_id,
+                    unmapped_columns=outcome.unmapped_columns,
+                    contract_version=CONTRACT.version,
+                    glossary=glossary,
+                    model=canonical_model,
+                    published_mapping=feed_mapping,
+                    run_id=outcome.batch_id,
+                )
+            except Exception as broken:
+                console.print(f"[yellow]mapping suggestion not proposed:[/yellow] {broken}")
         # CF-V2-E12-03's second act: the engine just ran, so any REQUESTED
         # action on this batch can now be verified against what the control
         # tables actually say — in the same transaction as the run itself.

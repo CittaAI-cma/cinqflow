@@ -36,6 +36,7 @@ from cinqflow.core.agents.mapping_suggestion.graph import (
     CAPABILITY as MAPPING_SUGGESTION_CAPABILITY,
 )
 from cinqflow.core.agents.mapping_suggestion.graph import NO_CONFIDENT_TARGET
+from cinqflow.core.agents.mapping_suggestion.prompts import TEMPLATES as MAPPING_TEMPLATES
 from cinqflow.core.agents.phi_detection.prompts import TEMPLATES as PHI_TEMPLATES
 from cinqflow.core.agents.pipeline_insight.prompts import TEMPLATES
 from cinqflow.core.agents.schema_inference.prompts import TEMPLATES as SCHEMA_TEMPLATES
@@ -57,6 +58,7 @@ from cinqflow.core.registry.contract import ContractColumn, DqRule, SchemaContra
 from cinqflow.core.registry.feed import FeedRecord
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.intelligence.agents.fingerprint_match import FingerprintMatchAgent
+from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.gateway import LlmGateway
@@ -184,7 +186,18 @@ def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
             )
         )
     )
-    for template in (*TEMPLATES, *SCHEMA_TEMPLATES, *PHI_TEMPLATES, *FINGERPRINT_TEMPLATES):
+    # W1-33: `MAPPING_TEMPLATES` joins the loop the moment this plane grows a
+    # real caller of `MappingSuggestionAgent.propose` (`workers.drift.
+    # propose_mapping_for_unmapped_columns`, via `mapping_suggestion_agent_
+    # for` below) — before this slab nothing on ANY plane ever called it, so
+    # the gap went unnoticed.
+    for template in (
+        *TEMPLATES,
+        *SCHEMA_TEMPLATES,
+        *PHI_TEMPLATES,
+        *FINGERPRINT_TEMPLATES,
+        *MAPPING_TEMPLATES,
+    ):
         store.save(_published(template.as_governed(author=AUTHOR)))
 
     started = now - timedelta(hours=9)
@@ -460,6 +473,34 @@ def fingerprint_match_agent_for(
             agent=FINGERPRINT_MATCH_AGENT_NAME,
         ),
         runtime=InProcAgentRuntime(),
+    )
+
+
+def mapping_suggestion_agent_for(metadata: MetadataDbPort) -> MappingSuggestionAgent:
+    """W1-33's real wiring — the SAME `LlmGateway` shape `fingerprint_match_
+    agent_for` builds above, never a second parallel way of assembling one.
+
+    Unlike that agent (and `agent_for`'s `PipelineInsightAgent`),
+    `MappingSuggestionAgent` carries no `ToolContext`: `propose`'s own module
+    docstring says it plainly — "the only object it constructs is a
+    `Proposal`" — there is no certified tool for it to call.
+
+    ONE AGENT per caller of THIS function, matching `fingerprint_match_
+    agent_for` rather than `agent_for`: `workers.drift.propose_mapping_for_
+    unmapped_columns`, the trigger this feeds, has no principal in hand
+    either — an UNMAPPED_COLUMN finding is the platform's own signal off a
+    batch that already ran, not a request a person made.
+    """
+    return MappingSuggestionAgent(
+        llm=LlmGateway(
+            llm=ScriptedLlm(responder=scripted),
+            phi_scrub=PatternPhiScrub(),
+            metadata_db=metadata,
+            observability=NoopObservability(),
+            budget=BUDGET,
+            routing=Routing(small="mock-small", large="mock-large"),
+        ),
+        metadata=metadata,
     )
 
 

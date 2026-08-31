@@ -31,7 +31,12 @@ from cinqflow.core.mapping import FeedMapping
 from cinqflow.core.model.vocabulary import BatchState, ErrorCategory, FileState, Layer
 from cinqflow.core.parsers import ParseError, parse
 from cinqflow.core.recon import error_id_hash
-from cinqflow.core.registry.contract import DqRule, SchemaContract, compare_to_contract
+from cinqflow.core.registry.contract import (
+    DqRule,
+    DriftKind,
+    SchemaContract,
+    compare_to_contract,
+)
 from cinqflow.core.registry.feed import FeedRecord
 from cinqflow.core.registry.glossary import Glossary
 from cinqflow.core.registry.suspension import Suspension
@@ -78,6 +83,13 @@ class RunOutcome:
     #: runner never proposes it itself, because proposing is a metadata write
     #: and the runner's writes are the control tables.
     renames: tuple[Rename, ...] = field(default_factory=tuple)
+    #: W1-33 — the additive, contract-unknown, MAPPING-unknown column names
+    #: this run's drift classification just found (W1-32's
+    #: `DriftKind.UNMAPPED_COLUMN`). Non-empty means a mapping-suggestion
+    #: proposal SCOPED TO EXACTLY THESE COLUMNS should be triggered — the
+    #: runner never triggers it itself, for the same reason it never proposes
+    #: a contract update: an agent call is not a control-table write.
+    unmapped_columns: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def processed(self) -> bool:
@@ -429,6 +441,11 @@ class PipelineRunner:
             stages_completed=tuple(completed),
             result=result,
             renames=assessment.renames if assessment else (),
+            unmapped_columns=(
+                tuple(f.column for f in assessment.findings if f.kind is DriftKind.UNMAPPED_COLUMN)
+                if assessment
+                else ()
+            ),
         )
 
     # ── control-plane bookkeeping ────────────────────────────────────────────
