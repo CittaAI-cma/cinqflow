@@ -17,12 +17,15 @@ pins:
   compute_job:    { adapter: mock }
   orchestration:  { adapter: mock }
   storage:        { adapter: mock }
-  connector:      { adapter: mock }
+  # CF-V1-E8-09. Every route is named, never a bare adapter — `default` is
+  # what an `endpoint_ref` that names no explicit route falls back to.
+  connector:      { routes: { default: { adapter: mock } } }
   control_tables: { adapter: mock }
   catalog:        { adapter: mock }
   sql_query:      { adapter: mock }
   identity:       { adapter: mock }
   legacy_readonly: { adapter: none }
+  document_parse:  { adapter: mock }
   metadata_db:    { adapter: mock }
   queue:          { adapter: mock }
   cache:          { adapter: none }

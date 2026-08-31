@@ -24,6 +24,7 @@ from cinqflow.adapters.mock import (  # noqa: F401  — imported for registratio
     compute_job,
     connector,
     control_tables,
+    document_parse,
     http_edge,
     identity,
     legacy_readonly,

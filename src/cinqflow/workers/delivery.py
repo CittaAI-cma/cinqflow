@@ -28,22 +28,51 @@ uploaded one takes.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from cinqflow.core.delivery import Delivery, Manifest
+from cinqflow.core.delivery import DEFAULT_RETRY_POLICY, Delivery, Manifest, RetryPolicy
 from cinqflow.core.landing import LandingDecision, LandingOutcome, classify
 from cinqflow.core.model.files import FileRef
 from cinqflow.core.model.vocabulary import FileState
 from cinqflow.core.profiling import FileProfile
 from cinqflow.core.registry.feed import FeedRecord
-from cinqflow.ports.connector import ConnectorPort
+from cinqflow.ports.connector import (
+    ConnectorError,
+    ConnectorPort,
+    RemoteFile,
+    UnreachableSourceError,
+)
 from cinqflow.ports.control_tables import ControlTablesPort, InputFile
 from cinqflow.ports.metadata_db import FileProfileRecord, MetadataDbPort
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.profiler import Profiler
 
-__all__ = ["DeliveryOutcome", "DeliveryWorker"]
+__all__ = ["DeliveryOutcome", "DeliveryWorker", "PollFailedError"]
+
+
+class PollFailedError(ConnectorError):
+    """One or more remote files could not be fetched after every retry.
+
+    CF-V1-E8-09's exception path: "repeated failure raises one SLA incident —
+    not a file mystery." ONE exception, naming every file that failed and why,
+    rather than a separate error per file — a poller (or whatever schedules
+    it) has one thing to alert on per pass, not a flood one per remote name.
+
+    The files that DID land are not rolled back, and they are not lost to the
+    caller either: `landed` carries their `DeliveryOutcome`s, so a caller that
+    catches this still sees what succeeded rather than having to re-derive it.
+    """
+
+    def __init__(
+        self, failures: tuple[tuple[str, str], ...], landed: tuple[DeliveryOutcome, ...]
+    ) -> None:
+        self.failures = failures
+        self.landed = landed
+        named = "; ".join(f"{remote_key}: {reason}" for remote_key, reason in failures)
+        super().__init__(f"{len(failures)} file(s) could not be fetched after retrying: {named}")
 
 
 @dataclass(frozen=True)
@@ -166,17 +195,38 @@ class DeliveryWorker:
         business_date: str,
         since: datetime | None = None,
         profile_it: bool = True,
+        retry: RetryPolicy = DEFAULT_RETRY_POLICY,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> tuple[DeliveryOutcome, ...]:
         """Everything a PULL connector is offering, landed.
 
         Returns empty for a push connector, which lists nothing — so a poller
         can be pointed at every connector without asking which kind it is.
+
+        CF-V1-E8-09's exception path: a remote fetch that fails is retried per
+        `retry` — the schedule is pure arithmetic (`RetryPolicy.delay_seconds`),
+        only the sleeping between attempts is done here, where I/O belongs. A
+        file that still cannot be fetched after every attempt does NOT stop
+        the pass: every OTHER file the connector offers still lands, and the
+        failure is collected rather than raised immediately — a single slow
+        or missing file must not turn into a mystery for the files beside it.
+        Only after every remote has been tried does this raise ONE
+        `PollFailedError` naming every failure, so whatever schedules the poll
+        has one thing to alert on per pass, not one per remote name. Because
+        `fetch()` is called to completion before `deliver()` is ever called,
+        a file that fails mid-retry has never been landed: partial content
+        never reaches `incoming/`.
         """
         outcomes: list[DeliveryOutcome] = []
+        failures: list[tuple[str, str]] = []
         for remote in self.connector.list_available(since=since):
+            fetched = self._fetch_with_retries(remote, retry=retry, sleep=sleep)
+            if fetched is None:
+                failures.append((remote.remote_key, "unreachable after every retry"))
+                continue
             outcomes.append(
                 self.deliver(
-                    self.connector.fetch(remote),
+                    fetched,
                     filename=remote.filename,
                     feed=feed,
                     feed_version=feed_version,
@@ -186,7 +236,33 @@ class DeliveryWorker:
                     profile_it=profile_it,
                 )
             )
+        if failures:
+            raise PollFailedError(tuple(failures), tuple(outcomes))
         return tuple(outcomes)
+
+    def _fetch_with_retries(
+        self,
+        remote: RemoteFile,
+        *,
+        retry: RetryPolicy,
+        sleep: Callable[[float], None],
+    ) -> bytes | None:
+        """Bytes on success; `None` once every attempt is exhausted.
+
+        Only `UnreachableSourceError` is retried — a transient failure by the
+        port's own definition. Anything else `fetch()` raises is a defect, not
+        a slow remote, and propagates immediately rather than being retried
+        into a misleading `PollFailedError`.
+        """
+        for attempt in range(1, retry.max_attempts + 1):
+            delay = retry.delay_seconds(attempt)
+            if delay:
+                sleep(delay)
+            try:
+                return self.connector.fetch(remote)
+            except UnreachableSourceError:
+                continue
+        return None
 
     # ── the trust boundary, in one place ─────────────────────────────────────
 

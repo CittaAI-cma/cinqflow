@@ -541,11 +541,51 @@ def catalog(request: pytest.FixtureRequest, make: Callable[..., Any]) -> Catalog
     return make(request.param)
 
 
-def test_introspection_reports_what_the_engine_actually_has(catalog: CatalogPort) -> None:
+def test_introspection_reports_nothing_for_a_schema_the_engine_lacks(
+    catalog: CatalogPort,
+) -> None:
     """The conformance kit compares this against the portable DDL SPEC, not
     against another engine — so a drift is attributed to one engine instead of
-    producing a diff nobody can adjudicate."""
-    assert list(catalog.introspect_schema("control")) == []
+    producing a diff nobody can adjudicate.
+
+    An ABSENT schema introspects to nothing rather than raising, because the
+    kit's job is to report "the spec declares this and the plane lacks it" as a
+    finding. An exception here would make the kit's own failure indistinguish-
+    able from the drift it exists to find.
+    """
+    assert list(catalog.introspect_schema("no_such_schema_exists")) == []
+
+
+def test_introspection_reports_what_the_engine_actually_has(catalog: CatalogPort) -> None:
+    """Whatever a schema holds, introspection describes it — every table named
+    with its own schema, and every column carrying a PHI verdict.
+
+    Asserted as a SHAPE rather than as a fixed table list, because this one
+    suite runs against every fitted adapter: the dict stand-in holds what a
+    test put in it and the Postgres adapter holds whatever `cinqflow install`
+    provisioned. Pinning either engine's inventory here would assert the
+    fixture, not the contract.
+    """
+    for table in catalog.introspect_schema("control"):
+        assert table.schema == "control"
+        assert table.qualified_name == f"control.{table.name}"
+        for column in table.columns:
+            assert column.name
+            assert column.data_type
+            assert isinstance(column.is_phi, bool)
+
+
+def test_a_column_absent_from_the_contract_is_phi(catalog: CatalogPort) -> None:
+    """Unclassified is masked, never public.
+
+    `information_schema` has no opinion about whether a column is protected,
+    so a plane that has drifted ahead of the schema contract carries columns
+    nothing has classified. Defaulting those to `is_phi=False` would make a
+    forgotten contract update a disclosure; defaulting to True makes it a
+    legibility complaint, which is the failure worth having.
+    """
+    described = catalog.introspect_schema("information_schema")
+    assert all(c.is_phi for t in described for c in t.columns)
 
 
 # ── sql_query ────────────────────────────────────────────────────────────────

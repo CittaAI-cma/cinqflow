@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { CitationChip } from "@/components/Cited";
+import { ImpactPacketCard } from "@/components/ImpactPacket";
 import { RefusalNotice } from "@/components/Refusal";
 import { MetricTile } from "@/components/ui/MetricTile";
 import { attempt, isRefused, type Refused } from "@/lib/api";
-import type { Mapping, MappingDiff, Principal } from "@/lib/types";
+import type { ImpactPacket, Mapping, MappingDiff, Principal } from "@/lib/types";
 import {
   acceptProposal,
   approveObject,
@@ -221,6 +222,16 @@ export default async function ProposalPage({
       : null;
   const losses = diff && !isRefused(diff) ? diff.lines.filter((line) => line.loses_its_source) : [];
 
+  // CF-V1-E11-02. Fetched only at the moment an approver is actually
+  // deciding — "both-sides impact" is the reason to have this screen open,
+  // not something worth a round-trip while the draft is still being written.
+  const packet =
+    mapping && !isRefused(mapping) && mapping.lifecycle_state === "pending_review"
+      ? await attempt<ImpactPacket>(
+          `/api/objects/mapping/${encodeURIComponent(mappingFeedId as string)}/packet`,
+        )
+      : null;
+
   return (
     <>
       {crumbs}
@@ -351,6 +362,7 @@ export default async function ProposalPage({
           mapping={mapping}
           losses={losses}
           me={me}
+          packet={packet}
         />
       ) : null}
 
@@ -675,12 +687,14 @@ function MappingLifecycle({
   mapping,
   losses,
   me,
+  packet,
 }: {
   proposalId: string;
   feedId: string;
   mapping: Mapping;
   losses: MappingDiff["lines"];
   me: Principal | Refused;
+  packet: ImpactPacket | Refused | null;
 }) {
   const principal = isRefused(me) ? null : me;
   const may = (action: string, verb: string) =>
@@ -716,6 +730,7 @@ function MappingLifecycle({
 
       {mapping.lifecycle_state === "pending_review" ? (
         <>
+          {packet && !isRefused(packet) ? <ImpactPacketCard packet={packet} /> : null}
           {losses.length > 0 ? (
             <div className="card">
               <strong>

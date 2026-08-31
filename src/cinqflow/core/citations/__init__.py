@@ -65,6 +65,11 @@ class CitationKind(StrEnum):
     #: CURRENTLY published for a signature, not a specific historical one.
     RUNBOOK = "runbook"
     TERM = "term"
+    #: CF-V1-E16-04/E16-06. An uploaded document's chunk, cited by PAGE — the
+    #: happy path's own example ("the companion guide p.14 defines MBR_DOB as
+    #: CCYYMMDD"). Unversioned, like RUNBOOK: a document is superseded by a
+    #: whole new upload, not amended in place.
+    DOCUMENT = "document"
 
     @property
     def versioned(self) -> bool:
@@ -163,6 +168,11 @@ class CitationId:
                 return f"/data/intake/runbook/{self.subject}{panel}"
             case CitationKind.TERM:
                 return f"/data/intake/glossary/{self.subject}"
+            case CitationKind.DOCUMENT:
+                # A page is a panel on the document, not a page of its own —
+                # the same shape RUNBOOK's step fragment already uses.
+                panel = f"?panel={self.fragment}" if self.fragment else ""
+                return f"/data/intake/document/{self.subject}{panel}"
 
 
 def parse(raw: str) -> CitationId:

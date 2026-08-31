@@ -94,6 +94,13 @@ READABLE = frozenset(
     {
         "registry.governed_object",
         "knowledge.reference",
+        #: CF-V1-E16-04/E16-05's K2 half — `search_knowledge`'s pin, holding
+        #: PHI-verified chunks of Published knowledge only. Every row already
+        #: passed the SAME "no member row, no Draft, no secret" gate
+        #: `chunk_incident`/`chunk_runbook`/`chunk_document` enforce before a
+        #: chunk ever reaches here — this identifier could not, by construction,
+        #: name a data-layer row the way `FORBIDDEN_READS` below refuses.
+        "knowledge.chunk",
         "control.feed_sla_config",
         "control.input_registry",
         "control.schema_registry",
@@ -394,6 +401,21 @@ CATALOGUE: dict[str, ToolSpec] = {
             ),
         ),
         ToolSpec(
+            name="list_schema_drift",
+            answers=(
+                "What this batch's arriving structure did against the contract, classified by "
+                "meaning — a rename is one event, not a dropped column plus a new one."
+            ),
+            parameters=(BATCH_ID,),
+            reads=frozenset({"control.schema_drift_log"}),
+            cites=(CitationKind.BATCH,),
+            note=(
+                "CF-V2-E5-04's read side. Recorded for every non-NONE finding, whether or not "
+                "it blocked the batch — an ADDED or REORDERED column is drift a steward should "
+                "see even when it never stopped anything."
+            ),
+        ),
+        ToolSpec(
             name="get_input_registry",
             answers="Files seen for a feed: accepted, rejected, parked, skipped as duplicates.",
             parameters=(FEED_ID, WINDOW),
@@ -437,6 +459,38 @@ CATALOGUE: dict[str, ToolSpec] = {
                 "Lexical (tsvector), not semantic. Healthcare vocabulary is code-heavy and "
                 "lexical is what catches NPI, DQ-002 and BH-AF-002 that embeddings blur. "
                 "The vector store stays provisioned and EMPTY until Wave 1."
+            ),
+        ),
+        ToolSpec(
+            name="search_knowledge",
+            answers=(
+                "The nearest prior document pages, runbook steps and closed-incident "
+                "narratives, by semantic similarity — 'has anything LIKE this happened "
+                "before', not 'what does this term mean'."
+            ),
+            parameters=(
+                _p(
+                    "query",
+                    ArgType.STRING,
+                    "Free text describing the failure or the concept to search for.",
+                    required=True,
+                ),
+                _p("limit", ArgType.INTEGER, "How many matches to return.", default=5),
+            ),
+            reads=frozenset({"knowledge.chunk"}),
+            cites=(
+                CitationKind.DOCUMENT,
+                CitationKind.RUNBOOK,
+                CitationKind.BATCH,
+                CitationKind.ERROR,
+            ),
+            scoped_by_feed=False,
+            note=(
+                "CF-V1-E16-04/E16-05 — the semantic (K2) half of hybrid retrieval, over "
+                "chunked, PHI-verified, Published knowledge. Unscoped by feed on purpose: "
+                "the same failure fingerprint recurring on a second feed is exactly what "
+                "this exists to surface (ADR-0023). Degrades to an honest empty result — "
+                "never a fabricated one — when the vector plane holds nothing yet."
             ),
         ),
         # ── Wave 2 · the ops ledgers reach the catalogue ──────────────────────

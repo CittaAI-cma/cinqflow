@@ -152,6 +152,17 @@ _GROUP_A: tuple[PortSpec, ...] = (
         dev="seeded_db",
         target="jdbc_readonly",
     ),
+    _spec(
+        "document_parse",
+        "parse_layout_aware",
+        "The 22nd pin, added by CF-V1-E16-04. Turns a payer companion guide or a "
+        "client spec's bytes into text with page anchors and whole tables — the "
+        "missing half of 'Inbox -> Parse -> Chunk' that let core.knowledge chunk "
+        "only objects that were already parsed Python values.",
+        mock="canned",
+        dev="local_pypdf_docx",
+        target="local_pypdf_docx_or_azure_doc_intelligence",
+    ),
 )
 
 # ── group B · the platform ───────────────────────────────────────────────────

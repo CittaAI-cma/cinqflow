@@ -28,12 +28,26 @@ pins:
   # pull shape every poller has, and its drop directory is NOT the landing zone —
   # files are read from there and DELIVERED into the zone, so nothing that can
   # write a file can also choose its landing key.
-  connector:      { adapter: upload, drop_root: ".cinqflow/drop" }
+  #
+  # CF-V1-E8-09 — routes, not one adapter. `default` is what a feed whose
+  # `endpoint_ref` names no route falls back to (every manual-upload feed).
+  # `fidelis-sftp` is a NAMED route: a feed registered with that
+  # `endpoint_ref` polls this drop directory instead — the certified dev
+  # stand-in for `sftp-poller`, which ADR-0023 defers to rung 3 as a client
+  # swapped in behind the SAME route name, with zero change to the registry
+  # row. Onboarding a new SFTP feed is one more entry here, never new code.
+  connector:
+    routes:
+      default:      { adapter: upload }
+      fidelis-sftp: { adapter: folder-drop, drop_root: ".cinqflow/drop/fidelis-sftp" }
   control_tables: { adapter: pg-control, schema: control }
   catalog:        { adapter: none }
   sql_query:      { adapter: pg-readonly }    # W1 (CF-V1-E7-02) — NOT on any agent whitelist
   identity:       { adapter: mock, scenarios: goldensets/reference/verato-scenarios.yaml }
   legacy_readonly: { adapter: none }          # Wave 5 only; removed at cutover
+  # CF-V1-E16-04 — the 22nd pin. Text with page anchors and whole tables,
+  # before anything is chunked. pypdf + python-docx, energized by requirements/ai.txt.
+  document_parse: { adapter: local-pypdf-docx }
 
   # ── group B · platform ────────────────────────────────────────────────────
   metadata_db:    { dsn: "secret://pg-dsn" }  # -> adapter "postgres" (profile.py:adapter_for)

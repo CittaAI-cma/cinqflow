@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum, unique
 from typing import Annotated, Any
@@ -78,7 +78,10 @@ from cinqflow.api.schemas import (
     DestinationOut,
     DetectPhiIn,
     DifferenceOut,
+    DocumentOut,
+    DocumentPageOut,
     DropExplanationOut,
+    EnrichedAlertOut,
     EvidencePackOut,
     ExampleOut,
     ExplainVarianceIn,
@@ -102,6 +105,12 @@ from cinqflow.api.schemas import (
     InheritedOut,
     KeyCandidateOut,
     KeySearchOut,
+    LayerCellOut,
+    LayerColumnOut,
+    LayerDetailOut,
+    LayerOut,
+    LayerRowsOut,
+    LayerTableOut,
     MappingDiffLineOut,
     MappingDiffOut,
     MappingFindingOut,
@@ -127,8 +136,10 @@ from cinqflow.api.schemas import (
     ProposedColumnOut,
     ProposedMappingOut,
     ProposedRuleOut,
+    QuarantineReasonOut,
     ReadinessOut,
     ReclassifyIn,
+    ReconLineOut,
     ReferenceOut,
     ReferencesOut,
     RefusalOut,
@@ -173,10 +184,11 @@ from cinqflow.api.schemas import (
 )
 from cinqflow.core import certification as batch_certification
 from cinqflow.core import delivery as delivery_core
-from cinqflow.core import lifecycle, onboarding, proposals, reliability, scheduling
+from cinqflow.core import layers, lifecycle, onboarding, proposals, reliability, scheduling
 from cinqflow.core import mapping as mapping_core
 from cinqflow.core import operations as ops_board
 from cinqflow.core import rules as rules_core
+from cinqflow.core import sla as sla_core
 from cinqflow.core import variance as variances_core
 from cinqflow.core.agents.fingerprint_match.graph import AGENT as FINGERPRINT_MATCH_AGENT_NAME
 from cinqflow.core.agents.mapping_suggestion.graph import AGENT as MAPPING_SUGGESTION_AGENT
@@ -189,6 +201,13 @@ from cinqflow.core.citations import parse as parse_citation
 from cinqflow.core.impact import ImpactPacket, ImpactUnknownError, Touched, build_packet
 from cinqflow.core.intelligence import Budget
 from cinqflow.core.landing import LandingOutcome
+from cinqflow.core.layers import (
+    LayerCensus,
+    LayerReader,
+    LayerSpec,
+    QuarantineReason,
+    ReconLine,
+)
 from cinqflow.core.mapping import versioning as mapping_versioning
 from cinqflow.core.mapping.versioning import UnacknowledgedLossError, refuse_unacknowledged_loss
 from cinqflow.core.model.governed import (
@@ -227,6 +246,7 @@ from cinqflow.core.rules import review as rule_review
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.core.security import Action, may
 from cinqflow.core.tools import CATALOGUE, ToolError
+from cinqflow.intelligence.agents.alert_enrichment import AlertEnrichmentAgent
 from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
 from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent, RecallGateFailedError
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
@@ -247,6 +267,11 @@ from cinqflow.ports.control_tables import (
     ControlTablesPort,
     schema_contract_evidence,
 )
+from cinqflow.ports.document_parse import (
+    SUPPORTED_MEDIA_TYPES,
+    DocumentParseError,
+    DocumentParsePort,
+)
 from cinqflow.ports.metadata_db import (
     ActionRecordRow,
     FileProfileRecord,
@@ -260,6 +285,7 @@ from cinqflow.workers.incidents import priors_for, recovery_guides
 from cinqflow.workers.knowledge import KnowledgeIngestWorker
 from cinqflow.workers.ops import OpsVerifier
 from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
+from cinqflow.workers.sla import current_alerts
 
 API_PREFIX = "/api"
 
@@ -322,6 +348,12 @@ class BatchPanel(StrEnum):
     ERRORS = "errors"
     QUARANTINE = "quarantine"
     RECON = "recon"
+    #: CF-V2-E5-04's read side. Detection already runs on every ingest
+    #: (`workers.drift`) and its ACTIONABLE findings already reach a proposal
+    #: or the action surface — this panel is the raw ledger underneath both,
+    #: so a finding that produced neither (a plain additive column, say) is
+    #: still visible to whoever is looking at this batch.
+    DRIFT = "drift"
 
 
 #: Each panel is one certified tool. The drawer has no private query.
@@ -331,6 +363,7 @@ _PANEL_TOOLS: dict[BatchPanel, str] = {
     BatchPanel.ERRORS: "list_errors",
     BatchPanel.QUARANTINE: "get_quarantine_summary",
     BatchPanel.RECON: "get_reconciliation",
+    BatchPanel.DRIFT: "list_schema_drift",
 }
 
 
@@ -369,11 +402,24 @@ def _profiler(request: Request) -> Profiler | None:
     return Profiler(storage=storage, metadata=request.app.state.metadata_db)
 
 
+def _layers(request: Request) -> LayerReader | None:
+    """The medallion layer reader, or None when no data plane is fitted.
+
+    None rather than a stub, the same shape as `_profiler` above and for the
+    same reason: a stub would answer a question about a plane it never read,
+    and "no data plane is fitted" is a true and actionable answer while
+    "Bronze holds 0 rows" is neither. The rung-0 dev socket fits the seeded
+    in-memory reader; rung 0.5 fits the Postgres one.
+    """
+    return request.app.state.layer_reader  # type: ignore[no-any-return]
+
+
 Store = Annotated[MetadataDbPort, Depends(_store)]
 Control = Annotated[ControlTablesPort, Depends(_control)]
 Audit = Annotated[AuditLog, Depends(_audit)]
 Plane = Annotated[ExecutionPlaneRegister, Depends(_plane)]
 Directory = Annotated[AuthnPort, Depends(_authn)]
+Layers = Annotated["LayerReader | None", Depends(_layers)]
 
 
 def _connection_profile(request: Request) -> Profile | None:
@@ -392,12 +438,16 @@ def create_app(
     control_tables: ControlTablesPort | None = None,
     storage: StoragePort | None = None,
     connector: ConnectorPort | None = None,
+    connectors: dict[str, ConnectorPort] | None = None,
+    document_parse: DocumentParsePort | None = None,
     agent_factory: AgentFactory | None = None,
     schema_inference_factory: SchemaInferenceFactory | None = None,
     phi_detection_factory: PhiDetectionFactory | None = None,
     mapping_suggestion_factory: MappingSuggestionFactory | None = None,
     rule_authoring_factory: RuleAuthoringFactory | None = None,
     knowledge_ingest_factory: KnowledgeIngestFactory | None = None,
+    alert_enrichment_agent: AlertEnrichmentAgent | None = None,
+    layer_reader: LayerReader | None = None,
     budget: Budget | None = None,
     profile: Profile | None = None,
 ) -> FastAPI:
@@ -428,12 +478,28 @@ def create_app(
     # that would be honest here: a profiler pointed at an empty store would
     # answer "file not found" for every real sample.
     app.state.storage = storage
-    # CF-V1-E3-05. No default either, and for a stronger reason: a deployment
-    # with no connector CANNOT accept a delivery, and answering "not
-    # configured" is the truth. Defaulting to something that accepted uploads
-    # into memory would mean a BA uploads a file, sees it land, and finds
-    # nothing there after a restart.
+    # CF-V1-E3-05 / CF-V1-E8-09. No default either, and for a stronger reason:
+    # a deployment with no connector CANNOT accept a delivery, and answering
+    # "not configured" is the truth. Defaulting to something that accepted
+    # uploads into memory would mean a BA uploads a file, sees it land, and
+    # finds nothing there after a restart.
+    #
+    # `connectors` is the routed shape `connectors_from(profile, ...)` builds
+    # — one entry per `endpoint_ref` a feed's delivery section can name.
+    # `connector` (singular) is kept as the one-route shortcut every existing
+    # caller already uses; it folds in under "default" so a deployment naming
+    # only one connector needs no `routes:` mapping to write. A caller naming
+    # both wins on `connectors["default"]` over `connector`, since a route
+    # explicitly called `default` is a choice `connector=` cannot express.
+    merged_connectors = dict(connectors or {})
+    if connector is not None:
+        merged_connectors.setdefault("default", connector)
+    app.state.connectors = merged_connectors
     app.state.connector = connector
+    # CF-V1-E16-04/E16-06. Same honest-None shape as `connector`: a deployment
+    # with no parser CANNOT accept a document upload, and the route answers
+    # "not configured" rather than 500ing on a call to a pin that is not there.
+    app.state.document_parse = document_parse
     app.state.agent_factory = agent_factory
     # None leaves the inference route answering "not configured" rather than
     # 500ing — the deterministic profile and the manual editor still work,
@@ -445,6 +511,18 @@ def create_app(
     # CF-V1-W1-26. See `KnowledgeIngestFactory`'s own comment for why `None`
     # is a valid, honest deployment shape rather than a misconfiguration.
     app.state.knowledge_ingest_factory = knowledge_ingest_factory
+    # CF-V2-E12-05. Built ONCE, not per caller — the same shape
+    # `fingerprint_match_agent_for` builds `IncidentWorker` its agent in:
+    # enrichment has no principal in hand any more than a batch failure does,
+    # a breach exists whether or not anybody is looking at it right now.
+    # None leaves `GET /api/operations/alerts` answering "not configured".
+    app.state.alert_enrichment_agent = alert_enrichment_agent
+    # W3-01. None is an honest deployment shape — see `_layers`. The rung-0
+    # dev socket passes `MemLayerReader`, so the six-layer screen works with
+    # no database; rung 0.5 passes `PostgresLayerReader` and the same screen
+    # reads the real plane. That the SCREEN cannot tell them apart is the
+    # point: it is the socket-ladder argument, on one route.
+    app.state.layer_reader = layer_reader
     # The cap the observability screen reports against. A screen showing spend
     # with no cap beside it is a number, not a control.
     app.state.llm_budget = budget or Budget(
@@ -1320,16 +1398,22 @@ def create_app(
         something the feed does not expect, and that is a finding to act on
         rather than an error to retry.
         """
-        worker = _delivery_worker(request, metadata)
+        governed = _load(metadata, feed_id)
+        record = feed_registry.from_governed(governed)
+        # CF-V1-E8-09. The feed's OWN `endpoint_ref` picks the route — the
+        # registry's delivery section, not a deployment-wide default, is what
+        # decides which connector a delivery for THIS feed lands through.
+        endpoint_ref = operations_registry.FeedOperations.from_body(
+            governed.body.get("operations")
+        ).endpoint_ref
+        worker = _delivery_worker(request, metadata, endpoint_ref=endpoint_ref)
         if worker is None:
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "no connector pin is fitted on this deployment, so there is nowhere for a "
                 "delivery to land. Fit one in the connection profile — `connector: "
-                "{ adapter: upload }` at rung 0.5.",
+                "{ routes: { default: { adapter: upload } } }` at rung 0.5.",
             )
-        governed = _load(metadata, feed_id)
-        record = feed_registry.from_governed(governed)
         content = await file.read()
         try:
             outcome = worker.deliver(
@@ -1364,6 +1448,109 @@ def create_app(
         )
         return _delivery_out(outcome, principal)
 
+    # ── CF-V1-E16-04 · CF-V1-E16-06 · document upload ─────────────────────
+    #
+    # THE PAYER'S OWN DOCUMENTATION, GROUNDING THE WIZARD. Step 1's "upload a
+    # sample" gets a companion — "upload the guide that explains it" — through
+    # the SAME connector-then-landing shape `deliver_file` established, but
+    # into a governed object instead of the landing zone: a spec isn't data
+    # the pipeline runs, it's knowledge the schema and mapping agents cite.
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/documents",
+        response_model=DocumentOut,
+        tags=["knowledge"],
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def upload_document(
+        feed_id: str,
+        request: Request,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+        file: Annotated[UploadFile, File(description="The payer's companion guide or spec.")],
+        domain: Annotated[str | None, Form()] = None,
+    ) -> DocumentOut:
+        """Parse -> a Draft `KNOWLEDGE_DOCUMENT`, at the wizard's own step 1.
+
+        EDIT_FEED, the same permission `deliver_file` requires: a document
+        joins what the platform grounds agents in for THIS feed, exactly the
+        way a sample joins what it profiles for it.
+
+        Parsing happens HERE, at upload — never at publish. That is what lets
+        a reviewer see the parsed pages (page numbers, table structure)
+        BEFORE approving, on the SAME object the steward reviews; publish
+        only triggers the PHI-verify-and-embed side effect
+        (`_embed_published_document`), the identical split `chunk_runbook`'s
+        Published-only gate already draws for a runbook's steps.
+        """
+        parser: DocumentParsePort | None = getattr(request.app.state, "document_parse", None)
+        if parser is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no document_parse pin is fitted on this deployment. Fit one in the "
+                "connection profile — `document_parse: { adapter: local-pypdf-docx }` at "
+                "rung 0.5.",
+            )
+        content = await file.read()
+        media_type = _document_media_type(file.filename or "", file.content_type)
+        try:
+            parsed = parser.parse(content, media_type=media_type, filename=file.filename or "")
+        except DocumentParseError as refused:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(refused)) from None
+
+        document_id = f"doc-{uuid4().hex[:12]}"
+        draft = GovernedObject(
+            object_type=ObjectType.KNOWLEDGE_DOCUMENT,
+            object_id=document_id,
+            version=1,
+            lifecycle_state=LifecycleState.DRAFT,
+            created_by=principal.as_actor(),
+            created_ts=datetime.now(UTC),
+            body={
+                "filename": file.filename or document_id,
+                "media_type": parsed.media_type,
+                "feed_id": feed_id,
+                "domain": domain,
+                "pages": [
+                    {
+                        "number": page.number,
+                        "text": page.text,
+                        "table_count": len(page.tables),
+                    }
+                    for page in parsed.pages
+                ],
+            },
+        )
+        stored = metadata.save(draft)
+        audit.record(
+            object_type=ObjectType.KNOWLEDGE_DOCUMENT,
+            object_id=document_id,
+            action="upload_document",
+            actor=principal.as_actor(),
+            detail=f"{file.filename} -> {parsed.page_count} page(s), feed {feed_id}",
+        )
+        return _document_out(stored)
+
+    @app.get(
+        f"{API_PREFIX}/documents/{{document_id}}",
+        response_model=DocumentOut,
+        tags=["knowledge"],
+    )
+    def get_document(
+        document_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        version: int | None = None,
+    ) -> DocumentOut:
+        """A `document:<id>` citation's destination — the same shape
+        `get_runbook` gives `runbook:<id>`."""
+        try:
+            obj = metadata.get(ObjectType.KNOWLEDGE_DOCUMENT, document_id, version)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        return _document_out(obj)
+
     @app.get(
         f"{API_PREFIX}/feeds/{{feed_id}}/deliveries/source",
         response_model=ConnectionCheckOut,
@@ -1372,14 +1559,21 @@ def create_app(
     def delivery_source(
         feed_id: str,
         request: Request,
+        metadata: Store,
         _: Annotated[Principal, Depends(require(Action.VIEW))],
     ) -> ConnectionCheckOut:
         """Can the delivery source be reached at all?
 
         Asked separately from listing, so an expired credential reports as an
-        expired credential rather than as an empty directory.
+        expired credential rather than as an empty directory. CF-V1-E8-09:
+        reachability is asked of THIS feed's own connector route, not
+        whichever one happens to be the deployment's default.
         """
-        connector = getattr(request.app.state, "connector", None)
+        governed = _load(metadata, feed_id)
+        endpoint_ref = operations_registry.FeedOperations.from_body(
+            governed.body.get("operations")
+        ).endpoint_ref
+        connector = _connector_for(request, endpoint_ref)
         if connector is None:
             return ConnectionCheckOut(
                 reachable=False,
@@ -2762,6 +2956,12 @@ def create_app(
             )
             if warning is not None:
                 result = result.model_copy(update={"warnings": [warning]})
+        if object_type is ObjectType.KNOWLEDGE_DOCUMENT:
+            warning = _embed_published_document(
+                metadata, object_id, principal, app.state.knowledge_ingest_factory, audit
+            )
+            if warning is not None:
+                result = result.model_copy(update={"warnings": [warning]})
         if object_type is ObjectType.MAPPING:
             warning = _reprocess_candidates_after_mapping_publish(
                 metadata, control, profile, object_id, principal, audit
@@ -2911,6 +3111,143 @@ def create_app(
                 )
                 for d in for_roles(frozenset(principal.roles), permitted)
             ],
+        )
+
+    # ── the medallion layers (W3-01) ─────────────────────────────────────────
+    #
+    # WHY THESE ROUTES EXIST when `/api/canonical` already publishes the model
+    # and `/api/batches` already publishes the counts: neither answers "which
+    # layers are there, and what is in each one". The canonical model is the
+    # SHAPE data will take; a batch is one run THROUGH the layers. The spine
+    # itself — six positions, three of them not built — was a fact you could
+    # only get by reading `vocabulary.Layer` beside `all_schemas()` beside the
+    # plane, and a platform whose own structure is only legible from source is
+    # the failure this programme exists to end.
+    #
+    # ALL THREE ROUTES ARE `Action.VIEW`. Reading a masked layer is reading,
+    # and the masking is not a permission tier — every viewer sees the same
+    # bullets, including a steward. A "may see PHI" action would make the flag
+    # negotiable, and CF-V4-E14-04 is where a real unmask ceremony belongs,
+    # with its own approval and its own audit row. Until then there is one
+    # answer for everyone, which is the answer nobody has to be trusted with.
+
+    @app.get(f"{API_PREFIX}/layers", response_model=list[LayerOut], tags=["layers"])
+    def list_layers(
+        reader: Layers,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> list[LayerOut]:
+        """The six layers, in promotion order, built or not.
+
+        Counts come from the plane when a reader is fitted and are `null` when
+        one is not — never 0. A deployment with no data plane reporting "Bronze:
+        0 rows" would be a lie that reads like a healthy empty platform.
+        """
+        return [_layer_out(reader, spec) for spec in layers.spine()]
+
+    @app.get(
+        f"{API_PREFIX}/layers/{{layer}}",
+        response_model=LayerDetailOut,
+        tags=["layers"],
+    )
+    def layer_detail(
+        layer: str,
+        reader: Layers,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        batch_id: str = "",
+    ) -> LayerDetailOut:
+        """One layer: its tables, and the quality picture behind its gate.
+
+        An UNBUILT layer answers 200, not 404. It is a real position on the
+        spine with a real reason for being empty, and 404 would make the screen
+        unable to tell "this layer does not exist in this architecture" from
+        "this layer is not built yet" — the second is true and the first is
+        not.
+        """
+        spec = _layer_spec_or_404(layer)
+        census = reader.census(spec) if reader else None
+        tables = list(census.tables) if census else []
+        return LayerDetailOut(
+            layer=_layer_out(reader, spec, census=census),
+            tables=[_layer_table_out(spec, table) for table in tables],
+            # Quarantine and reconciliation are the GATE's evidence, so they
+            # belong to the layer the gate feeds and to no other. Attaching
+            # them to every layer would show Landing a drop count for a rule
+            # that runs two layers downstream.
+            quarantine=(
+                [_quarantine_out(r) for r in reader.quarantine_reasons(batch_id=batch_id or None)]
+                if reader and spec.layer is Layer.SILVER_RAW
+                else []
+            ),
+            reconciliation=(
+                [
+                    _recon_out(line)
+                    for line in reader.reconciliation(batch_id=batch_id or None)
+                    if line.stage == spec.layer.value
+                ]
+                if reader
+                else []
+            ),
+        )
+
+    @app.get(
+        f"{API_PREFIX}/layers/{{layer}}/tables/{{table}}/rows",
+        response_model=LayerRowsOut,
+        tags=["layers"],
+    )
+    def layer_rows(
+        layer: str,
+        table: str,
+        reader: Layers,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        batch_id: str = "",
+        limit: int = 25,
+        offset: int = 0,
+    ) -> LayerRowsOut:
+        """A masked page of rows.
+
+        `layer` and `table` off the wire select a CONTRACT object — never an
+        identifier. `_layer_spec_or_404` and `layers.table_of` resolve against
+        the frozen `schema_spec`, so a name that is not in the contract 404s
+        here and never reaches the adapter, let alone a query. That is why the
+        reader's signature takes a `Table` and not a string.
+        """
+        spec = _layer_spec_or_404(layer)
+        if reader is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no data plane is fitted — this deployment cannot read the medallion layers",
+            )
+        if not spec.exists_on_plane:
+            # 409, not 404: the layer is real and the request is well-formed;
+            # what is absent is the SCHEMA, and the reason is worth sending
+            # rather than collapsing into "not found".
+            raise HTTPException(status.HTTP_409_CONFLICT, spec.absence_reason)
+        try:
+            contract_table = layers.table_of(spec, table)
+        except KeyError as missing:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(missing)) from None
+        page = reader.rows(
+            spec,
+            contract_table,
+            batch_id=batch_id or None,
+            limit=limit,
+            offset=offset,
+        )
+        return LayerRowsOut(
+            schema_name=page.schema,
+            table=page.table,
+            columns=list(page.columns),
+            rows=[
+                {
+                    name: LayerCellOut(value=c.value, masked=c.masked, reason=c.reason)
+                    for name, c in row.items()
+                }
+                for row in page.rows
+            ],
+            total_rows=page.total_rows,
+            truncated=page.truncated,
+            masked_columns=list(page.masked_columns),
+            batch_id=page.batch_id,
         )
 
     # ── operations ───────────────────────────────────────────────────────────
@@ -3092,6 +3429,8 @@ def create_app(
             assignee=body.assignee,
             note=body.note,
             resume_from=Layer(body.resume_from) if body.resume_from else None,
+            business_date=body.business_date,
+            supersede_acknowledged=body.supersede_acknowledged,
         )
         try:
             ops_actions.authorize(
@@ -3486,6 +3825,76 @@ def create_app(
             ],
             citation=str(score.citation),
         )
+
+    # ── CF-V2-E12-05 · alerts that explain themselves ─────────────────────
+
+    @app.get(
+        f"{API_PREFIX}/operations/alerts",
+        response_model=list[EnrichedAlertOut],
+        tags=["operations"],
+    )
+    def enriched_alerts(
+        request: Request,
+        control: Control,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+        on: str | None = None,
+    ) -> list[EnrichedAlertOut]:
+        """Every SLA breach outstanding today, grouped and explained.
+
+        `current_alerts` recomputes the deterministic set fresh — it writes
+        nothing and pages nobody, unlike the clock's own `sweep()` — so this
+        route can be read as often as a screen wants without duplicating an
+        alert or a notification. Enrichment then runs PER GROUP, on read,
+        never stored: the same "computed fresh, never a cached opinion"
+        discipline `get_certification` and `get_reliability_score` already
+        hold operations screens to.
+
+        503 rather than a stub when no LLM pin is fitted — the deterministic
+        `SlaAlert` set (feed, severity, summary) is still exactly what
+        `/operations/monitor` shows without this route; what is missing
+        without an agent is only the grouped CAUSE hypothesis.
+        """
+        agent = request.app.state.alert_enrichment_agent
+        if agent is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no LLM pin is fitted on this deployment, so alerts are not enriched. Every "
+                "alert's own facts and severity are still on the monitor screen — what is "
+                "missing is the grouped cause hypothesis.",
+            )
+        now = datetime.now(UTC)
+        try:
+            business_date = date.fromisoformat(on) if on else now.date()
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{on!r} is not YYYY-MM-DD") from None
+        visible_ids = {feed.object_id for feed in _visible_feeds(metadata, principal)}
+        alerts = tuple(
+            alert
+            for alert in current_alerts(control, on=business_date, now=now)
+            if alert.feed_id in visible_ids
+        )
+        enriched = []
+        for group_key, members in sla_core.grouped(alerts):
+            result = agent.enrich(
+                group_key, members, caller=principal.as_actor(), run_id=f"ui-{group_key}", now=now
+            )
+            enriched.append(
+                EnrichedAlertOut(
+                    group_key=result.group_key,
+                    feed_ids=list(result.feed_ids),
+                    severity=result.severity,
+                    facts=list(result.facts),
+                    cause=result.cause,
+                    citations=[str(c) for c in result.citations],
+                    cause_citations=[str(c) for c in result.cause_citations],
+                    manual_path=result.manual_path,
+                    model_called=result.model_called,
+                    refusals=list(result.refusals),
+                    cost_usd=result.cost_usd,
+                )
+            )
+        return enriched
 
     # ── CF-V2-E13-03 · variance investigation, approval and waiver ────────
 
@@ -3962,14 +4371,35 @@ def create_app(
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-def _delivery_worker(request: Request, metadata: MetadataDbPort) -> DeliveryWorker | None:
+def _connector_for(request: Request, endpoint_ref: str) -> ConnectorPort | None:
+    """The route a feed's `endpoint_ref` names, or the deployment's default.
+
+    CF-V1-E8-09: `endpoint_ref` is the registry's half of "configure every
+    connector from the delivery section"; `connector.routes` in the profile
+    is the other half (`installer.connectors.connectors_from`). An
+    `endpoint_ref` naming no fitted route — a feed onboarded before its
+    connector was configured, or a manual-upload feed with none set — falls
+    back to `"default"` rather than refusing, so a delivery for a feed
+    nobody has routed yet still lands the way it always did.
+    """
+    connectors: dict[str, ConnectorPort] = getattr(request.app.state, "connectors", None) or {}
+    if not connectors:
+        return None
+    if endpoint_ref and endpoint_ref in connectors:
+        return connectors[endpoint_ref]
+    return connectors.get("default")
+
+
+def _delivery_worker(
+    request: Request, metadata: MetadataDbPort, *, endpoint_ref: str = ""
+) -> DeliveryWorker | None:
     """The worker, or None when this deployment cannot accept a delivery.
 
     None rather than a stub, for the same reason `_profiler` returns None: a
     stub that accepted uploads into nowhere would let a BA upload a file, watch
     it land, and find nothing there afterwards.
     """
-    connector = getattr(request.app.state, "connector", None)
+    connector = _connector_for(request, endpoint_ref)
     storage = request.app.state.storage
     if connector is None or storage is None:
         return None
@@ -4577,6 +5007,56 @@ def _accept_mapping_proposal(
     return _proposal_out(stored)
 
 
+#: `filename` extension -> media type, for the browser uploads that arrive
+#: with no (or a generic) `content_type`. `SUPPORTED_MEDIA_TYPES` stays the
+#: authority — this only resolves WHICH member of that set a filename means.
+_EXTENSION_MEDIA_TYPE: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".txt": "text/plain",
+    ".csv": "text/csv",
+}
+
+
+def _document_media_type(filename: str, declared: str | None) -> str:
+    """The declared `content_type`, if the platform recognises it; otherwise
+    the filename's extension. Never guessed from bytes — a caller who wants a
+    specific parse path names it, the same discipline `deliver_file` applies
+    to `business_date` and `checksum` rather than sniffing either."""
+
+    if declared and declared in SUPPORTED_MEDIA_TYPES:
+        return declared
+    suffix = filename[filename.rfind(".") :].lower() if "." in filename else ""
+    return _EXTENSION_MEDIA_TYPE.get(suffix, declared or "application/octet-stream")
+
+
+def _document_out(obj: GovernedObject) -> DocumentOut:
+    """The same fields `upload_document` writes, read back."""
+    body = obj.body
+    pages = [
+        DocumentPageOut(
+            number=int(page["number"]),
+            text=str(page.get("text", "")),
+            table_count=int(page.get("table_count", 0)),
+        )
+        for page in body.get("pages", ())
+    ]
+    return DocumentOut(
+        document_id=obj.object_id,
+        filename=str(body.get("filename") or obj.object_id),
+        media_type=str(body.get("media_type") or ""),
+        feed_id=str(body["feed_id"]) if body.get("feed_id") else None,
+        domain=str(body["domain"]) if body.get("domain") else None,
+        page_count=len(pages),
+        pages=pages,
+        version=obj.version,
+        lifecycle_state=obj.lifecycle_state.value,
+        status=obj.lifecycle_state.status_word,
+    )
+
+
 def _runbook_out(obj: GovernedObject) -> RunbookOut:
     """The same fields `_runbook_body_from` writes, read back — `get_runbook`
     (CF-V1-W1-25) is the one place this codebase renders a runbook on its
@@ -4684,7 +5164,9 @@ def _embed_published_runbook(
     if factory is None:
         return None
     published = metadata.get(ObjectType.RUNBOOK, object_id)
-    prior = _prior_published_version(metadata, object_id, before=published.version)
+    prior = _prior_published_version(
+        metadata, ObjectType.RUNBOOK, object_id, before=published.version
+    )
     try:
         factory(metadata).ingest_runbook(
             published,
@@ -4706,24 +5188,71 @@ def _embed_published_runbook(
     return None
 
 
+def _embed_published_document(
+    metadata: MetadataDbPort,
+    object_id: str,
+    principal: Principal,
+    factory: KnowledgeIngestFactory | None,
+    audit: AuditLog,
+) -> str | None:
+    """CF-V1-E16-04 · CF-V1-E16-06 — a document publish is what makes its
+    pages knowledge. The exact same shape as `_embed_published_runbook`:
+    called AFTER `_governance_act` has already persisted the transition,
+    degrades to a warning (never a 500) on `EmbeddingFailedError`, and
+    degrades SILENTLY when no factory is wired — see that function's own
+    docstring for why both postures are correct rather than merely tolerant.
+    """
+    if factory is None:
+        return None
+    published = metadata.get(ObjectType.KNOWLEDGE_DOCUMENT, object_id)
+    prior = _prior_published_version(
+        metadata, ObjectType.KNOWLEDGE_DOCUMENT, object_id, before=published.version
+    )
+    try:
+        factory(metadata).ingest_document(
+            published,
+            run_id=f"knowledge-document-{object_id}-v{published.version}-{uuid4().hex[:8]}",
+            caller=principal.as_actor(),
+            supersedes=prior,
+        )
+    except EmbeddingFailedError as failure:
+        detail = f"embed-on-publish failed: {failure}"
+        audit.record(
+            object_type=ObjectType.KNOWLEDGE_DOCUMENT,
+            object_id=object_id,
+            version=published.version,
+            action="embed_failed:publish",
+            actor=principal.as_actor(),
+            detail=detail,
+        )
+        return detail
+    return None
+
+
 def _prior_published_version(
-    metadata: MetadataDbPort, object_id: str, *, before: int
+    metadata: MetadataDbPort, object_type: ObjectType, object_id: str, *, before: int
 ) -> GovernedObject | None:
     """The most recent PUBLISHED version older than the one just published —
     the one whose chunks an atomic supersede must retire. `None` on a guide's
-    first publish, which is exactly what `KnowledgeIngestWorker.ingest_runbook
-    `'s own `supersedes=None` default means: nothing to retire.
+    (or document's) first publish, which is exactly what `KnowledgeIngestWorker
+    .ingest_runbook`/`.ingest_document`'s own `supersedes=None` default means:
+    nothing to retire.
+
+    Generalised over `object_type` for `ObjectType.KNOWLEDGE_DOCUMENT` — a
+    re-uploaded document supersedes the same way a re-published runbook does,
+    and this is the one place that logic lives, not a second copy per type.
 
     A version's `lifecycle_state` never changes once transitioned away from
     Draft except by another transition on THAT SAME version
     (`record_transition`'s "state and approver columns only, never the
     body") — so an older version this finds as PUBLISHED really is still
     sitting there Published, never silently downgraded by a later version's
-    own publish. That is exactly the state `chunk_runbook` needs to accept it.
+    own publish. That is exactly the state `chunk_runbook`/`chunk_document`
+    needs to accept it.
     """
     candidates = [
         obj
-        for obj in metadata.history(ObjectType.RUNBOOK, object_id)
+        for obj in metadata.history(object_type, object_id)
         if obj.version < before and obj.lifecycle_state is LifecycleState.PUBLISHED
     ]
     return max(candidates, key=lambda obj: obj.version, default=None)
@@ -5339,6 +5868,112 @@ def _recall_out(proposal: Proposal, glossary: Glossary) -> PhiRecallOut:
             + f" · {len(over)} column(s) protected that the glossary does not flag "
             "(the safe direction, reported not gated)"
         ),
+    )
+
+
+# ── the medallion layers (W3-01) ─────────────────────────────────────────────
+def _layer_spec_or_404(layer: str) -> LayerSpec:
+    """A layer name off the wire becomes a CONTRACT object, or a 404.
+
+    This function is the only door: nothing downstream accepts a layer as a
+    string, so there is no path from a URL to a schema name. `core.layers`
+    raises `KeyError` with the six valid names in the message, which is worth
+    sending — a caller who mistyped `sliver_raw` is told what the options are
+    rather than told "not found".
+    """
+    try:
+        return layers.spec_of(layer)
+    except KeyError as unknown:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(unknown)) from None
+
+
+def _layer_out(
+    reader: LayerReader | None,
+    spec: LayerSpec,
+    *,
+    census: LayerCensus | None = None,
+) -> LayerOut:
+    """One spine position on the wire.
+
+    `census` is passed in by the detail route, which already has it — the list
+    route lets this function fetch. Without that parameter the detail route
+    would count every table twice per request, and the counts are exact
+    `count(*)` rather than estimates, so twice is a real cost.
+    """
+    counted = census if census is not None else (reader.census(spec) if reader else None)
+    return LayerOut(
+        layer=spec.layer.value,
+        label=spec.label,
+        purpose=spec.purpose,
+        entry_gate=spec.entry_gate.value if spec.entry_gate else "",
+        status=spec.status.value,
+        schema_name=spec.schema or "",
+        wave=spec.wave,
+        absence_reason=spec.absence_reason,
+        # None, never 0, when there is no plane or no schema. See LayerTableOut.
+        row_count=counted.row_count if counted else None,
+        table_count=len(counted.tables) if counted else 0,
+        route=f"/data/layers/{spec.layer.value}",
+    )
+
+
+def _layer_table_out(spec: LayerSpec, table: layers.TableCensus) -> LayerTableOut:
+    return LayerTableOut(
+        schema_name=table.schema,
+        name=table.name,
+        comment=table.comment,
+        append_only=table.append_only,
+        row_count=table.row_count,
+        phi_column_count=table.phi_column_count,
+        primary_key=list(table.primary_key),
+        columns=[
+            LayerColumnOut(
+                name=column.name,
+                declared_type=column.declared_type,
+                engine_type=column.engine_type,
+                nullable=column.nullable,
+                is_phi=column.is_phi,
+                present_on_plane=column.present_on_plane,
+            )
+            for column in table.columns
+        ],
+        # Empty when there is nothing to browse, so the UI never offers a link
+        # to a page that would 409. A table on the plane with zero rows still
+        # gets one — its shape is worth opening.
+        rows_route=(
+            f"/data/layers/{spec.layer.value}/{table.name}" if table.present_on_plane else ""
+        ),
+    )
+
+
+def _quarantine_out(reason: QuarantineReason) -> QuarantineReasonOut:
+    return QuarantineReasonOut(
+        rule_id=reason.rule_id,
+        reason=reason.reason,
+        stage=reason.stage,
+        row_count=reason.row_count,
+    )
+
+
+def _recon_out(line: ReconLine) -> ReconLineOut:
+    """`balanced` is the ledger's; `unattributed` is derived. Both travel.
+
+    A screen showing only the recorded verdict cannot show a green tick with
+    unexplained rows behind it, and that combination is exactly the thing G3
+    exists to make impossible — so it has to be visible when it happens.
+    """
+    return ReconLineOut(
+        batch_id=line.batch_id,
+        feed_id=line.feed_id,
+        stage=line.stage,
+        records_in=line.records_in,
+        records_out=line.records_out,
+        quarantined=line.quarantined,
+        attributed_drops=line.attributed_drops,
+        balanced=line.balanced,
+        unattributed=line.unattributed,
+        recorded_ts=line.recorded_ts,
+        route=CitationId(CitationKind.RECON, line.batch_id).route,
     )
 
 

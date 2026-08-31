@@ -1975,6 +1975,11 @@ class ActionRequestIn(BaseModel):
     NOTE WHAT IS ABSENT: no `command`, no `sql`, no free-form `parameters`.
     The don't says no free-form commands anywhere, and the way to mean it is a
     request body with nowhere to put one.
+
+    `business_date` and `supersede_acknowledged` are BACKDATE's own two
+    fields, carried on the shared request rather than a second body — a
+    tenth action with its own request shape would need its own route, and
+    the whole point of one surface is that it is not that.
     """
 
     action: str
@@ -1983,6 +1988,8 @@ class ActionRequestIn(BaseModel):
     assignee: str = ""
     note: str = ""
     resume_from: str | None = None
+    business_date: date | None = None
+    supersede_acknowledged: bool = False
 
 
 class PreviewOut(BaseModel):
@@ -2095,6 +2102,34 @@ class RunbookOut(BaseModel):
     status: StatusWord
 
 
+class DocumentPageOut(BaseModel):
+    """One page of an uploaded document — a `document:<id>#p<n>` citation's
+    fragment, the unit the wizard's page-cited quotes point at."""
+
+    number: int
+    text: str
+    table_count: int = 0
+
+
+class DocumentOut(BaseModel):
+    """A `document:<id>` citation's destination (CF-V1-E16-04/E16-06) — what
+    `POST /api/feeds/{feed_id}/documents` returns and `GET /api/documents/
+    {document_id}` reads back. `pages` carries full text: a companion guide
+    is pages, not gigabytes, and the wizard needs to show what a citation
+    stands on without a second round trip."""
+
+    document_id: str
+    filename: str
+    media_type: str
+    feed_id: str | None = None
+    domain: str | None = None
+    page_count: int
+    pages: list[DocumentPageOut] = Field(default_factory=list)
+    version: int
+    lifecycle_state: str
+    status: StatusWord
+
+
 class VarianceIn(BaseModel):
     """One discrepancy an operator writes down. The platform computes the
     delta and the criticality — a caller who could declare their own variance
@@ -2195,6 +2230,27 @@ class ReliabilityOut(BaseModel):
     citation: str = ""
 
 
+class EnrichedAlertOut(BaseModel):
+    """CF-V2-E12-05 — one grouped SLA breach, explained or honestly not.
+
+    `cause_citations` is empty exactly when `manual_path` is true: the two
+    can never disagree, because the agent sets both from the same decision,
+    in the same place.
+    """
+
+    group_key: str
+    feed_ids: list[str]
+    severity: str
+    facts: list[str]
+    cause: str
+    citations: list[str] = Field(default_factory=list)
+    cause_citations: list[str] = Field(default_factory=list)
+    manual_path: bool = False
+    model_called: bool = False
+    refusals: list[str] = Field(default_factory=list)
+    cost_usd: str = "0"
+
+
 class AcknowledgeIncidentIn(BaseModel):
     """Acknowledging names the person automatically (the caller); assignment
     is optional and may name somebody else."""
@@ -2254,3 +2310,155 @@ class IncidentOut(BaseModel):
     #: unaffected either way — this says only that its narrative is not yet
     #: retrievable as a citation.
     warnings: list[str] = Field(default_factory=list)
+
+
+# ── the medallion layers (W3-01) ─────────────────────────────────────────────
+class LayerCellOut(BaseModel):
+    """One cell of one row, and whether what you are reading is the whole truth.
+
+    `masked` travels on the wire rather than being recomputed in the browser,
+    for the same reason every figure carries its citation: a UI that decides
+    what to hide is a UI that can be wrong about it. There is deliberately NO
+    field carrying the unmasked value — a serializer cannot leak what a
+    renderer hid if the value never left the adapter.
+    """
+
+    value: str | None
+    masked: bool
+    #: Why it is hidden, shown at the point of the hiding.
+    reason: str = ""
+
+
+class LayerColumnOut(BaseModel):
+    """A column as the CONTRACT declares it and as the ENGINE actually has it.
+
+    Both, never merged. `declared_type` is the portable name (`timestamp_utc`)
+    and `engine_type` is what Postgres reports (`timestamptz`) — the same two
+    values the conformance kit compares for a verdict, carried so a person can
+    see the difference the kit sees. A Databricks plane would report
+    `DECIMAL(18,2)` against the same `decimal(18,2)`, and that is a match
+    rather than a drift.
+    """
+
+    name: str
+    declared_type: str
+    engine_type: str
+    nullable: bool
+    is_phi: bool
+    #: False when the contract declares it and the plane lacks it — a
+    #: provisioning gap, rendered as one rather than as a missing value.
+    present_on_plane: bool
+
+
+class LayerTableOut(BaseModel):
+    """One table in one layer: its shape, and how much is in it."""
+
+    schema_name: str
+    name: str
+    comment: str
+    append_only: bool
+    #: `null` means the table is NOT on the plane. Distinct from 0, which means
+    #: it is there and empty — conflating them is how a missing migration reads
+    #: as "no data yet".
+    row_count: int | None
+    phi_column_count: int
+    primary_key: list[str]
+    columns: list[LayerColumnOut]
+    #: Where a reader goes to see rows. Empty when there is nothing to browse.
+    rows_route: str = ""
+
+
+class LayerOut(BaseModel):
+    """One position on the medallion spine, built or not.
+
+    The three unbuilt layers are on this list, carrying `wave` and
+    `absence_reason`. A response that omitted them would tell a caller the
+    spine was complete, and one that returned them as ordinary empty layers
+    would tell a caller something was broken. Neither is true.
+    """
+
+    layer: str
+    label: str
+    purpose: str
+    #: The gate guarding entry INTO this layer — `G1`..`G5`, or empty for
+    #: Landing, where arrival is not a promotion.
+    entry_gate: str
+    #: `built` · `provisioned_empty` · `not_built`
+    status: str
+    #: The schema on the plane, empty when the layer has none yet.
+    schema_name: str
+    wave: int
+    absence_reason: str
+    #: `null` when nothing is on the plane, never 0. See `LayerTableOut`.
+    row_count: int | None
+    table_count: int
+    route: str
+
+
+class QuarantineReasonOut(BaseModel):
+    """Why rows did not cross a gate, and how many. Grouped by the RULE.
+
+    The rule id is load-bearing rather than decorative: "17 rows dropped" is a
+    number nobody can act on; "DQ-002 excluded 13 rows for a null first name"
+    names the thing to go and fix. The rows themselves are never in this
+    response — not even masked. This answers "what is wrong and how much of
+    it", a question that needs no member.
+    """
+
+    rule_id: str
+    reason: str
+    stage: str
+    row_count: int
+
+
+class ReconLineOut(BaseModel):
+    """One batch's balance at one stage: in, out, quarantined, attributed.
+
+    `balanced` is the LEDGER's recorded verdict, not recomputed — a screen that
+    re-derives it can disagree with the row an auditor reads. `unattributed` IS
+    derived, and carried beside the verdict, so a green tick with unexplained
+    rows behind it is visible rather than trusted.
+    """
+
+    batch_id: str
+    feed_id: str
+    stage: str
+    records_in: int
+    records_out: int
+    quarantined: int
+    attributed_drops: int
+    balanced: bool
+    unattributed: int
+    recorded_ts: str
+    #: The batch's own citation route, so every figure here is openable.
+    route: str
+
+
+class LayerDetailOut(BaseModel):
+    """One layer, with its tables, and the quality picture behind its gate."""
+
+    layer: LayerOut
+    tables: list[LayerTableOut]
+    #: Why rows did not cross into this layer, grouped by the rule that
+    #: excluded them. Present for the layers a gate feeds; empty elsewhere.
+    quarantine: list[QuarantineReasonOut]
+    #: The balance lines for this layer's stage, newest first.
+    reconciliation: list[ReconLineOut]
+
+
+class LayerRowsOut(BaseModel):
+    """A page of rows, already masked. There is no unmasked variant."""
+
+    schema_name: str
+    table: str
+    #: Contract order, so the identifiers come first and the audit columns
+    #: last, the same on every engine. Reading the engine's column order would
+    #: let a plane's migration history decide what a screen looks like.
+    columns: list[str]
+    rows: list[dict[str, LayerCellOut]]
+    #: How many rows matched before the page limit, so a screen can say
+    #: "25 of 294" rather than implying 25 is all there is.
+    total_rows: int
+    truncated: bool
+    masked_columns: list[str]
+    batch_id: str | None = None

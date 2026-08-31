@@ -1,4 +1,5 @@
-"""CF-V1-E16-05 — the write side of the knowledge plane, chunk-boundary half.
+"""CF-V1-E16-05 · CF-V1-E16-04 — the write side of the knowledge plane,
+chunk-boundary half.
 
     "Knowledge ingestion becomes just another feed — Inbox -> Parse -> Chunk ->
      PHI-verify -> Steward approve -> Embed + Index — sharing the lifecycle
@@ -7,16 +8,15 @@
      deletes its chunks."
     — ADR-0007
 
-SCOPE, STATED HONESTLY. E16-05's full spec eventually chunks payer-spec PDFs,
-persona uploads and scenario docs behind a document-upload Inbox with
-layout-aware PDF parsing. NOTHING TODAY NEEDS THAT: the only two real
-consumers (CF-V1-E16-07) are a CLOSED `Incident`'s narrative and a PUBLISHED
-`ObjectType.RUNBOOK`'s steps — both already structured Python objects with
-text already extracted. So "Inbox" and "Parse" are, honestly, "the object
-already IS the parsed unit" — there is no file to upload and nothing here
-parses a PDF. Generic document ingestion stays a separate, later story; the
-functions below are named for what they actually do (`chunk_incident`,
-`chunk_runbook`), not for a generic `parse()` this slab does not build.
+E16-05 SCOPED HONESTLY, THEN, AND E16-04 CLOSES THE GAP IT NAMED. E16-05's own
+first cut chunked only a CLOSED `Incident`'s narrative and a PUBLISHED
+`RUNBOOK`'s steps — both already structured Python objects with text already
+extracted, so "Inbox" and "Parse" were, honestly, "the object already IS the
+parsed unit". `chunk_document` is what E16-04 adds: a THIRD source, an
+uploaded payer companion guide or client spec, which genuinely does arrive as
+bytes that need `ports.document_parse` before anything here can chunk it. The
+parsing itself happens one layer up — see this function's own docstring for
+why — so this module's PURITY claim below is unchanged by the addition.
 
 PURE. No port call lives in this module — mirroring `core.agents
 .fingerprint_match.graph`'s own reason for staying beneath `cinqflow.ports`
@@ -28,10 +28,12 @@ B, the same shape `workers.incidents` and `workers.sla` already are.
 
 CHUNKING, SCOPED HONESTLY. Naive is correct at this size: ONE chunk for an
 incident's whole narrative (it is already one short, human-written account),
-and ONE chunk per runbook STEP — never the whole guide as one blob, because a
-reviewer or a retriever wants to cite "step 3", not the whole guide. A
-general-purpose sliding-window/token-aware splitter would be solving a
-problem — long unstructured documents — this slab does not have.
+ONE chunk per runbook STEP, and ONE chunk per document PAGE — never the whole
+guide as one blob, because a reviewer or a retriever wants to cite "step 3"
+or "page 14", not the whole thing. A general-purpose sliding-window/token-
+aware splitter would be solving a problem — long unstructured documents —
+this slab does not have; a PAGE is already the unit E16-06's own happy path
+cites by ("the companion guide p.14 defines MBR_DOB as CCYYMMDD").
 """
 
 from __future__ import annotations
@@ -219,11 +221,83 @@ def _step_citation(guide_id: str, position: int) -> CitationId:
     return CitationId(kind=CitationKind.RUNBOOK, subject=guide_id, fragment=f"step-{position}")
 
 
+def chunk_document(document: GovernedObject) -> tuple[ChunkCandidate, ...]:
+    """One chunk per PAGE, from a PUBLISHED `ObjectType.KNOWLEDGE_DOCUMENT`.
+
+    Reads `document.body["pages"]` as PLAIN DATA — a list of
+    `{"number": int, "text": str}` mappings — never `ports.document_parse
+    .ParsedDocument` itself: that type lives on the far side of
+    `cinqflow.ports` in `.importlinter`'s layer stack, and this module stays
+    beneath it exactly as its own docstring states. The API route that
+    creates a document's Draft `GovernedObject` is what converts a real
+    `ParsedDocument` into this body shape — the same place `GlossaryTerm
+    .as_governed`'s body dict is built, one layer above `core`.
+
+    A `ParsedTable` on a page is not chunked separately: `adapters.local
+    .file_document_parse` already folds a table's `as_text()` into its
+    page's `text`, so "never split a table mid-row" is a property of what
+    arrives here, not a second rule this function has to re-enforce.
+
+    Refuses (`KnowledgeSourceError`) a document that is not Published — the
+    same ADR-0007 gate `chunk_runbook` enforces for its type, and for the
+    identical reason: nothing upstream of this function enforces it for a
+    bare `GovernedObject`.
+    """
+    if document.object_type is not ObjectType.KNOWLEDGE_DOCUMENT:
+        raise KnowledgeSourceError(
+            f"{document.object_type.value}:{document.object_id} is not a document"
+        )
+    if document.lifecycle_state is not LifecycleState.PUBLISHED:
+        raise KnowledgeSourceError(
+            f"document:{document.object_id}@v{document.version} is "
+            f"{document.lifecycle_state.value} — only Published governed objects embed"
+        )
+    pages = tuple(document.body.get("pages", ()))
+    if not pages:
+        raise KnowledgeSourceError(
+            f"document:{document.object_id}@v{document.version} has no pages to chunk"
+        )
+
+    feed_id = document.body.get("feed_id")
+    domain = document.body.get("domain")
+    scope_tags = (f"feed:{feed_id}",) if feed_id else ()
+
+    candidates: list[ChunkCandidate] = []
+    for page in pages:
+        text = str(page.get("text", "")).strip()
+        if not text:
+            continue
+        number = int(page["number"])
+        citation = _page_citation(document.object_id, number)
+        candidates.append(
+            ChunkCandidate(
+                chunk_id=chunk_id_for(citation, index=0, object_version=document.version),
+                text=text,
+                citation=citation,
+                kind="document_page",
+                domain=str(domain) if domain else None,
+                feed_id=str(feed_id) if feed_id else None,
+                object_version=document.version,
+                scope_tags=scope_tags,
+            )
+        )
+    if not candidates:
+        raise KnowledgeSourceError(
+            f"document:{document.object_id}@v{document.version} has no non-empty pages to chunk"
+        )
+    return tuple(candidates)
+
+
+def _page_citation(document_id: str, page_number: int) -> CitationId:
+    return CitationId(kind=CitationKind.DOCUMENT, subject=document_id, fragment=f"p{page_number}")
+
+
 __all__ = [
     "ChunkCandidate",
     "KnowledgeIngestResult",
     "KnowledgeSourceError",
     "RefusedChunk",
+    "chunk_document",
     "chunk_id_for",
     "chunk_incident",
     "chunk_runbook",

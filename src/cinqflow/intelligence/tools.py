@@ -56,6 +56,7 @@ from cinqflow.core.tools import (
     ToolSpec,
     spec_for,
 )
+from cinqflow.intelligence.gateway import EmbeddingFailedError, LlmGateway
 from cinqflow.ports.control_tables import (
     BatchControl,
     BatchNotFoundError,
@@ -64,6 +65,8 @@ from cinqflow.ports.control_tables import (
 )
 from cinqflow.ports.control_tables import SlaCycle as SlaCycleRow
 from cinqflow.ports.metadata_db import MetadataDbPort, ObjectNotFoundError
+from cinqflow.ports.phi_scrub import PhiScrubPort
+from cinqflow.ports.vector import VectorPort
 
 #: The one sentence a caller gets for "not yours" and for "not there". Two
 #: sentences would be an oracle for which feeds and batches exist.
@@ -139,6 +142,14 @@ class ToolContext:
     whitelist: frozenset[str] = READ_ONLY_WHITELIST
     reference: ReferenceIndex = field(default_factory=platform_index)
     now: datetime = field(default_factory=lambda: datetime.now(UTC))
+    #: CF-V1-E16-04/E16-05's K2 half — `search_knowledge`'s three pins,
+    #: all optional so every EXISTING `ToolContext` construction (the other
+    #: fifteen tools, every test that builds one) stays unchanged. `None`
+    #: on any of the three degrades `search_knowledge` to an honest "not
+    #: fitted" note, the same shape `_delivery_worker`'s `None` already is.
+    vector: VectorPort | None = None
+    llm: LlmGateway | None = None
+    phi_scrub: PhiScrubPort | None = None
 
     @property
     def actor(self) -> Actor:
@@ -574,6 +585,27 @@ def _list_errors(context: ToolContext, args: dict[str, Any]) -> ToolResult:
     )
 
 
+def _list_schema_drift(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    batch_id = str(args["batch_id"])
+    findings = context.control.get_schema_drift(batch_id)
+    citation = CitationId(CitationKind.BATCH, batch_id)
+    return ToolResult(
+        tool="list_schema_drift",
+        rows=tuple(
+            {
+                "column_name": drift.column_name,
+                "classification": drift.classification,
+                "detail": drift.detail,
+                "blocked_batch": drift.blocked_batch,
+                "detected_ts": drift.detected_ts.isoformat(),
+            }
+            for drift in findings
+        ),
+        citations=(citation,) if findings else (),
+        note="" if findings else "no drift against the contract on this batch",
+    )
+
+
 def _get_quarantine_summary(context: ToolContext, args: dict[str, Any]) -> ToolResult:
     batch_id = str(args["batch_id"])
     summaries = context.control.get_quarantine_summary(batch_id)
@@ -704,6 +736,96 @@ def _lookup_reference(context: ToolContext, args: dict[str, Any]) -> ToolResult:
         rows=as_rows(found),
         citations=tuple(scored.entry.citation for scored in found),
         note="lexical match over approved reference data; the vector store is EMPTY in Wave 0",
+    )
+
+
+def _search_knowledge(context: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """CF-V1-E16-04/E16-05 — the K2 (semantic) half of hybrid retrieval,
+    over CHUNKED, PHI-verified, Published knowledge: document pages, runbook
+    steps, closed-incident narratives. `lookup_reference` stays the K1
+    (lexical) half over generated platform vocabulary — a SEPARATE tool
+    rather than one merged implementation, because the two answer different
+    questions ("what does this TERM mean" vs "has anything LIKE this
+    happened before") and a caller that wants only one should not pay for
+    an embedding call it did not ask for.
+
+    UNSCOPED BY FEED, DELIBERATELY (`ToolSpec.scoped_by_feed=False` below).
+    A failure fingerprint recurring on a SECOND feed is exactly the case
+    `search_knowledge` exists to surface — `docs/adr/ADR-0023`'s own
+    reasoning for why a recovery guide is keyed by fingerprint, never by
+    feed: "the same fingerprint can recur on any feed, so tying it to the
+    feed the first incident happened to land on would make a genuinely
+    known failure on a second feed look novel again." Scoping this search to
+    one feed would reintroduce exactly that blind spot one layer up.
+
+    THREE HONEST DEGRADES, NEVER A CRASH — this executor is reached from
+    `core.agents.fingerprint_match.graph.RETRIEVE_TOOLS`, a node
+    `tests.support.ast_checks.assert_deterministic_nodes` proves can never
+    itself reach a model (see that module's own docstring for exactly how
+    the one-hop AST walk stops at `_call`/`invoke` and never sees into this
+    module — the embed call below lives on the far side of that boundary,
+    reached only through a FIXED, read-only tool name, never a model-chosen
+    one, which is what `RETRIEVE_TOOLS` being a hardcoded tuple already
+    guarantees for the two tools this joins):
+
+      1. `vector`/`llm` not fitted, or the store is empty (true for every
+         Wave-0/1 deployment until E16-04/07 have embedded something) —
+         `retrieve` degrades to "nothing retrieved", exactly as it already
+         does today with no vector pin at all.
+      2. The query trips PHI detection — REFUSED, never masked-and-embedded,
+         the SAME discipline `workers.knowledge`'s per-chunk gate applies,
+         because `LlmGateway.embed`'s own calling contract is explicit that
+         it "scrubs NOTHING and verifies NOTHING": the caller must.
+      3. `EmbeddingFailedError` (budget exhausted, transport failure) —
+         caught HERE and degraded to an honest note, never left to reach
+         `_call`'s bare `except ToolError`, which does not name this type.
+    """
+    query = str(args["query"]).strip()
+    limit = int(args.get("limit", 5))
+    if not query:
+        return ToolResult(tool="search_knowledge")
+    if context.vector is None or context.llm is None:
+        return ToolResult(
+            tool="search_knowledge",
+            note="the vector and/or llm pin is not fitted on this deployment",
+        )
+    if context.vector.count() == 0:
+        return ToolResult(
+            tool="search_knowledge",
+            note="the knowledge plane is empty — nothing has been embedded yet",
+        )
+    if context.phi_scrub is not None:
+        findings = context.phi_scrub.detect(query)
+        if findings:
+            entity_types = ", ".join(sorted({finding.entity_type for finding in findings}))
+            return ToolResult(
+                tool="search_knowledge",
+                note=f"query refused before reaching the embedding model ({entity_types})",
+            )
+    try:
+        embeddings = context.llm.embed(
+            agent=context.agent, run_id=context.run_id, caller=context.actor, texts=(query,)
+        )
+    except EmbeddingFailedError as failure:
+        return ToolResult(tool="search_knowledge", note=f"embedding failed: {failure}")
+    if not embeddings:
+        return ToolResult(tool="search_knowledge")
+
+    hits = context.vector.retrieve(embeddings[0].vector, limit=limit, scope_filter={})
+    if not hits:
+        return ToolResult(tool="search_knowledge", note="no semantic match")
+    return ToolResult(
+        tool="search_knowledge",
+        rows=tuple(
+            {
+                "citation_id": str(hit.chunk.citation),
+                "text": hit.chunk.text,
+                "kind": hit.chunk.metadata.get("kind", ""),
+                "score": round(hit.score, 4),
+            }
+            for hit in hits
+        ),
+        citations=tuple(hit.chunk.citation for hit in hits),
     )
 
 
@@ -1211,11 +1333,13 @@ _RUNNERS = {
     "get_drop_ledger": _get_drop_ledger,
     "list_errors": _list_errors,
     "get_error_by_hash": _get_error_by_hash,
+    "list_schema_drift": _list_schema_drift,
     "get_quarantine_summary": _get_quarantine_summary,
     "get_input_registry": _get_input_registry,
     "list_batch_inputs": _list_batch_inputs,
     "get_file_by_fingerprint": _get_file_by_fingerprint,
     "lookup_reference": _lookup_reference,
+    "search_knowledge": _search_knowledge,
     "get_arrival_board": _get_arrival_board,
     "get_sla_history": _get_sla_history,
     "get_incident": _get_incident,

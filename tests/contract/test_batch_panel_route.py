@@ -39,7 +39,7 @@ def _as(subject: str) -> dict[str, str]:
     return {"authorization": f"Bearer {subject}"}
 
 
-@pytest.mark.parametrize("panel", ["stages", "inputs", "errors", "quarantine", "recon"])
+@pytest.mark.parametrize("panel", ["stages", "inputs", "errors", "quarantine", "recon", "drift"])
 def test_every_panel_renders_for_a_real_batch(client: TestClient, panel: str) -> None:
     response = client.get(f"/api/batches/{BATCH_ID}/{panel}", headers=_as(ENGINEER))
     assert response.status_code == 200

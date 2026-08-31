@@ -431,6 +431,29 @@ export interface Delivery {
   next_step: string;
 }
 
+/** CF-V1-E16-04/E16-06. One page of an uploaded document — a
+ *  `document:<id>#p<n>` citation's fragment. */
+export interface DocumentPage {
+  number: number;
+  text: string;
+  table_count: number;
+}
+
+/** CF-V1-E16-04/E16-06. What `POST /api/feeds/{feedId}/documents` returns,
+ *  and `document:<id>`'s citation destination reads back. */
+export interface Document {
+  document_id: string;
+  filename: string;
+  media_type: string;
+  feed_id: string | null;
+  domain: string | null;
+  page_count: number;
+  pages: DocumentPage[];
+  version: number;
+  lifecycle_state: string;
+  status: string;
+}
+
 /** Whether the delivery source can be reached at all. */
 export interface DeliverySource {
   reachable: boolean;
@@ -580,4 +603,306 @@ export interface Certification {
   derived_ts: string | null;
   checks: CertificationCheck[];
   variances: Variance[];
+}
+
+// ── the medallion layers (W3-01) ────────────────────────────────────────────
+
+/** One cell, and whether what you are reading is the whole truth.
+ *
+ *  There is deliberately no `original` field — the unmasked value never leaves
+ *  the adapter, so no amount of client code can reveal it. `masked` is decided
+ *  by the server from the schema contract's `is_phi` flag; the browser only
+ *  renders the decision. */
+export interface LayerCell {
+  value: string | null;
+  masked: boolean;
+  reason: string;
+}
+
+/** A column as the CONTRACT declares it and as the ENGINE actually has it.
+ *  Both, never merged: `declared_type` is portable (`timestamp_utc`),
+ *  `engine_type` is what the plane reports (`timestamptz`). A difference here
+ *  is a drift, and it is the same comparison the conformance kit makes. */
+export interface LayerColumn {
+  name: string;
+  declared_type: string;
+  engine_type: string;
+  nullable: boolean;
+  is_phi: boolean;
+  present_on_plane: boolean;
+}
+
+/** `row_count: null` means the table is NOT on the plane — distinct from 0,
+ *  which means it is there and empty. The screen renders them differently
+ *  because a missing migration is not an empty table. */
+export interface LayerTable {
+  schema_name: string;
+  name: string;
+  comment: string;
+  append_only: boolean;
+  row_count: number | null;
+  phi_column_count: number;
+  primary_key: string[];
+  columns: LayerColumn[];
+  rows_route: string;
+}
+
+/** One position on the medallion spine, built or not.
+ *
+ *  `status` is one of `built` · `provisioned_empty` · `not_built`, and the
+ *  three are rendered as three different things. `row_count` is null rather
+ *  than 0 whenever nothing is on the plane. */
+export interface Layer {
+  layer: string;
+  label: string;
+  purpose: string;
+  entry_gate: string;
+  status: "built" | "provisioned_empty" | "not_built";
+  schema_name: string;
+  wave: number;
+  absence_reason: string;
+  row_count: number | null;
+  table_count: number;
+  route: string;
+}
+
+/** Why rows did not cross a gate, grouped by the rule that excluded them. */
+export interface QuarantineReason {
+  rule_id: string;
+  reason: string;
+  stage: string;
+  row_count: number;
+}
+
+/** One batch's balance at one stage. `balanced` is the LEDGER's verdict;
+ *  `unattributed` is derived and shown beside it, so a green tick with
+ *  unexplained rows behind it is visible rather than trusted. */
+export interface ReconLine {
+  batch_id: string;
+  feed_id: string;
+  stage: string;
+  records_in: number;
+  records_out: number;
+  quarantined: number;
+  attributed_drops: number;
+  balanced: boolean;
+  unattributed: number;
+  recorded_ts: string;
+  route: string;
+}
+
+export interface LayerDetail {
+  layer: Layer;
+  tables: LayerTable[];
+  quarantine: QuarantineReason[];
+  reconciliation: ReconLine[];
+}
+
+export interface LayerRows {
+  schema_name: string;
+  table: string;
+  columns: string[];
+  rows: Record<string, LayerCell>[];
+  total_rows: number;
+  truncated: boolean;
+  masked_columns: string[];
+  batch_id: string | null;
+}
+
+// ── the governed action surface · CF-V2-E12-03 / CF-V2-E8-04 ────────────────
+
+/** What one offered action would do, in the operator's own language, before
+ *  they confirm it. `requires_approval_identifier` is computed from the
+ *  environment the server is actually running in — never guessed here. */
+export interface ActionPreview {
+  action: string;
+  target: string;
+  what_will_happen: string;
+  scope_records: number;
+  scope_stages: string[];
+  estimated_minutes: number;
+  requires_approval_identifier: boolean;
+  explanation: string;
+}
+
+/** Exactly the actions `authorize` would permit right now — a console that
+ *  draws a button this does not offer is a console this story exists to
+ *  replace. `environment` decides whether the approval-identifier field is
+ *  shown as required. */
+export interface ActionSurface {
+  target: string;
+  offered: string[];
+  previews: ActionPreview[];
+  environment: string;
+}
+
+/** 'requested' is not 'succeeded' — `is_complete` stays false until
+ *  something re-read the control tables and observed the outcome. */
+export interface ActionRecord {
+  record_id: string;
+  action: string;
+  target: string;
+  actor_subject: string;
+  requested_ts: string;
+  phase: string;
+  status: StatusWord;
+  is_complete: boolean;
+  reason: string;
+  approval_identifier: string;
+  verified_ts: string | null;
+  outcome: string;
+}
+
+// ── the technical review queue · CF-V1-E7-04 ────────────────────────────────
+
+/** One rule the authoring agent could not draft with confidence — the BA's
+ *  own sentence, the machine's reading of it, and why the two are being
+ *  shown side by side rather than published as-is. */
+export interface TechnicalReview {
+  review_id: string;
+  feed_id: string;
+  stated: string;
+  machine_reading: string;
+  reason: string;
+  explained_to_author: string;
+  confidence: number;
+  state: string;
+  status: StatusWord;
+  created_ts: string | null;
+  evidence: Record<string, unknown>;
+}
+
+/** `unrouted` must always be empty — served rather than left to CI, because
+ *  a control only CI can see is a control nobody maintains. */
+export interface ReviewQueue {
+  reviews: TechnicalReview[];
+  open_count: number;
+  unrouted: string[];
+}
+
+// ── the approval packet · CF-V1-E11-02 ───────────────────────────────────────
+
+/** One object a change would reach, and the path that found it — so a
+ *  reviewer can check the reasoning, not just trust a count. */
+export interface Touched {
+  object_type: string;
+  object_id: string;
+  version: number;
+  lifecycle_state: string;
+  via: string;
+}
+
+/** A declared consumer lineage could not resolve. Shown, never hidden — a
+ *  blank where a downstream item should be is how rubber-stamping hides. */
+export interface UnknownImpact {
+  name: string;
+  reason: string;
+}
+
+/** The change, both sides of its impact, and the evidence — every field
+ *  COMPUTED, never the author's recollection of what they touched. */
+export interface ImpactPacket {
+  object_type: string;
+  object_id: string;
+  version: number;
+  lifecycle_state: string;
+  author_subject: string;
+  diff: string[];
+  engineering_impact: Touched[];
+  business_impact: Touched[];
+  unknowns: UnknownImpact[];
+  evidence: Record<string, unknown>;
+  blocks_production: boolean;
+  is_empty: boolean;
+}
+
+// ── the work queue · CF-V1-E11-01 ────────────────────────────────────────────
+
+/** Any governed object, as the lifecycle sees it — one shape for all ten
+ *  types, because there is one state machine. */
+export interface Governed {
+  object_type: string;
+  object_id: string;
+  version: number;
+  lifecycle_state: string;
+  status: StatusWord;
+  created_by_subject: string;
+  created_by_name: string;
+  created_ts: string;
+  approved_by_subject: string | null;
+  approved_by_name: string | null;
+  approved_ts: string | null;
+  body: Record<string, unknown>;
+  warnings: string[];
+}
+
+export interface WorkQueue {
+  awaiting_my_review: Governed[];
+  my_submissions: Governed[];
+}
+
+// ── the reliability score · CF-V2-E12-05 ─────────────────────────────────────
+
+/** One signal's contribution — `measured` is the difference between "scored
+ *  zero" and "not measurable yet", which a screen must never collapse. */
+export interface ReliabilityComponent {
+  signal: string;
+  value: number;
+  weight: number;
+  evidence: string;
+  sample_size: number;
+  measured: boolean;
+}
+
+// ── rule policy configuration · CF-V1-E7-03 ──────────────────────────────────
+
+/** Where one rule runs, what happens on failure, and when — CF-V1-E7-03. */
+export interface RulePolicy {
+  rule_id: string;
+  layer: string;
+  on_failure: string;
+  threshold_percent: string | null;
+  execution_order: number;
+  effective_from: string | null;
+  effective_to: string | null;
+  alert_recipient: string;
+  owner: string;
+  rationale: string;
+  describes: string;
+}
+
+export interface RulePolicySet {
+  feed_id: string;
+  version: number;
+  lifecycle_state: string;
+  policies: RulePolicy[];
+  is_approvable: boolean;
+}
+
+export interface Reliability {
+  feed_id: string;
+  as_of: string;
+  overall: number;
+  band: string;
+  confidence: number;
+  components: ReliabilityComponent[];
+  citation: string;
+}
+
+// ── alerts that explain themselves · CF-V2-E12-05 ────────────────────────────
+
+/** One grouped SLA breach, explained — or honestly not. `cause_citations` is
+ *  empty exactly when `manual_path` is true: the two can never disagree. */
+export interface EnrichedAlert {
+  group_key: string;
+  feed_ids: string[];
+  severity: string;
+  facts: string[];
+  cause: string;
+  citations: string[];
+  cause_citations: string[];
+  manual_path: boolean;
+  model_called: boolean;
+  refusals: string[];
+  cost_usd: string;
 }

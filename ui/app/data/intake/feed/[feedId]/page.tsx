@@ -1,10 +1,11 @@
 import { Fragment } from "react";
 import Link from "next/link";
-import { CitationChip } from "@/components/Cited";
+import { Cited, CitationChip } from "@/components/Cited";
 import { RefusalNotice } from "@/components/Refusal";
 import { Status } from "@/components/Status";
+import { MetricTile } from "@/components/ui/MetricTile";
 import { attempt, isRefused } from "@/lib/api";
-import type { Feed, FeedProfile, FeedSuspension } from "@/lib/types";
+import type { Feed, FeedProfile, FeedSuspension, Reliability } from "@/lib/types";
 
 /**
  * One feed. The destination a `feed:<id>@v<n>` citation opens.
@@ -41,6 +42,14 @@ export default async function FeedPage({
   // sitting in the database.
   const profiles = await attempt<FeedProfile[]>(
     `/api/feeds/${encodeURIComponent(feedId)}/profiles`,
+  );
+
+  // CF-V2-E12-05. "Can I trust this feed?" as a number with its parts — an
+  // UNMEASURED signal lowers the CONFIDENCE, never the score itself, so a
+  // 94 built from four of six signals never renders the same as a 94 built
+  // from all six.
+  const reliability = await attempt<Reliability>(
+    `/api/feeds/${encodeURIComponent(feedId)}/reliability`,
   );
 
   return (
@@ -182,6 +191,8 @@ export default async function FeedPage({
         </div>
       ) : null}
 
+      {!isRefused(reliability) ? <ReliabilityCard reliability={reliability} /> : null}
+
       <div className="card">
         <strong>Recent deliveries</strong>
         {isRefused(profiles) || profiles.length === 0 ? (
@@ -293,5 +304,46 @@ export default async function FeedPage({
         </Link>
       </div>
     </>
+  );
+}
+
+/**
+ * CF-V2-E12-05 — "can I trust this feed?", decomposable on click. Every
+ * component is a control-plane query, never a curated number, and an
+ * UNMEASURED signal (identity, until Wave 3) lowers `confidence` rather than
+ * pretending to be a zero — the two must never collapse into one figure.
+ */
+function ReliabilityCard({ reliability }: { reliability: Reliability }) {
+  return (
+    <div className="card">
+      <strong>Reliability</strong>
+      <div className="grid">
+        <MetricTile
+          label="Overall"
+          value={`${Math.round(reliability.overall)} · ${reliability.band}`}
+          citationId={reliability.citation}
+          hint={`as of ${reliability.as_of} · ${Math.round(reliability.confidence * 100)}% confidence`}
+        />
+      </div>
+      <ul className="stack" style={{ marginTop: "var(--s-3)" }}>
+        {reliability.components.map((component) => (
+          <li key={component.signal}>
+            <span className="mono">{component.signal.replace(/_/g, " ")}</span> —{" "}
+            {component.measured ? (
+              <Cited
+                value={`${Math.round(component.value)} (weight ${component.weight})`}
+                citationId={reliability.citation}
+                title={component.evidence}
+              />
+            ) : (
+              <span className="note">not measurable yet — {component.evidence}</span>
+            )}
+            {component.measured && component.sample_size > 0 ? (
+              <span className="note"> · {component.sample_size.toLocaleString()} sampled</span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

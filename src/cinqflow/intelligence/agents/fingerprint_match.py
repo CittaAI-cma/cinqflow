@@ -349,10 +349,24 @@ class FingerprintMatchAgent:
         if reference is not None:
             citations.extend(reference.citations)
 
+        # CF-V1-E16-04/05. Folded into context the SAME way `reference_hits`
+        # is — unconditionally, on BOTH branches — and NOT counted toward
+        # `has_grounding` for the identical reason the paragraph above states
+        # for reference hits: a semantic match can, once the knowledge plane
+        # has grown, find SOMETHING for almost every incident, and only a
+        # genuine open-elsewhere SIBLING earns the stronger "this is already
+        # happening" sentence `narrate` writes. A document page or a runbook
+        # step still grounds `draft`'s evidence either way.
+        knowledge = self._call("search_knowledge", {"query": query, "limit": 3}) if query else None
+        knowledge_hits = knowledge.rows if knowledge is not None else ()
+        if knowledge is not None:
+            citations.extend(knowledge.citations)
+
         has_grounding = bool(near_miss)
         return {
             "near_miss_incidents": tuple(near_miss),
             "reference_hits": tuple(reference_hits),
+            "knowledge_hits": tuple(knowledge_hits),
             "retrieved_citations": tuple(citations),
             STATE_HAS_GROUNDING: has_grounding,
             STATE_NOVEL: not has_grounding,
@@ -512,6 +526,8 @@ def _pack_retrieval(state: dict[str, Any]) -> str:
         )
     for row in state.get("reference_hits", ()):
         lines.append(f"[{row.get('citation_id')}] {row.get('term')}: {row.get('definition')}")
+    for row in state.get("knowledge_hits", ()):
+        lines.append(f"[{row.get('citation_id')}] {row.get('kind')}: {row.get('text')}")
     return "\n".join(lines) or "no precedent retrieved — this failure is genuinely novel"
 
 

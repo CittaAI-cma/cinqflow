@@ -12,17 +12,23 @@ export default async function BatchPage({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ panel?: string; drop?: string }>;
+  searchParams: Promise<{ panel?: string; drop?: string; outcome?: string; headline?: string }>;
 }) {
   const { batchId } = await params;
-  const { panel, drop } = await searchParams;
+  const { panel, drop, outcome, headline } = await searchParams;
 
   return (
     <>
       <p className="note">
         <Link href="/operations/control">Control Operations</Link> / batch {batchId}
       </p>
-      <BatchPanels batchId={batchId} panel={asPanel(panel)} drop={drop} />
+      <BatchPanels
+        batchId={batchId}
+        panel={asPanel(panel)}
+        drop={drop}
+        outcome={outcome}
+        headline={headline}
+      />
     </>
   );
 }

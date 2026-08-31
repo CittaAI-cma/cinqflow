@@ -22,11 +22,14 @@ from typing import Any
 
 from cinqflow.adapters.mock.agent_runtime import InProcAgentRuntime
 from cinqflow.adapters.mock.control_tables import MemStoreControlTables
+from cinqflow.adapters.mock.layers import MemLayerReader
 from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
 from cinqflow.core import mapping as mapping_core
+from cinqflow.core.agents.alert_enrichment.graph import AGENT as ALERT_ENRICHMENT_AGENT_NAME
+from cinqflow.core.agents.alert_enrichment.prompts import TEMPLATES as ALERT_ENRICHMENT_TEMPLATES
 from cinqflow.core.agents.fingerprint_match.graph import AGENT as FINGERPRINT_MATCH_AGENT_NAME
 from cinqflow.core.agents.fingerprint_match.prompts import TEMPLATES as FINGERPRINT_TEMPLATES
 from cinqflow.core.agents.mapping_suggestion.graph import (
@@ -41,6 +44,7 @@ from cinqflow.core.agents.phi_detection.prompts import TEMPLATES as PHI_TEMPLATE
 from cinqflow.core.agents.pipeline_insight.prompts import TEMPLATES
 from cinqflow.core.agents.schema_inference.prompts import TEMPLATES as SCHEMA_TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
+from cinqflow.core.layers import QuarantineReason, ReconLine
 from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState
 from cinqflow.core.model.identity import Principal, Scopes
 from cinqflow.core.model.vocabulary import (
@@ -57,6 +61,7 @@ from cinqflow.core.registry import contract as contract_registry
 from cinqflow.core.registry.contract import ContractColumn, DqRule, SchemaContract, Severity
 from cinqflow.core.registry.feed import FeedRecord
 from cinqflow.core.schema_spec import TypeName
+from cinqflow.intelligence.agents.alert_enrichment import AlertEnrichmentAgent
 from cinqflow.intelligence.agents.fingerprint_match import FingerprintMatchAgent
 from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
@@ -197,6 +202,7 @@ def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
         *PHI_TEMPLATES,
         *FINGERPRINT_TEMPLATES,
         *MAPPING_TEMPLATES,
+        *ALERT_ENRICHMENT_TEMPLATES,
     ):
         store.save(_published(template.as_governed(author=AUTHOR)))
 
@@ -676,4 +682,154 @@ def scripted(prompt: str, task_class: Any) -> str:
                 "answer quality is not claimed here — Lane 1 proves machinery, not quality"
             ],
         }
+    )
+
+
+# ── the medallion layers on the dev socket (W3-01) ───────────────────────────
+#: Six rows, and they are deliberately awkward rather than tidy.
+#:
+#: A seed of six clean members would make the layer screen look like a working
+#: platform and demonstrate nothing. These carry the cases the screen exists to
+#: show: a null first name that DQ-002 excludes, a `19360201`-shaped date the
+#: profiler refuses to type, a null gender, and one row present in Bronze that
+#: never reaches Silver Raw — so the 6-into-4 drop on screen is a real drop
+#: with a named rule behind it, not a rounding artefact.
+#:
+#: Every value is invented. There is no PHI here, and the reader masks it
+#: anyway — see `adapters/mock/layers.py` for why that is the point.
+_SEED_ROWS: dict[str, list[dict[str, Any]]] = {
+    "bronze.members_raw": [
+        {
+            "bronze_id": f"0000000{n}-0000-4000-8000-00000000000{n}",
+            "feed_id": FEED_ID,
+            "row_number": n,
+            "raw_row": raw,
+            "source_system": "FIDELIS",
+            "ingestion_ts": "2026-06-01T06:00:00+00:00",
+            "batch_id": BATCH_ID,
+            "record_hash": f"{n:032x}",
+            "created_ts": "2026-06-01T06:00:00+00:00",
+        }
+        for n, raw in enumerate(
+            (
+                {"MemberID": "M0001", "First_Name": "Ada", "Last_Name": "Byron", "DOB": "19360201"},
+                {"MemberID": "M0002", "First_Name": "Rey", "Last_Name": "Nunez", "DOB": "19510714"},
+                {"MemberID": "M0003", "First_Name": "", "Last_Name": "Okafor", "DOB": "19480223"},
+                {"MemberID": "M0004", "First_Name": "Jun", "Last_Name": "Park", "DOB": "17530101"},
+                {"MemberID": "M0005", "First_Name": "Ines", "Last_Name": "Roca", "DOB": "19620930"},
+                {"MemberID": "M0006", "First_Name": "Tam", "Last_Name": "Vo", "DOB": "19771105"},
+            ),
+            start=1,
+        )
+    ],
+    "silver_raw.members": [
+        {
+            "member_row_id": f"1000000{n}-0000-4000-8000-00000000000{n}",
+            "feed_id": FEED_ID,
+            "source_member_id": member,
+            "first_name": first,
+            "last_name": last,
+            "date_of_birth": dob,
+            "gender": gender,
+            "line_of_business": lob,
+            "effective_date": "2026-06-01",
+            "end_date": None,
+            "is_active": True,
+            "source_system": "FIDELIS",
+            "ingestion_ts": "2026-06-01T06:00:00+00:00",
+            "batch_id": BATCH_ID,
+            "record_hash": f"{n:032x}",
+            "created_ts": "2026-06-01T06:00:00+00:00",
+        }
+        for n, (member, first, last, dob, gender, lob) in enumerate(
+            (
+                ("M0001", "Ada", "Byron", "1936-02-01", "F", "MEDICARE"),
+                ("M0002", "Rey", "Nunez", "1951-07-14", "M", "MEDICAID"),
+                ("M0005", "Ines", "Roca", "1962-09-30", None, "MEDICAID"),
+                ("M0006", "Tam", "Vo", "1977-11-05", "F", "MEDICARE"),
+            ),
+            start=1,
+        )
+    ],
+    # Landing holds the arrival EVENT, not the file — the file is on disk in
+    # the real landing zone this dev server already fits.
+    "landing_ctl.landing_event": [],
+}
+
+_SEED_QUARANTINE: tuple[QuarantineReason, ...] = (
+    QuarantineReason(
+        rule_id="DQ-002",
+        reason="Member First Name Not Null",
+        stage="silver_raw",
+        row_count=1,
+    ),
+    QuarantineReason(
+        rule_id="CAST-date_of_birth",
+        reason=(
+            "date_of_birth: '17530101' is outside the plausible range 1900-2100 — legacy type "
+            "debt, attributed rather than loaded"
+        ),
+        stage="silver_raw",
+        row_count=1,
+    ),
+)
+
+_SEED_RECON: tuple[ReconLine, ...] = (
+    ReconLine(
+        batch_id=BATCH_ID,
+        feed_id=FEED_ID,
+        stage="silver_raw",
+        records_in=6,
+        records_out=4,
+        quarantined=1,
+        attributed_drops=1,
+        balanced=True,
+        recorded_ts="2026-06-01T06:02:00+00:00",
+    ),
+)
+
+
+def alert_enrichment_agent_for(
+    control: ControlTablesPort, metadata: MetadataDbPort
+) -> AlertEnrichmentAgent:
+    """CF-V2-E12-05's real wiring — the SAME `LlmGateway` shape `fingerprint_
+    match_agent_for` builds above, never a second parallel way of assembling
+    one.
+
+    ONE AGENT, not one per caller, matching `fingerprint_match_agent_for`
+    rather than `agent_for`: the caller is a GET route reading the current
+    SLA breach set (`workers.sla.current_alerts`), which has no principal in
+    hand either — the alert exists whether or not anybody is looking at it
+    right now.
+    """
+    return AlertEnrichmentAgent(
+        llm=LlmGateway(
+            llm=ScriptedLlm(responder=scripted),
+            phi_scrub=PatternPhiScrub(),
+            metadata_db=metadata,
+            observability=NoopObservability(),
+            budget=BUDGET,
+            routing=Routing(small="mock-small", large="mock-large"),
+        ),
+        tools=ToolContext(
+            principal=PLATFORM_PRINCIPAL,
+            control=control,
+            metadata=metadata,
+            agent=ALERT_ENRICHMENT_AGENT_NAME,
+        ),
+        runtime=InProcAgentRuntime(),
+    )
+
+
+def layer_reader_for() -> MemLayerReader:
+    """The dev socket's medallion plane.
+
+    `silver_ods` is NOT in `absent`, and it does not need to be: the contract
+    declares no tables for it, so it renders as the provisioned-empty layer it
+    actually is. Listing it would be inventing an absence.
+    """
+    return MemLayerReader(
+        rows=_SEED_ROWS,
+        quarantine=_SEED_QUARANTINE,
+        recon=_SEED_RECON,
     )

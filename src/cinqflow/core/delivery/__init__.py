@@ -56,12 +56,14 @@ from cinqflow.core.model.files import FileRef
 from cinqflow.core.model.vocabulary import LandingFolder
 
 __all__ = [
+    "DEFAULT_RETRY_POLICY",
     "DELIVERED_BY_UPLOAD",
     "NO_MANIFEST",
     "ChecksumMismatchError",
     "Delivery",
     "DeliveryError",
     "Manifest",
+    "RetryPolicy",
     "UnsafeFilenameError",
     "business_date_of",
     "fingerprint_of",
@@ -304,3 +306,49 @@ class Delivery:
         kind: it IS a file, and `CitationKind.FILE` has meant this since
         Wave 0."""
         return f"file:{self.fingerprint}"
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """How many times, and how far apart. CF-V1-E8-09's exception path.
+
+    `retry_etiquette` names two DIFFERENT disciplines and both live here so
+    neither is confused for the other: `deliver()` never re-lands content it
+    already landed (`AlreadyDeliveredError`, a REFUSAL) — this is the other
+    half, for a PULL connector's `fetch()`, which fails because a remote is
+    slow or briefly down and deserves a bounded number of tries, spaced apart,
+    before the platform gives up on one file and says so.
+
+    PURE ARITHMETIC ON PURPOSE. `delay_seconds` computes a schedule; it does
+    not sleep. Sleeping needs a clock, and a clock is I/O — `workers.delivery`
+    holds the policy and calls `time.sleep`, which is what keeps this
+    testable in milliseconds and keeps `core/` importing nothing that touches
+    a clock.
+    """
+
+    max_attempts: int = 3
+    base_seconds: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise DeliveryError("a policy that never tries once is not a retry policy")
+        if self.base_seconds < 0:
+            raise DeliveryError("a negative backoff is not a delay, it is a time machine")
+
+    def delay_seconds(self, attempt: int) -> float:
+        """Exponential backoff before the given attempt (1-indexed).
+
+        Attempt 1 needs no delay — it is the first try, not a retry. Attempt 2
+        waits `base_seconds`, attempt 3 waits `base_seconds * 2`, and so on:
+        a transient blip gets a quick second try, and a source that is
+        genuinely down stops being hammered every second.
+        """
+        if attempt <= 1:
+            return 0.0
+        return self.base_seconds * float(2 ** (attempt - 2))
+
+
+#: The etiquette every poller uses unless a profile says otherwise: three
+#: tries, doubling from one second, so one flaky read costs at most three
+#: seconds before the file is reported as failed rather than silently missing.
+DEFAULT_RETRY_POLICY = RetryPolicy()

@@ -97,6 +97,18 @@ DESTINATIONS: tuple[Destination, ...] = (
         prominent_for=frozenset({Role.READ_ONLY}),
     ),
     Destination(
+        key="layers",
+        label="Medallion Layers",
+        route="/data/layers",
+        group=NavGroup.DATA,
+        answers="Which layers exist, what is in each one, and which are not built yet.",
+        # W3-01. Wave 0 rather than a later wave, and that is the honest number:
+        # three of the six layers ARE built and the screen's other job is to say
+        # so about the other three. Dating it to Wave 3 would hide the map of
+        # the programme until the programme had finished.
+        prominent_for=frozenset({Role.PLATFORM_ENGINEER, Role.DATA_STEWARD}),
+    ),
+    Destination(
         key="mapping",
         label="Mapping & Rules",
         route="/data/mapping",

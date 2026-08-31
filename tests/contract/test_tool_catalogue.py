@@ -198,8 +198,13 @@ def test_a_tool_declaring_a_data_layer_read_cannot_be_constructed() -> None:
 # ── the catalogue, as a surface ──────────────────────────────────────────────
 
 
-def test_there_are_exactly_twenty_three_certified_tools() -> None:
-    assert len(CATALOGUE) == 23
+def test_there_are_exactly_twenty_five_certified_tools() -> None:
+    """The twenty-fourth is `search_knowledge`, added by CF-V1-E16-04/05 —
+    the semantic (K2) half of hybrid retrieval, joining `lookup_reference`'s
+    lexical (K1) half. The twenty-fifth is `list_schema_drift`, CF-V2-E5-04's
+    read side — the raw ledger under the proposals and reprocess candidates
+    `workers.drift` already writes for the ACTIONABLE findings."""
+    assert len(CATALOGUE) == 25
     assert set(CATALOGUE) == set(READ_ONLY_WHITELIST)
 
 

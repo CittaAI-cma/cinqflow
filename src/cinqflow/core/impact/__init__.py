@@ -66,6 +66,11 @@ REFERENCES: dict[ObjectType, tuple[ReferenceSpec, ...]] = {
     ObjectType.RELEASE: (),
     ObjectType.PROMPT: (),
     ObjectType.EXECUTION_PLANE_CONTRACT: (),
+    #: `feed_id` is OPTIONAL on a document's body (E16-04's client specs are
+    #: not always feed-scoped; E16-06's wizard uploads always are) — the same
+    #: shape RUNBOOK's own optional `feed_id` already has, and the reference
+    #: resolver already treats a missing key as no edge, not an Unknown.
+    ObjectType.KNOWLEDGE_DOCUMENT: (ReferenceSpec("feed_id", ObjectType.FEED),),
 }
 
 #: Body key naming the downstream business consumers a change would reach —

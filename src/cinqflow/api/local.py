@@ -40,14 +40,22 @@ import argparse
 from fastapi import FastAPI
 
 from cinqflow.adapters.local.localfs_storage import LocalFsStorage
+from cinqflow.adapters.local.pg_catalog import PostgresCatalog
 from cinqflow.adapters.local.pg_control import Connection, connect
 from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
+from cinqflow.adapters.local.pg_layers import PostgresLayerReader
 from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
-from cinqflow.adapters.local.upload_connector import UploadConnector
+from cinqflow.adapters.local.pg_sql_query import PostgresSqlQuery
 from cinqflow.adapters.mock.authn import StaticAuthn
 from cinqflow.api import create_app
 from cinqflow.installer import profile as profile_module
-from cinqflow.intelligence.demo import BUDGET, agent_for, schema_inference_for
+from cinqflow.installer.connectors import connectors_from
+from cinqflow.intelligence.demo import (
+    BUDGET,
+    agent_for,
+    alert_enrichment_agent_for,
+    schema_inference_for,
+)
 
 DEFAULT_PROFILE = "profiles/local.yaml"
 #: The same default `cinqflow ingest`/`cinqflow install` assume — see
@@ -82,15 +90,28 @@ def build(profile_path: str = DEFAULT_PROFILE, landing_root: str | None = None) 
     control = PostgresControlTables(connection)
     root = landing_root or str(profile.pins.get("storage", {}).get("root") or DEFAULT_LANDING_ROOT)
     storage = LocalFsStorage(root=root)
+    # W3-01. The medallion screen reads the REAL layers here: `catalog` answers
+    # what the plane has, `sql_query` answers how much and which rows, and the
+    # reader masks every column the schema contract flags before a row leaves
+    # the adapter. Both pins share the one connection above, which is what
+    # this rung is: a single developer's local server.
+    layer_reader = PostgresLayerReader(
+        sql=PostgresSqlQuery(connection), catalog=PostgresCatalog(connection)
+    )
 
     app = create_app(
         authn=StaticAuthn(),
         metadata_db=metadata,
         control_tables=control,
         storage=storage,
-        connector=UploadConnector(storage),
+        # CF-V1-E8-09. Every route the profile fits — `connector.routes` —
+        # wired with zero code per source: a new SFTP feed is a registry row
+        # naming an `endpoint_ref` and one more entry under `routes` here.
+        connectors=connectors_from(profile, storage=storage),
+        layer_reader=layer_reader,
         agent_factory=agent_for,
         schema_inference_factory=schema_inference_for,
+        alert_enrichment_agent=alert_enrichment_agent_for(control, metadata),
         budget=BUDGET,
         profile=profile,
     )

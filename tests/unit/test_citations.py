@@ -124,6 +124,7 @@ def test_every_kind_has_a_route_so_no_citation_can_be_a_dead_end() -> None:
         CitationKind.RULE: "rule:DQ-001",
         CitationKind.RUNBOOK: "runbook:RB-1",
         CitationKind.TERM: "term:a-term",
+        CitationKind.DOCUMENT: "document:doc-abc123#p14",
         CitationKind.PROFILE: "profile:sha256-abc",
     }
     assert set(samples) == set(CitationKind), "a kind with no sample is a kind with no test"

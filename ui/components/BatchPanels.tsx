@@ -1,11 +1,12 @@
+import { ActionSurfacePanel } from "@/components/ActionSurfacePanel";
 import { CitationChip } from "@/components/Cited";
 import { RefusalNotice } from "@/components/Refusal";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PanelTabs } from "@/components/ui/PanelTabs";
 import { attempt, isRefused } from "@/lib/api";
-import type { Rows } from "@/lib/types";
+import type { ActionSurface, Rows } from "@/lib/types";
 
-export const PANELS = ["stages", "inputs", "errors", "quarantine", "recon"] as const;
+export const PANELS = ["stages", "inputs", "errors", "quarantine", "recon", "drift"] as const;
 export type Panel = (typeof PANELS)[number];
 
 export function asPanel(value: string | undefined): Panel {
@@ -26,12 +27,22 @@ export async function BatchPanels({
   batchId,
   panel,
   drop,
+  outcome,
+  headline,
 }: {
   batchId: string;
   panel: Panel;
   drop?: string;
+  /** CF-V2-E12-03. Set only right after an action's form redirects back —
+   *  the same "outcome in the URL, rendered once" shape `deliverFile` and
+   *  `incidents/actions.ts` already use, so a refresh does not repost. */
+  outcome?: string;
+  headline?: string;
 }) {
-  const result = await attempt<Rows>(`/api/batches/${encodeURIComponent(batchId)}/${panel}`);
+  const [result, surface] = await Promise.all([
+    attempt<Rows>(`/api/batches/${encodeURIComponent(batchId)}/${panel}`),
+    attempt<ActionSurface>(`/api/operations/batches/${encodeURIComponent(batchId)}/actions`),
+  ]);
 
   return (
     <>
@@ -39,6 +50,13 @@ export async function BatchPanels({
       <p className="lede">
         <CitationChip citationId={`batch:${batchId}`} />
       </p>
+
+      {outcome ? (
+        <div className="card outcome" data-outcome={outcome}>
+          <strong className="outcome-word">{outcome}</strong>
+          <p>{headline}</p>
+        </div>
+      ) : null}
 
       <PanelTabs
         panels={PANELS}
@@ -113,13 +131,14 @@ export async function BatchPanels({
         </div>
       )}
 
-      <div className="card">
-        <strong>This drawer has no write buttons</strong>
-        <p className="note">
-          Retry, pause and reprocess are Wave 1 (CF-V1-E16-06), where they arrive as proposals a
-          human approves. A button that does not exist here is also refused at the server.
-        </p>
-      </div>
+      {isRefused(surface) ? (
+        <div className="card">
+          <strong>The action surface could not be read</strong>
+          <RefusalNotice refusal={surface} />
+        </div>
+      ) : (
+        <ActionSurfacePanel batchId={batchId} panel={panel} surface={surface} />
+      )}
     </>
   );
 }

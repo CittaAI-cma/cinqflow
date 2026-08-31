@@ -81,6 +81,7 @@ APPROVAL_ROUTING: dict[ObjectType, Route] = {
     ObjectType.DQ_RULE: _STEWARDED,
     ObjectType.GLOSSARY_TERM: _STEWARDED,
     ObjectType.RUNBOOK: _STEWARDED,
+    ObjectType.KNOWLEDGE_DOCUMENT: _STEWARDED,
     ObjectType.RELEASE: Route(
         reviewers=frozenset({Role.PLATFORM_ENGINEER, Role.BUSINESS_APPROVER}),
         publishers=frozenset({Role.PLATFORM_ENGINEER, Role.BUSINESS_APPROVER}),

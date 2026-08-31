@@ -120,6 +120,25 @@ class SlaWorker:
         return raised
 
 
+def current_alerts(
+    control: ControlTablesPort, *, on: date, now: datetime
+) -> tuple[sla_core.SlaAlert, ...]:
+    """Everything currently outstanding for `on`, computed and returned —
+    written nowhere, notifying nobody.
+
+    CF-V2-E12-05's enrichment reads this, not `sweep()`: a screen asking "what
+    is breached right now" is a VIEW, and `sweep()` is the clock's OWN tick —
+    it writes a `sla_alerts` row and pages a channel exactly once per cycle.
+    Calling `sweep()` from a GET route would re-run that write-and-notify
+    path on every page load, which is the same defect class `core.rules`'
+    read-only tools refuse structurally. This is the first half of `sweep()`
+    ONLY — `sla_core.alerts_for` over the day's already-materialised cycles —
+    with the write-and-notify second half left out entirely.
+    """
+    cycles = tuple(_cycle_from_row(row) for row in control.sla_instances(cycle_date=on))
+    return sla_core.alerts_for(cycles, now)
+
+
 # ── the adapter boundary: cron, and the two type pairs core/ports both name ──
 
 

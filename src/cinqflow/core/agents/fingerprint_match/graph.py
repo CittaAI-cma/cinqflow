@@ -52,16 +52,19 @@ Both branches converge on `draft`, unconditionally, because a draft is the
 one thing this agent is FOR: "the novel case gets a draft" is true of every
 run that reaches this graph, with or without precedent to lean on.
 
-RETRIEVAL HERE IS THE CERTIFIED READ-ONLY CATALOGUE, HONESTLY, NOT THE
-SEMANTIC KNOWLEDGE PLANE CF-V2-E16-04/E16-07 STILL OWE. Those stories give a
-FUTURE version of `retrieve` an embedded corpus of closed incident narratives
-to search. Today `core/retrieval` is lexical-only, and there is no closed
-narrative corpus at all yet — an incident's narrative is not even writable
-until `E16-07`'s embed-on-close hook exists. So `retrieve` calls exactly what
-IS certified: `list_incidents` for a sibling still open with the identical
-fingerprint, and `lookup_reference` for the platform's own terminology. When
-E16-04/07 land, `retrieve`'s TOOLS gain a real semantic option; this graph's
-SHAPE — two deterministic nodes then a branch — does not need to change.
+RETRIEVAL HERE IS THE CERTIFIED READ-ONLY CATALOGUE — `list_incidents` for a
+sibling still open with the identical fingerprint, `lookup_reference` for the
+platform's own terminology, and now `search_knowledge` (CF-V1-E16-04/05) for
+a genuine semantic match over chunked, embedded, Published knowledge: a
+prior closed incident's narrative, a runbook's steps, a document's pages.
+This graph's SHAPE — two deterministic nodes then a branch — did NOT need to
+change to add it, exactly as this docstring predicted before E16-04/05
+landed: a fourth FIXED, read-only tool call is still not a model choosing
+which tool to run. `search_knowledge` degrades to an honest empty result on
+any deployment where nothing has been embedded yet (every Wave-0/1 profile,
+until a document or a closed incident actually publishes) — so this graph's
+behaviour on those deployments is BYTE-IDENTICAL to before this tool joined
+`RETRIEVE_TOOLS`.
 
 THE DON'TS, ENFORCED STRUCTURALLY:
 
@@ -133,9 +136,25 @@ STATE_HAS_GROUNDING = "has_grounding"
 STATE_NOVEL = "novel"
 
 #: `retrieve`'s WHOLE tool surface — fixed and hardcoded, never model-planned.
-#: All three are read-only catalogue entries (`core.tools.CATALOGUE`); nothing
+#: All four are read-only catalogue entries (`core.tools.CATALOGUE`); nothing
 #: here could be a write tool because nothing here is chosen at call time.
-RETRIEVE_TOOLS: tuple[str, ...] = ("list_incidents", "get_incident", "lookup_reference")
+#:
+#: `search_knowledge` JOINED THIS TUPLE WHEN CF-V1-E16-04/05 LANDED — exactly
+#: the change this module's own docstring above ("SEMANTIC KNOWLEDGE PLANE
+#: CF-V2-E16-04/E16-07 STILL OWE ... this graph's SHAPE does not need to
+#: change") already named. It stays a FIXED tool call, same as the other
+#: three: `retrieve` still never composes a prompt or reasons about the
+#: query, only orchestrates which certified, read-only tools run — see
+#: `tests.support.ast_checks.assert_deterministic_nodes`'s own docstring for
+#: exactly why a tool's INTERNAL use of an embedding model (never a
+#: generative one) does not make the calling node non-deterministic in the
+#: sense this graph's `DETERMINISTIC_NODES` set means.
+RETRIEVE_TOOLS: tuple[str, ...] = (
+    "list_incidents",
+    "get_incident",
+    "lookup_reference",
+    "search_knowledge",
+)
 
 #: How many same-fingerprint siblings `retrieve` pulls full detail for. A
 #: bound, not a tuning knob — the point is "at least one, so the draft can say

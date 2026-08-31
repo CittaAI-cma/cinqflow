@@ -18,6 +18,7 @@ from cinqflow.core.delivery import (
     Delivery,
     DeliveryError,
     Manifest,
+    RetryPolicy,
     UnsafeFilenameError,
     business_date_of,
     fingerprint_of,
@@ -237,3 +238,31 @@ def test_the_precomputed_fingerprint_has_the_storage_pins_shape() -> None:
 def test_identical_bytes_fingerprint_identically_and_different_bytes_do_not() -> None:
     assert fingerprint_of(ROSTER) == fingerprint_of(b"MemberID,First_Name\nM001,Ada\n")
     assert fingerprint_of(ROSTER) != fingerprint_of(ROSTER + b" ")
+
+
+# ── CF-V1-E8-09's retry etiquette — pure arithmetic, no clock ────────────────
+
+
+def test_the_first_attempt_needs_no_delay() -> None:
+    """Attempt 1 is the first try, not a retry — nothing has failed yet."""
+    assert RetryPolicy().delay_seconds(1) == 0.0
+
+
+def test_the_schedule_doubles_from_the_base() -> None:
+    policy = RetryPolicy(max_attempts=4, base_seconds=1.0)
+    assert [policy.delay_seconds(n) for n in (1, 2, 3, 4)] == [0.0, 1.0, 2.0, 4.0]
+
+
+def test_a_different_base_scales_the_whole_schedule() -> None:
+    policy = RetryPolicy(max_attempts=3, base_seconds=0.5)
+    assert [policy.delay_seconds(n) for n in (1, 2, 3)] == [0.0, 0.5, 1.0]
+
+
+def test_a_policy_that_never_tries_once_is_refused() -> None:
+    with pytest.raises(DeliveryError):
+        RetryPolicy(max_attempts=0)
+
+
+def test_a_negative_backoff_is_refused() -> None:
+    with pytest.raises(DeliveryError):
+        RetryPolicy(base_seconds=-1.0)

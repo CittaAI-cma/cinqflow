@@ -18,12 +18,13 @@ pins:
   compute_job:    { adapter: none }
   orchestration:  { adapter: none }
   storage:        { adapter: none }
-  connector:      { adapter: none }   # nothing is delivered in CI
+  connector:      { routes: { default: { adapter: none } } }   # nothing is delivered in CI
   control_tables: { adapter: pg-control, schema: control }
   catalog:        { adapter: none }
   sql_query:      { adapter: none }
   identity:       { adapter: mock, scenarios: goldensets/reference/verato-scenarios.yaml }
   legacy_readonly: { adapter: none }
+  document_parse: { adapter: none }   # W1 (CF-V1-E16-04); real seat energized by requirements/ai.txt
   # A reference, not a value — even in CI, and even for a throwaway container.
   # The one profile that embeds a DSN is the one that teaches everyone else to.
   metadata_db:    { dsn: "secret://pg-dsn" }

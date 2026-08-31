@@ -199,6 +199,6 @@ jobs:
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - name: the pack is generated, never hand-edited
-        working-directory: ../ours/cinqflow-knowledge-pack
+        working-directory: ../platformdata/cinqflow-knowledge-pack
         continue-on-error: true   # the pack lives outside this repo until it is vendored
         run: python3 tools/build_knowledge.py --check

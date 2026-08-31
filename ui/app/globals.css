@@ -435,3 +435,41 @@
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
 }
+
+/* ---- the medallion spine (W3-01) ----
+   A numbered list, because the spine IS an order: data cannot skip a layer.
+   The status attribute drives the treatment rather than a second class, so a
+   fourth status cannot be introduced by a page inventing a class name — the
+   three that exist come off `core/layers.LayerStatus`, which is a closed set. */
+@layer components {
+  .spine { list-style: none; margin: 0; padding: 0; }
+  .spine > li { position: relative; }
+  .spine-head { display: flex; align-items: baseline; gap: var(--s-3); }
+  .spine-step {
+    flex: none; width: var(--s-5); height: var(--s-5); border-radius: var(--radius-pill);
+    display: grid; place-items: center; font-size: var(--t-xs); font-weight: 680;
+    color: var(--ink-3); background: var(--surface-2); border: 1px solid var(--line);
+  }
+  .spine-title { display: flex; flex-direction: column; gap: var(--s-1); min-width: 0; }
+  .spine-figures { margin-left: auto; text-align: right; min-width: 0; }
+  .spine-figures .big {
+    font-size: var(--t-lg); font-weight: 680; font-variant-numeric: tabular-nums;
+    display: block; line-height: var(--lh-tight);
+  }
+  .spine-figures .label,
+  .spine-figures .note { display: block; color: var(--ink-3); font-size: var(--t-xs); }
+
+  /* A built layer carries the accent; the other two must not look the same as
+     each other OR as a built one. Colour is never the only signal — each also
+     carries a worded tag, because WCAG 1.4.1 and because "empty on purpose"
+     and "not built yet" are different sentences. */
+  .spine > li[data-status="built"] { border-left: 2px solid var(--st-completed); }
+  .spine > li[data-status="provisioned_empty"] { border-left: 2px solid var(--st-expected); }
+  .spine > li[data-status="not_built"] { border-left: 2px dashed var(--line-strong); }
+  .spine > li[data-status="not_built"] .spine-step { opacity: .6; }
+
+  /* A masked cell reads as deliberate rather than as missing data. The bullets
+     are already the signal; this keeps them from being mistaken for a glyph
+     that failed to load. */
+  td[data-masked] { color: var(--ink-3); letter-spacing: .12em; }
+}

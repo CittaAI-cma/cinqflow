@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Refused, upload } from "@/lib/api";
-import type { Delivery } from "@/lib/types";
+import type { Delivery, Document } from "@/lib/types";
 
 /**
  * CF-V1-E3-05 — one delivery, from either door, through one action.
@@ -105,6 +105,50 @@ async function attemptDelivery(feedId: string, formData: FormData): Promise<Land
     if (!(error instanceof Refused)) throw error;
     return { outcome: "REFUSED", headline: error.detail };
   }
+}
+
+/**
+ * CF-V1-E16-06 — the companion guide's own door, beside the sample's.
+ *
+ * Deliberately its own action rather than a branch inside `deliverFile`:
+ * the two post to different backend routes (`/documents` vs `/deliveries`),
+ * return different shapes, and a document with no file chosen is simply
+ * skipped — the wizard's own step 1 is unchanged for a BA with no guide to
+ * attach, never a required field wearing an optional label.
+ */
+export async function uploadDocument(formData: FormData): Promise<void> {
+  const feedId = String(formData.get("feed_id") ?? "").trim();
+  const file = formData.get("file");
+  if (!feedId || !(file instanceof File) || file.name === "") {
+    redirect(`/data/intake/feed/${feedId}/deliver`);
+  }
+
+  const body = new FormData();
+  body.set("file", file);
+  const domain = String(formData.get("domain") ?? "").trim();
+  if (domain) body.set("domain", domain);
+
+  let outcome: string;
+  let headline: string;
+  let cite: string | undefined;
+  try {
+    const document = await upload<Document>(
+      `/api/feeds/${encodeURIComponent(feedId)}/documents`,
+      body,
+    );
+    revalidatePath(`/data/intake/feed/${feedId}/deliver`);
+    outcome = "UPLOADED";
+    headline = `${document.filename} — ${document.page_count} page${document.page_count === 1 ? "" : "s"} parsed. Submit it for steward review before it grounds any agent.`;
+    cite = `document:${document.document_id}`;
+  } catch (error) {
+    if (!(error instanceof Refused)) throw error;
+    outcome = "REFUSED";
+    headline = error.detail;
+  }
+
+  const parameters = new URLSearchParams({ doc_outcome: outcome, doc_headline: headline });
+  if (cite) parameters.set("doc_cite", cite);
+  redirect(`/data/intake/feed/${feedId}/deliver?${parameters}`);
 }
 
 function query(feedId: string, result: Landing): string {

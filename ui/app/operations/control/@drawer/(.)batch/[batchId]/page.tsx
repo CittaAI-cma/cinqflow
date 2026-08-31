@@ -13,14 +13,20 @@ export default async function BatchDrawerSlot({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ panel?: string; drop?: string }>;
+  searchParams: Promise<{ panel?: string; drop?: string; outcome?: string; headline?: string }>;
 }) {
   const { batchId } = await params;
-  const { panel, drop } = await searchParams;
+  const { panel, drop, outcome, headline } = await searchParams;
 
   return (
     <Drawer title={`Batch ${batchId}`}>
-      <BatchPanels batchId={batchId} panel={asPanel(panel)} drop={drop} />
+      <BatchPanels
+        batchId={batchId}
+        panel={asPanel(panel)}
+        drop={drop}
+        outcome={outcome}
+        headline={headline}
+      />
     </Drawer>
   );
 }

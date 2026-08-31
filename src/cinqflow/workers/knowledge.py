@@ -75,6 +75,7 @@ from cinqflow.core.knowledge import (
     ChunkCandidate,
     KnowledgeIngestResult,
     RefusedChunk,
+    chunk_document,
     chunk_incident,
     chunk_runbook,
 )
@@ -155,6 +156,34 @@ class KnowledgeIngestWorker:
             else ()
         )
         return self._ingest(chunk_runbook(runbook), run_id=run_id, caller=caller, retire=retire)
+
+    def ingest_document(
+        self,
+        document: GovernedObject,
+        *,
+        run_id: str,
+        caller: Actor,
+        supersedes: GovernedObject | None = None,
+    ) -> KnowledgeIngestResult:
+        """Chunk -> PHI-verify -> Embed + Index a PUBLISHED document's pages.
+
+        CF-V1-E16-04's third source, alongside `ingest_incident` and
+        `ingest_runbook` — same shared `_ingest` engine, same PHI-verify-or-
+        refuse discipline, same atomic-supersede shape `ingest_runbook`
+        already established for `supersedes`: `chunk_document(supersedes)`
+        recovers the prior version's exact chunk ids so a re-upload retires
+        them in the SAME `VectorPort.supersede` call that indexes the new
+        ones, never a separate index-then-delete.
+
+        `chunk_document` raises `KnowledgeSourceError` unwrapped for anything
+        not Published — ADR-0007's own gate, not repeated here.
+        """
+        retire = (
+            tuple(candidate.chunk_id for candidate in chunk_document(supersedes))
+            if supersedes is not None
+            else ()
+        )
+        return self._ingest(chunk_document(document), run_id=run_id, caller=caller, retire=retire)
 
     # ── the shared engine ────────────────────────────────────────────────────
 

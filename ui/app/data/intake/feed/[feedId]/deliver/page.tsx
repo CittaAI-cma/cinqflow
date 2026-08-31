@@ -1,10 +1,12 @@
 import Link from "next/link";
+import { CitationChip } from "@/components/Cited";
 import { DeliverForm } from "@/components/DeliverForm";
 import { DeliveryOutcome, landedFrom } from "@/components/DeliveryOutcome";
+import { DocumentForm } from "@/components/DocumentForm";
 import { RefusalNotice } from "@/components/Refusal";
 import { attempt, isRefused } from "@/lib/api";
 import type { DeliverySource, Feed, Principal } from "@/lib/types";
-import { deliverFile } from "../../../deliver/actions";
+import { deliverFile, uploadDocument } from "../../../deliver/actions";
 
 /**
  * CF-V1-E3-05 — one feed's delivery step.
@@ -79,6 +81,24 @@ export default async function DeliverPage({
           content twice and the second is skipped, because the fingerprint is already in the input
           registry.
         </p>
+      </div>
+
+      <h2>The companion guide, if there is one</h2>
+      <p className="lede">
+        A payer&rsquo;s own documentation grounds the schema and mapping suggestions below —
+        every suggestion that reads it cites the page it stands on.
+      </p>
+
+      {result.doc_headline ? (
+        <div className="card" data-verdict={result.doc_outcome === "UPLOADED" ? "match" : undefined}>
+          <strong>{result.doc_outcome}</strong>
+          <p className="note">{result.doc_headline}</p>
+          {result.doc_cite ? <CitationChip citationId={result.doc_cite} /> : null}
+        </div>
+      ) : null}
+
+      <div className="card">
+        <DocumentForm action={uploadDocument} feedId={feed.feed_id} mayUpload={mayDeliver} />
       </div>
     </>
   );

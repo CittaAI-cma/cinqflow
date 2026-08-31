@@ -40,19 +40,26 @@ PLATE_04_PINS = {
     "observability",
     "http_edge",
     "agent_runtime",
+    "document_parse",
 }
 
 
 @pytest.mark.contract
-def test_there_are_exactly_twenty_one_pins() -> None:
-    """FIG 04: ports.count == 21. A twenty-second pin needs a plate change.
+def test_there_are_exactly_twenty_two_pins() -> None:
+    """FIG 04: ports.count == 22.
 
     The twenty-first is `connector`, added by CF-V1-E3-05. Plate 09 had named
     seven connectors since Wave 0 and plate 04 gave none of them a pin, so the
     platform could read a landing zone it had no way to fill.
+
+    The twenty-second is `document_parse`, added by CF-V1-E16-04: turning a
+    payer companion guide's or a client spec's bytes into text with page
+    anchors and whole tables — the missing half of "Inbox -> Parse -> Chunk"
+    that let `core.knowledge` chunk only objects that were already parsed
+    Python values.
     """
     assert set(PORTS) == PLATE_04_PINS
-    assert len(PORTS) == 21
+    assert len(PORTS) == 22
 
 
 @pytest.mark.contract

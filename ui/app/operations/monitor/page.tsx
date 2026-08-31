@@ -1,8 +1,9 @@
 import { Cited } from "@/components/Cited";
 import { RefusalNotice } from "@/components/Refusal";
 import { Status } from "@/components/Status";
+import { Tag } from "@/components/Tag";
 import { attempt, isRefused } from "@/lib/api";
-import type { Batch, Feed } from "@/lib/types";
+import type { Batch, EnrichedAlert, Feed } from "@/lib/types";
 
 /**
  * Monitor — expected versus actual, per feed, per cycle.
@@ -24,10 +25,49 @@ export default async function Monitor() {
     rows.push({ feed, latest });
   }
 
+  // CF-V2-E12-05. Computed fresh on every read (`workers.sla.current_alerts`
+  // -> `AlertEnrichmentAgent.enrich`, per group) — never a cached opinion.
+  // 503 when no LLM pin is fitted is not shown as a refusal: the table below
+  // already answers "expected versus actual" with no model involved, so a
+  // deployment with no agent still gets a working monitor screen.
+  const alerts = await attempt<EnrichedAlert[]>("/api/operations/alerts");
+
   return (
     <>
       <h1>Monitor</h1>
       <p className="lede">Expected versus actual, per feed, per cycle.</p>
+
+      {!isRefused(alerts) && alerts.length > 0 ? (
+        <div className="card">
+          <strong>
+            {alerts.length} alert{alerts.length === 1 ? "" : "s"} outstanding
+          </strong>
+          <ul className="stack">
+            {alerts.map((alert) => (
+              <li key={alert.group_key}>
+                <Tag tone={alert.severity === "critical" ? "bad" : "pending"}>
+                  {alert.severity}
+                </Tag>{" "}
+                <strong>{alert.feed_ids.join(", ")}</strong>
+                <p className="note">{alert.facts.join("; ")}</p>
+                <p className="note">
+                  {alert.manual_path ? (
+                    <>{alert.cause} — no grounded hypothesis; a person should look.</>
+                  ) : (
+                    <>
+                      cause:{" "}
+                      <Cited
+                        value={alert.cause}
+                        citationId={alert.cause_citations[0] ?? null}
+                      />
+                    </>
+                  )}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="card scroll">
         <table>

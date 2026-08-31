@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
+from cinqflow.adapters.local.file_document_parse import FileDocumentParser
+from cinqflow.adapters.local.folder_connector import FolderDropConnector
 from cinqflow.adapters.local.localfs_storage import LocalFsStorage
 from cinqflow.adapters.local.upload_connector import UploadConnector
 from cinqflow.adapters.mock.authn import StaticAuthn
@@ -21,7 +23,9 @@ from cinqflow.intelligence.demo import (
     BATCH_ID,
     BUDGET,
     agent_for,
+    alert_enrichment_agent_for,
     fingerprint_match_agent_for,
+    layer_reader_for,
     plane,
     schema_inference_for,
 )
@@ -30,6 +34,11 @@ from cinqflow.workers.incidents import IncidentWorker
 #: The same root `profiles/local.yaml` names, so a file delivered through the
 #: dev server and one delivered by `cinqflow ingest` land in one zone.
 DEFAULT_LANDING_ROOT = ".cinqflow/landing"
+
+#: CF-V1-E8-09's named pull route, mirroring `profiles/local.yaml`'s
+#: `fidelis-sftp` — a feed registered with that `endpoint_ref` polls this
+#: directory instead of using the deployment's default upload connector.
+DEFAULT_SFTP_DROP_ROOT = ".cinqflow/drop/fidelis-sftp"
 
 
 def build(landing_root: str | None = None) -> Any:
@@ -70,9 +79,25 @@ def build(landing_root: str | None = None) -> Any:
         metadata_db=store,
         control_tables=control,
         storage=landing,
-        connector=UploadConnector(landing),
+        # CF-V1-E8-09. Routed, not one adapter: `default` is what a feed with
+        # no (or an unrouted) `endpoint_ref` gets, and `fidelis-sftp` is the
+        # named pull route a feed registered with that `endpoint_ref` polls
+        # instead — the same two seats `profiles/local.yaml` fits.
+        connectors={
+            "default": UploadConnector(landing),
+            "fidelis-sftp": FolderDropConnector(landing, drop_root=DEFAULT_SFTP_DROP_ROOT),
+        },
+        document_parse=FileDocumentParser(),
+        # W3-01. A seeded medallion plane, so the six-layer screen renders on
+        # the mock socket with no database — and masks there too, which is what
+        # keeps a UI regression that un-masks a column from passing CI.
+        layer_reader=layer_reader_for(),
         agent_factory=agent_for,
         schema_inference_factory=schema_inference_for,
+        # CF-V2-E12-05. Built once, off the same scripted stand-in every other
+        # demo agent uses — `GET /api/operations/alerts` has a real path to
+        # exercise on every dev-server start, with no credential involved.
+        alert_enrichment_agent=alert_enrichment_agent_for(control, store),
         budget=BUDGET,
     )
 

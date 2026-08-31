@@ -55,6 +55,16 @@ export function route(raw: string): string | null {
       return `/data/intake/rule/${subject}`;
     case "term":
       return `/data/intake/glossary/${subject}`;
+    case "runbook":
+      // A step is a panel on the runbook, not a page of its own — the same
+      // one-depth-level shape "batch" and "recon" already use above. Fixed
+      // alongside "document" below: both were missing from this switch,
+      // which is what let `test_every_citation_kind_opens_a_real_ui_page`
+      // (the SERVER-side parser) stay green while a runbook citation
+      // clicked in the browser rendered as plain uncited text.
+      return `/data/intake/runbook/${subject}${fragment ? `?panel=${fragment}` : ""}`;
+    case "document":
+      return `/data/intake/document/${subject}${fragment ? `?panel=${fragment}` : ""}`;
     default:
       // A citation kind the UI does not know is NOT rendered as a dead link.
       // A malformed citation is worse than no citation: it reads as evidence

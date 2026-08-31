@@ -16,6 +16,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from cinqflow.adapters.mock.agent_runtime import InProcAgentRuntime
 from cinqflow.adapters.mock.authn import StaticAuthn
 from cinqflow.adapters.mock.control_tables import MemStoreControlTables
 from cinqflow.adapters.mock.llm import ScriptedLlm
@@ -24,8 +25,11 @@ from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
 from cinqflow.adapters.mock.vector import ListVector
 from cinqflow.api import create_app
+from cinqflow.core.agents.alert_enrichment.prompts import TEMPLATES as ALERT_ENRICHMENT_TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState, ObjectType
+from cinqflow.core.model.identity import Principal as ToolPrincipal
+from cinqflow.core.model.identity import Scopes
 from cinqflow.core.model.vocabulary import ActorType, BatchState, ErrorCategory, Layer
 from cinqflow.core.operations.fingerprint import signature
 from cinqflow.core.registry.operations import (
@@ -36,8 +40,14 @@ from cinqflow.core.registry.operations import (
     ServiceLevel,
 )
 from cinqflow.core.scheduling import DEPENDS_ON_KEY
+from cinqflow.intelligence.agents.alert_enrichment import AlertEnrichmentAgent
 from cinqflow.intelligence.gateway import LlmGateway
+from cinqflow.intelligence.tools import ToolContext
+from cinqflow.ports.authn import Principal as AuthnPrincipal
+from cinqflow.ports.authn import Role as AuthnRole
+from cinqflow.ports.authn import Scopes as AuthnScopes
 from cinqflow.ports.control_tables import BatchControl, ErrorRecord, StageStatus
+from cinqflow.ports.control_tables import SlaCycle as SlaCycleRow
 from cinqflow.workers.knowledge import KnowledgeIngestWorker
 
 pytestmark = [pytest.mark.contract, pytest.mark.lane1]
@@ -521,6 +531,27 @@ def test_a_wrong_state_retry_is_refused_and_leaves_a_row(
     assert refused.status_code == 409
     actions = [entry.action for entry in store.read_audit(object_id=ENROLLMENT)]
     assert "refused:retry" in actions
+
+
+def test_a_backdate_request_carries_its_business_date_through(
+    client: TestClient, control: MemStoreControlTables
+) -> None:
+    """CF-V2-E8-04's own field, on the shared request body — a caller could
+    name a business date without it silently being dropped before it ever
+    reached `ops_actions.ActionRequest`."""
+    _open_batch(control, state=BatchState.FAILED)
+    body = client.post(
+        f"/api/operations/batches/{BATCH}/actions",
+        json={
+            "action": "backdate",
+            "reason": "September roster corrected after the fact.",
+            "business_date": "2026-09-01",
+            "supersede_acknowledged": True,
+        },
+        headers=_as(OPERATOR),
+    )
+    assert body.status_code == 200, body.text
+    assert body.json()["phase"] == "requested"
 
 
 def test_a_free_form_action_is_refused_with_the_vocabulary_named(
@@ -1197,6 +1228,121 @@ def test_the_score_decomposes_and_an_unmeasured_signal_is_not_a_zero(
 
 def test_a_feed_nobody_registered_has_no_score_to_leak(client: TestClient) -> None:
     assert client.get("/api/feeds/never-was/reliability", headers=_as(READ_ONLY)).status_code == 404
+
+
+# ── CF-V2-E12-05 · alerts that explain themselves, over the wire ─────────────
+
+
+def _alert_enrichment_agent(
+    metadata: MemMetadataDb, control: MemStoreControlTables
+) -> AlertEnrichmentAgent:
+    for template in ALERT_ENRICHMENT_TEMPLATES:
+        obj = template.as_governed(author=SEED)
+        reviewed, _ = obj.transition_to(LifecycleState.PENDING_REVIEW, actor=SEED)
+        approved, _ = reviewed.transition_to(LifecycleState.APPROVED, actor=APPROVER)
+        published, _ = approved.transition_to(LifecycleState.PUBLISHED, actor=APPROVER)
+        metadata.save(published)
+    gateway = LlmGateway(
+        llm=ScriptedLlm(),
+        phi_scrub=PatternPhiScrub(),
+        metadata_db=metadata,
+        observability=NoopObservability(),
+        budget=Budget(per_run_usd=Decimal("1"), per_agent_per_day_usd=Decimal("10")),
+        routing=Routing(small="small-model", large="large-model"),
+        clock=lambda: NOW,
+    )
+    tools = ToolContext(
+        principal=ToolPrincipal(
+            subject="platform@cinqflow",
+            display_name="platform",
+            scopes=Scopes(feeds=frozenset({"*"})),
+        ),
+        control=control,
+        metadata=metadata,
+        agent="alert-enrichment",
+        now=NOW,
+    )
+    return AlertEnrichmentAgent(llm=gateway, tools=tools, runtime=InProcAgentRuntime())
+
+
+def test_no_agent_configured_answers_service_unavailable(
+    store: MemMetadataDb, control: MemStoreControlTables
+) -> None:
+    app = create_app(authn=StaticAuthn(), metadata_db=store, control_tables=control)
+    with TestClient(app) as no_agent:
+        response = no_agent.get("/api/operations/alerts", headers=_as(OPERATOR))
+    assert response.status_code == 503
+    assert "not enriched" in response.text
+
+
+def test_a_breached_feed_comes_back_grouped_and_explained(
+    store: MemMetadataDb, control: MemStoreControlTables
+) -> None:
+    """The route reads the DETERMINISTIC alert set (`workers.sla.
+    current_alerts`), groups it (`core.sla.grouped`) and enriches each
+    group — never writes an `sla_alerts` row and never notifies, unlike the
+    clock's own `sweep()`."""
+    control.upsert_sla_instance(
+        SlaCycleRow(
+            feed_id=ENROLLMENT,
+            cycle_date=NOW.date(),
+            expected_ts=NOW - timedelta(hours=3),
+            sla_status="Breached",
+        )
+    )
+    app = create_app(
+        authn=StaticAuthn(),
+        metadata_db=store,
+        control_tables=control,
+        alert_enrichment_agent=_alert_enrichment_agent(store, control),
+    )
+    with TestClient(app) as with_agent:
+        response = with_agent.get(
+            f"/api/operations/alerts?on={NOW.date().isoformat()}", headers=_as(OPERATOR)
+        )
+    assert response.status_code == 200, response.text
+    (group,) = response.json()
+    assert group["feed_ids"] == [ENROLLMENT]
+    assert group["severity"]
+    assert group["facts"]
+    assert group["cause"]
+
+
+def test_alerts_are_scoped_to_what_the_caller_may_see(
+    store: MemMetadataDb, control: MemStoreControlTables
+) -> None:
+    """`current_alerts` is fleet-wide by construction (it reads every
+    materialised cycle for the day) — the route, not `core.sla`, is what
+    must not hand a caller a breach on a feed their scopes do not cover."""
+    control.upsert_sla_instance(
+        SlaCycleRow(
+            feed_id=ENROLLMENT,
+            cycle_date=NOW.date(),
+            expected_ts=NOW - timedelta(hours=3),
+            sla_status="Breached",
+        )
+    )
+    scoped_out = AuthnPrincipal(
+        subject="scoped-to-claims@cinqcare.test",
+        display_name="Scoped",
+        roles=frozenset({AuthnRole.OPERATIONS}),
+        scopes=AuthnScopes(
+            feeds=frozenset({CLAIMS}), domains=frozenset({"*"}), environments=frozenset({"dev"})
+        ),
+    )
+    app = create_app(
+        authn=StaticAuthn(users={scoped_out.subject: scoped_out}),
+        metadata_db=store,
+        control_tables=control,
+        alert_enrichment_agent=_alert_enrichment_agent(store, control),
+    )
+    with TestClient(app) as with_agent:
+        response = with_agent.get(
+            f"/api/operations/alerts?on={NOW.date().isoformat()}",
+            headers=_as(scoped_out.subject),
+        )
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 # ── the guardrail ────────────────────────────────────────────────────────────

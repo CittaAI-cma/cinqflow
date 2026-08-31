@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { RefusalNotice } from "@/components/Refusal";
+import { Tag } from "@/components/Tag";
 import { attempt, isRefused } from "@/lib/api";
-import type { RulePreview, RulePreviewPack } from "@/lib/types";
+import type { ReviewQueue, RulePreview, RulePreviewPack, TechnicalReview } from "@/lib/types";
 
 /**
  * What this feed's rules actually catch. CF-V1-E7-02.
@@ -32,10 +33,13 @@ export default async function RulePreviewPage({
   params: Promise<{ feedId: string }>;
 }) {
   const { feedId } = await params;
-  const pack = await attempt<RulePreviewPack>(
-    `/api/feeds/${encodeURIComponent(feedId)}/preview-rules`,
-    { method: "POST", body: JSON.stringify({ stated: [] }) },
-  );
+  const [pack, reviews] = await Promise.all([
+    attempt<RulePreviewPack>(`/api/feeds/${encodeURIComponent(feedId)}/preview-rules`, {
+      method: "POST",
+      body: JSON.stringify({ stated: [] }),
+    }),
+    attempt<ReviewQueue>(`/api/feeds/${encodeURIComponent(feedId)}/rule-reviews`),
+  ]);
 
   const crumbs = (
     <p className="note">
@@ -44,11 +48,16 @@ export default async function RulePreviewPage({
     </p>
   );
 
+  const technicalReview = !isRefused(reviews) && reviews.reviews.length > 0 && (
+    <TechnicalReviewSection queue={reviews} />
+  );
+
   if (isRefused(pack)) {
     return (
       <>
         {crumbs}
         <h1>{feedId} data-quality rules</h1>
+        {technicalReview}
         <RefusalNotice refusal={pack} />
       </>
     );
@@ -61,6 +70,7 @@ export default async function RulePreviewPage({
     <>
       {crumbs}
       <h1>{pack.feed_id} data-quality rules</h1>
+      {technicalReview}
       <p className="lede">
         {pack.rules_previewed} rule{pack.rules_previewed === 1 ? "" : "s"} run over{" "}
         {pack.sample_rows} sampled row{pack.sample_rows === 1 ? "" : "s"} ·{" "}
@@ -143,5 +153,63 @@ export default async function RulePreviewPage({
         unmasked value never reaches this page, a log, or the stored evidence.
       </p>
     </>
+  );
+}
+
+/**
+ * CF-V1-E7-04 — every rule the authoring agent could not draft with
+ * confidence, routed here rather than published silently wrong. The BA's own
+ * sentence renders FIRST and the machine's reading second, deliberately: a
+ * reviewer shown the machine's reading first anchors on it and then checks
+ * whether the sentence agrees, which reliably produces agreement.
+ *
+ * READ-ONLY BY DESIGN, FOR NOW. `core.rules.review.correct/escalate/withdraw`
+ * exist and are fully specified, but nothing in this codebase — no route, no
+ * worker, no test — calls any of them yet, because a `TechnicalReview` is
+ * COMPUTED fresh from the rule-authoring proposal on every read rather than
+ * a stored object with its own lifecycle. Wiring a resolution action here
+ * honestly needs that persistence question answered first — where does
+ * "withdrawn" or "escalated" get remembered between one read and the next —
+ * and answering it silently, inside a page component, is the wrong place to
+ * make that call. This section makes the queue visible, which it was not at
+ * all before; resolving from here is the next, separate piece of work.
+ */
+function TechnicalReviewSection({ queue }: { queue: ReviewQueue }) {
+  return (
+    <div className="card">
+      <strong>
+        {queue.open_count} rule{queue.open_count === 1 ? "" : "s"} needs a person
+      </strong>
+      <p className="note">
+        The authoring agent could not draft these with enough confidence to publish, so they
+        never became rules — shown here rather than silently dropped.
+      </p>
+      {queue.unrouted.length > 0 ? (
+        <p className="note">
+          <Tag tone="bad">Unrouted</Tag> {queue.unrouted.length} candidate
+          {queue.unrouted.length === 1 ? "" : "s"} below the confidence floor did not reach this
+          queue — the measurable this screen exists to keep at zero.
+        </p>
+      ) : null}
+      <ul>
+        {queue.reviews.map((review) => (
+          <TechnicalReviewRow key={review.review_id} review={review} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function TechnicalReviewRow({ review }: { review: TechnicalReview }) {
+  return (
+    <li style={{ marginBottom: "var(--s-3)" }}>
+      <Tag tone={review.state === "open" ? "bad" : "neutral"}>{review.state}</Tag>{" "}
+      <strong>{review.stated}</strong>
+      <p className="note">Machine reading: {review.machine_reading}</p>
+      <p className="note">{review.explained_to_author}</p>
+      {review.confidence > 0 ? (
+        <p className="note">Confidence: {Math.round(review.confidence * 100)}%</p>
+      ) : null}
+    </li>
   );
 }

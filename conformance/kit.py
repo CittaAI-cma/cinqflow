@@ -75,29 +75,58 @@ def _protocol_verbs(pin: str) -> frozenset[str]:
     )
 
 
+def _adapters_chosen(pin: str, profile: Profile | None) -> tuple[str, ...]:
+    """Every DISTINCT adapter a profile actually fits to this pin.
+
+    Almost every pin names one adapter (`profile.adapter_for`). `connector` is
+    the exception CF-V1-E8-09 introduced: it is chosen PER ROUTE
+    (`endpoint_ref` -> adapter), because two feeds can arrive by different
+    methods on one socket. A pin config carrying `routes` is read as the set
+    of adapters across every route rather than one — climbing a rung has to
+    check every adapter a profile actually fits, or a route nobody wired
+    a working adapter for would certify GREEN by never being asked about.
+    """
+    if profile is None:
+        return ()
+    config = profile.pins.get(pin, {})
+    routes = config.get("routes")
+    if isinstance(routes, dict):
+        names = {
+            str(route.get("adapter", "none"))
+            for route in routes.values()
+            if isinstance(route, dict)
+        }
+        return tuple(sorted(names - {"none"}))
+    single = profile.adapter_for(pin)
+    return () if single in ("none", None) else (single,)
+
+
 def check_pin(pin: str, profile: Profile | None) -> Check:
     """One pin, certified against ONE contract — the port's own protocol."""
     adapters = fitted(pin)
     if not adapters:
         return Check(pin, Verdict.UNFITTED, "no adapter registered for this pin")
 
-    chosen = profile.adapter_for(pin) if profile else None
-    if chosen in {"none", None} and profile is not None:
+    chosen = _adapters_chosen(pin, profile) if profile else None
+    if chosen == () and profile is not None:
         return Check(pin, Verdict.UNFITTED, f"profile says `none` — {PORTS[pin].verb}")
 
-    if chosen is not None and chosen not in adapters:
-        # "climbing a rung changes only the profile" is only true if the
-        # profile's CHOICE is checked, not merely whatever adapter happens to
-        # be registered. Without this, a profile naming a fictional adapter
-        # (`pg-compute`, `presidio`, ...) certifies GREEN against whichever
-        # real adapter is fitted for someone ELSE's reason — the platform
-        # cannot know which environment it is actually in.
-        return Check(
-            pin,
-            Verdict.FAIL,
-            f"profile names `{chosen}`, which is not registered — fitted: "
-            f"{', '.join(sorted(adapters)) or 'none'}",
-        )
+    if chosen is not None:
+        unknown = [name for name in chosen if name not in adapters]
+        if unknown:
+            # "climbing a rung changes only the profile" is only true if the
+            # profile's CHOICE is checked, not merely whatever adapter happens
+            # to be registered. Without this, a profile naming a fictional
+            # adapter (`pg-compute`, `presidio`, ...) certifies GREEN against
+            # whichever real adapter is fitted for someone ELSE's reason — the
+            # platform cannot know which environment it is actually in.
+            return Check(
+                pin,
+                Verdict.FAIL,
+                f"profile names {', '.join(f'`{name}`' for name in unknown)}, which "
+                f"{'is' if len(unknown) == 1 else 'are'} not registered — fitted: "
+                f"{', '.join(sorted(adapters)) or 'none'}",
+            )
 
     verbs = _protocol_verbs(pin)
     if not verbs:

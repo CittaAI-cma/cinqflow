@@ -44,6 +44,14 @@ class ObjectType(StrEnum):
     RELEASE = "release"
     PROMPT = "prompt"
     EXECUTION_PLANE_CONTRACT = "execution_plane_contract"
+    #: CF-V1-E16-04/E16-06. An uploaded document (a payer companion guide, a
+    #: client spec) on its way into the knowledge plane. `body` carries its
+    #: `ParsedDocument` (as plain data — see `core.knowledge.KnowledgeDocument`)
+    #: plus the optional `feed_id` E16-06 tags an upload to. Published is the
+    #: gate `core.knowledge.chunk_document` already enforces for every other
+    #: source; this object earns that gate through the SAME steward-approval
+    #: route glossary terms and runbooks already travel — no side door.
+    KNOWLEDGE_DOCUMENT = "knowledge_document"
 
 
 @unique
