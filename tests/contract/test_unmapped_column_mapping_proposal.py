@@ -65,6 +65,7 @@ DEPLOYED = Schema(
                 Column("member_row_id", TypeName.UUID, nullable=False),
                 Column("date_of_birth", TypeName.DATE, is_phi=True),
                 Column("relationship_code", TypeName.STRING),
+                Column("group_number", TypeName.STRING),
             ),
             primary_key=("member_row_id",),
         ),
@@ -91,6 +92,19 @@ GLOSSARY = Glossary(
             mapped_tables=("members",),
             mapped_columns_original=("SUBSCR_REL_CD",),
             mapped_columns_corrected=("relationship_code",),
+        ),
+        #: W1-38 — a second, unrelated glossary-settled column, used only by
+        #: the per-column idempotency tests below. Present here (rather than
+        #: unmapped) so a batch that brings it alongside an already-claimed
+        #: column never needs the scripted LLM to answer for it either.
+        GlossaryTerm(
+            glossary_id="BG-061",
+            term="Group Number",
+            definition="The employer group number.",
+            mapped_domains=("Enrollment",),
+            mapped_tables=("members",),
+            mapped_columns_original=("GRP_NBR",),
+            mapped_columns_corrected=("group_number",),
         ),
     )
 )
@@ -218,7 +232,7 @@ def test_no_unmapped_columns_proposes_nothing(store: MemMetadataDb) -> None:
     assert store.list_proposals(feed_id=FEED) == ()
 
 
-# ── idempotent per unmapped-column set ──────────────────────────────────────
+# ── idempotent per column (W1-38: not per unmapped-column SET) ──────────────
 
 
 def test_a_daily_redelivered_unmapped_column_earns_one_proposal_not_one_per_day(
@@ -253,6 +267,98 @@ def test_a_daily_redelivered_unmapped_column_earns_one_proposal_not_one_per_day(
 
     assert first is not None
     assert second is None, "re-running for the same finding must not double-propose"
+    assert len(store.list_proposals(feed_id=FEED)) == 1
+
+
+def test_a_still_unmapped_column_is_not_reclaimed_when_a_new_column_joins_it(
+    store: MemMetadataDb,
+) -> None:
+    """W1-38 regression. The exact-set check this replaced compared the whole
+    WANTED set to each pending proposal's exact column set, so a column that
+    stayed unmapped across two deliveries earned a SECOND, independent
+    proposal the instant the later delivery also carried some genuinely new
+    column — an entirely ordinary sequence: feeds add columns across
+    deliveries, and a reviewer does not act within one batch.
+
+    Batch 1: only SUBSCR_REL_CD is unmapped. Batch 2: SUBSCR_REL_CD is STILL
+    unmapped (nobody has resolved it) and GRP_NBR has newly arrived unmapped
+    too. SUBSCR_REL_CD must end this scenario claimed by exactly ONE live
+    proposal, and GRP_NBR must get its own, covering only the net-new column.
+    """
+    agent = _agent(store)
+
+    first = propose_mapping_for_unmapped_columns(
+        agent,
+        feed_id=FEED,
+        unmapped_columns=("SUBSCR_REL_CD",),
+        contract_version=CONTRACT.version,
+        glossary=GLOSSARY,
+        model=MODEL,
+        published_mapping=PUBLISHED_MAPPING,
+        run_id="B-1",
+        now=NOW,
+    )
+    second = propose_mapping_for_unmapped_columns(
+        agent,
+        feed_id=FEED,
+        unmapped_columns=("SUBSCR_REL_CD", "GRP_NBR"),
+        contract_version=CONTRACT.version,
+        glossary=GLOSSARY,
+        model=MODEL,
+        published_mapping=PUBLISHED_MAPPING,
+        run_id="B-2",
+        now=NOW,
+    )
+
+    assert first is not None
+    assert second is not None, "GRP_NBR is genuinely new and must still be proposed"
+    assert {r["source_column"] for r in second.payload["records"]} == {"GRP_NBR"}, (
+        "the second proposal must cover ONLY the net-new column, never re-claim SUBSCR_REL_CD"
+    )
+
+    live = store.list_proposals(feed_id=FEED)
+    assert len(live) == 2, "one proposal per net-new column, no third and no duplicate"
+    claims_of_subscr_rel_cd = [
+        p for p in live if any(r["source_column"] == "SUBSCR_REL_CD" for r in p.payload["records"])
+    ]
+    assert claims_of_subscr_rel_cd == [first], (
+        "SUBSCR_REL_CD must be claimed by exactly the one proposal that already covers it"
+    )
+
+
+def test_when_every_unmapped_column_is_already_claimed_nothing_new_is_written(
+    store: MemMetadataDb,
+) -> None:
+    """The other half of the per-column fix: once every column in the new
+    batch is already covered by a live proposal, there is no net-new column
+    left, and this must behave exactly like the "nothing unmapped" case —
+    `None`, no new row — rather than writing an empty or redundant proposal."""
+    agent = _agent(store)
+    propose_mapping_for_unmapped_columns(
+        agent,
+        feed_id=FEED,
+        unmapped_columns=("SUBSCR_REL_CD",),
+        contract_version=CONTRACT.version,
+        glossary=GLOSSARY,
+        model=MODEL,
+        published_mapping=PUBLISHED_MAPPING,
+        run_id="B-1",
+        now=NOW,
+    )
+
+    again = propose_mapping_for_unmapped_columns(
+        agent,
+        feed_id=FEED,
+        unmapped_columns=("SUBSCR_REL_CD",),
+        contract_version=CONTRACT.version,
+        glossary=GLOSSARY,
+        model=MODEL,
+        published_mapping=PUBLISHED_MAPPING,
+        run_id="B-2",
+        now=NOW,
+    )
+
+    assert again is None
     assert len(store.list_proposals(feed_id=FEED)) == 1
 
 

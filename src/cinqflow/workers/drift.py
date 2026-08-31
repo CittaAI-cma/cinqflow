@@ -372,15 +372,25 @@ def propose_mapping_for_unmapped_columns(
     else about this feed already decided" correctly, exactly as it would for
     any other caller of `propose`.
 
-    IDEMPOTENT PER UNMAPPED-COLUMN SET, the same discipline `propose_
-    contract_update` and `propose_mapping_redirect` keep above: an undecided
-    mapping-suggestion proposal already covering EXACTLY this set of columns
-    stands, and a second is not written under it — a feed that keeps
-    delivering the same ungoverned column must not grow a proposal per
-    delivery. Matched on `capability`, not just `agent`, because
-    `propose_mapping_redirect` writes to the SAME agent identity for a
-    different reason (see its own module note) and must not be mistaken for
-    a standing suggestion here.
+    IDEMPOTENT PER COLUMN, not per unmapped-column SET (W1-38 fix — an exact-
+    set comparison here let a column that stayed unmapped across two
+    deliveries earn a SECOND, independent proposal the moment the later
+    delivery also carried some genuinely new column, which is the ordinary
+    case: feeds add columns across deliveries, and a reviewer does not act
+    within one batch). A column already claimed by an undecided (DRAFT or
+    PENDING_REVIEW) mapping-suggestion proposal is never proposed again, no
+    matter what else arrives alongside it — only the NET-NEW columns, the
+    ones no live proposal already claims, go into this call's stub contract.
+    If every column here is already covered, nothing is written at all. A
+    covered column's existing proposal can never be extended to note that it
+    showed up again, either: `metadata.record_proposal`'s own contract is
+    that `payload` never changes once written (`propose_reprocess_for_newly_
+    mapped_columns`, below, relies on this same fact) — so "claim it once,
+    then leave it alone until a human decides" is the only shape idempotency
+    can take here. Matched on `capability`, not just `agent`,
+    because `propose_mapping_redirect` writes to the SAME agent identity for
+    a different reason (see its own module note) and must not be mistaken
+    for a standing suggestion here.
 
     NEVER DOUBLES UP WITH THE REDIRECT ABOVE. A settled rename's column can
     never reach this function in the first place: `classify` excludes a
@@ -401,21 +411,28 @@ def propose_mapping_for_unmapped_columns(
     if not unmapped_columns:
         return None
     stamp = now or datetime.now(UTC)
-    wanted = frozenset(unmapped_columns)
+    already_claimed: set[str] = set()
     for pending in agent.metadata.list_proposals(feed_id=feed_id, agent=MAPPING_SUGGESTION_AGENT):
-        if (
-            pending.capability == MAPPING_SUGGESTION_CAPABILITY
-            and pending.state in {ProposalState.DRAFT, ProposalState.PENDING_REVIEW}
-            and {str(r.get("source_column")) for r in pending.payload.get("records", ())} == wanted
-        ):
-            return None
+        if pending.capability == MAPPING_SUGGESTION_CAPABILITY and pending.state in {
+            ProposalState.DRAFT,
+            ProposalState.PENDING_REVIEW,
+        }:
+            already_claimed.update(
+                str(r.get("source_column")) for r in pending.payload.get("records", ())
+            )
+    # Order preserved, duplicates within `unmapped_columns` collapsed by the
+    # membership test — a column a live proposal already claims is skipped,
+    # never re-claimed by a second one.
+    net_new = tuple(dict.fromkeys(c for c in unmapped_columns if c not in already_claimed))
+    if not net_new:
+        return None
 
     stub_contract = SchemaContract(
         feed_id=feed_id,
         version=contract_version,
         columns=tuple(
             ContractColumn(name=column, type=TypeName.STRING, source_name=column)
-            for column in unmapped_columns
+            for column in net_new
         ),
     )
     result = agent.propose(
