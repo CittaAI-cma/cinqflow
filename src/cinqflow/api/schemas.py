@@ -268,11 +268,14 @@ class GovernedOut(BaseModel):
     `warnings` (CF-V1-W1-28) is `CloneOut`'s own pattern, reused rather than
     reinvented: a fact a caller should know about a side effect of this act
     that is NOT part of the object itself — RUNBOOK publish's knowledge-embed
-    step failing to run is the first tenant. `body` is the object's own
-    persisted content and is the wrong place for that: stuffing an ephemeral
-    operational note into it would make a client reading `body` believe the
-    note was part of the runbook. Empty for every act that has no such side
-    effect, which today is every act but a RUNBOOK publish.
+    step failing to run is the first tenant, and a MAPPING publish surfacing
+    reprocess candidates for once-ungoverned columns (CF-V1-E6-04, W1-34) is
+    the second, unconditionally rather than only on failure. `body` is the
+    object's own persisted content and is the wrong place for either: stuffing
+    an ephemeral operational note into it would make a client reading `body`
+    believe the note was part of the object. Empty for every act that has no
+    such side effect, which today is every act but a RUNBOOK or MAPPING
+    publish.
     """
 
     object_type: str

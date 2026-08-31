@@ -254,6 +254,7 @@ from cinqflow.ports.metadata_db import (
 )
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.delivery import DeliveryOutcome, DeliveryWorker
+from cinqflow.workers.drift import propose_reprocess_for_newly_mapped_columns
 from cinqflow.workers.incidents import priors_for, recovery_guides
 from cinqflow.workers.knowledge import KnowledgeIngestWorker
 from cinqflow.workers.ops import OpsVerifier
@@ -2672,6 +2673,8 @@ def create_app(
         object_type: ObjectType,
         object_id: str,
         metadata: Store,
+        control: Control,
+        profile: ConnectionProfile,
         audit: Audit,
         principal: Annotated[Principal, Depends(require(Action.PUBLISH))],
     ) -> GovernedOut:
@@ -2693,6 +2696,12 @@ def create_app(
         caller cannot safely retry (`lifecycle.publish` refuses a non-
         Approved object, and Published is exactly that). Its warning, if
         any, rides on `result` rather than being swallowed.
+
+        CF-V1-E6-04 (W1-34, F5 RE-SCOPED), MAPPING ONLY: the same AFTER-THE-
+        TRANSITION posture, for a different side effect — see
+        `_reprocess_candidates_after_mapping_publish`'s own docstring for why
+        a mapping publish that newly covers a once-ungoverned column
+        surfaces a reprocess CANDIDATE rather than ever running one itself.
         """
         result = _governance_act(
             "publish",
@@ -2711,6 +2720,12 @@ def create_app(
             )
             if warning is not None:
                 result = result.model_copy(update={"warnings": [warning]})
+        if object_type is ObjectType.MAPPING:
+            warning = _reprocess_candidates_after_mapping_publish(
+                metadata, control, profile, object_id, principal, audit
+            )
+            if warning is not None:
+                result = result.model_copy(update={"warnings": [*result.warnings, warning]})
         return result
 
     @app.post(
@@ -4660,6 +4675,66 @@ def _prior_published_version(
         if obj.version < before and obj.lifecycle_state is LifecycleState.PUBLISHED
     ]
     return max(candidates, key=lambda obj: obj.version, default=None)
+
+
+def _reprocess_candidates_after_mapping_publish(
+    metadata: MetadataDbPort,
+    control: ControlTablesPort,
+    profile: Profile | None,
+    object_id: str,
+    principal: Principal,
+    audit: AuditLog,
+) -> str | None:
+    """CF-V1-E6-04 (W1-34, F5 RE-SCOPED) — a mapping publish that newly covers
+    a column some past batch's own `control.schema_drift` rows already call
+    `unmapped_column` surfaces a reprocess CANDIDATE for that batch.
+
+    `workers.drift.propose_reprocess_for_newly_mapped_columns` does the real
+    work — reads which batch(es) actually saw the finding, builds a real
+    `reprocess_batch` `RecoveryPlan` per batch, and asks the SAME `authorize`
+    gate a human's own retry answers to, as the SYSTEM actor it is. See its
+    own docstring for why that gate — not a check written here — is what
+    keeps this from ever auto-running: the candidate lands REFUSED
+    (`RefusalReason.NOT_A_HUMAN`) in the SAME `ops.action_record` ledger
+    CF-V2-E12-03 built, and a steward's own `POST .../actions` is still the
+    only door that runs one.
+
+    RUNS AFTER `_governance_act` HAS ALREADY COMMITTED THE PUBLISH — the same
+    posture `_embed_published_runbook` takes toward its own side effect: a
+    `ControlTableError` here (the one anticipated failure — a control-tables
+    read going wrong) degrades to a warning on the response rather than
+    turning an already-durable publish into a 500 the caller cannot safely
+    retry. Anything else is a real bug in this trigger and is left to
+    propagate, the same rule `_embed_published_runbook` states for its own
+    `EmbeddingFailedError`.
+    """
+    published = metadata.get(ObjectType.MAPPING, object_id)
+    try:
+        created = propose_reprocess_for_newly_mapped_columns(
+            metadata,
+            control,
+            feed_id=object_id,
+            mapping=mapping_core.from_governed(published),
+            environment=_environment_of(profile),
+        )
+    except ControlTableError as failure:
+        detail = f"reprocess candidates not surfaced: {failure}"
+        audit.record(
+            object_type=ObjectType.MAPPING,
+            object_id=object_id,
+            version=published.version,
+            action="reprocess_candidates_failed:publish",
+            actor=principal.as_actor(),
+            detail=detail,
+        )
+        return detail
+    if not created:
+        return None
+    batches = ", ".join(sorted({row.record.target for row in created}))
+    return (
+        f"reprocess candidate(s) surfaced for batch(es) {batches} — a steward's own "
+        "operations action confirms one, this publish never runs one"
+    )
 
 
 def _accept_runbook_proposal(

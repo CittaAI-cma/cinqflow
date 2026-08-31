@@ -35,14 +35,25 @@ from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.drift import Rename
 from cinqflow.core.mapping import FeedMapping
 from cinqflow.core.model.governed import Actor
-from cinqflow.core.model.vocabulary import ActorType, RiskClass
+from cinqflow.core.model.vocabulary import ActorType, Layer, RiskClass
+from cinqflow.core.operations.actions import (
+    ALLOWED_STATES,
+    ActionRequest,
+    Environment,
+    OpsAction,
+    RefusedError,
+    authorize,
+    refused_action,
+)
+from cinqflow.core.operations.recovery import reprocess_batch
 from cinqflow.core.proposals import Proposal, ProposalState, submit
 from cinqflow.core.registry.canonical import CanonicalModel
-from cinqflow.core.registry.contract import ContractColumn, SchemaContract
+from cinqflow.core.registry.contract import ContractColumn, DriftKind, SchemaContract
 from cinqflow.core.registry.glossary import Glossary
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
-from cinqflow.ports.metadata_db import MetadataDbPort
+from cinqflow.ports.control_tables import ControlTablesPort
+from cinqflow.ports.metadata_db import ActionRecordRow, MetadataDbPort
 
 AGENT = "drift-detection"
 CAPABILITY = "propose_contract_update"
@@ -418,3 +429,169 @@ def propose_mapping_for_unmapped_columns(
         now=stamp,
     )
     return result.proposal
+
+
+def _bronze_row_count(control: ControlTablesPort, batch_id: str) -> int:
+    """What a SUPERSEDING reprocess re-reads from Bronze.
+
+    `reprocess_batch` starts at `Layer.SILVER_RAW` — Bronze is untouched, only
+    read again — so the scope a preview should state is what Bronze already
+    holds for this batch, not a guess.
+    """
+    for stage in control.get_stages(batch_id):
+        if stage.stage is Layer.BRONZE:
+            return stage.records_out
+    return 0
+
+
+def propose_reprocess_for_newly_mapped_columns(
+    metadata: MetadataDbPort,
+    control: ControlTablesPort,
+    *,
+    feed_id: str,
+    mapping: FeedMapping,
+    environment: Environment,
+    now: datetime | None = None,
+) -> tuple[ActionRecordRow, ...]:
+    """W1-34 (F5, RE-SCOPED) — the batch that could not have known, found by
+    what it actually left behind.
+
+    THE PREMISE THIS REPLACES. F5 was framed as "resolve, then reprocess FROM
+    BRONZE a PARKED batch". Neither noun survives contact with the code:
+    "parked" (`core.landing`) means a FILE matching no feed at all, nothing to
+    do with mapping; and `DriftKind.UNMAPPED_COLUMN.blocks_batch` is FALSE,
+    UNCONDITIONALLY (`core.registry.contract.compare_to_contract`, `core.drift
+    .classify`) — an additive, ungoverned column never blocks a batch. There is
+    no parked batch to rescue. There is a batch that already reached
+    COMPLETED, whose ledger is honest about what happened
+    (`control.schema_drift`'s own UNMAPPED_COLUMN row says so, per column, per
+    batch, the moment W1-32 landed) and whose DATA is now incomplete relative
+    to what a mapping published AFTER it arrived can do.
+
+    THE TRACE THIS SLAB ADDS. W1-33's proposal carries `run_id` — the FIRST
+    batch that triggered it — and nothing else, because
+    `propose_mapping_for_unmapped_columns` is idempotent per column SET: a
+    feed that keeps delivering the same ungoverned column while the
+    suggestion sits in review earns no second proposal, and therefore leaves
+    no second trace on it. `payload` cannot fix this after the fact either —
+    `metadata.record_proposal`'s own contract is that a proposal's payload
+    NEVER changes once written. So this reads the trace that was ALREADY
+    complete and already per-batch: `control.schema_drift`, written by
+    `workers.pipeline._process` for EVERY batch that ever saw the finding,
+    whether or not a proposal existed yet. A column this feed's newly
+    PUBLISHED mapping now covers (`mapping.source_columns`) that some past
+    batch's own `schema_drift` rows name as `unmapped_column` IS one of the
+    batch(es) this slab exists for — read from the ledger, never guessed, and
+    never "the most recent batch for this feed".
+
+    THE RECOVERY TOOLKIT, UNCHANGED. `core.operations.recovery.reprocess_batch`
+    already is "re-run with the fixed mapping": SUPERSEDING, `start_stage=
+    SILVER_RAW`, Bronze re-read as-is under the SAME rows, a NEW `batch_id` so
+    the ledger keeps both versions. `prove_idempotent()` proves it before
+    anything downstream ever sees the plan — the same proof every recovery
+    plan owes, not a new one written for this trigger.
+
+    AGENTS PROPOSE; HUMANS DISPOSE, MADE STRUCTURAL RATHER THAN ASSUMED. This
+    function does not decide whether to auto-run a reprocess — it asks the
+    SAME `core.operations.actions.authorize` gate every human-submitted action
+    answers to, as the actor it actually is: `UNMAPPED_COLUMN_CALLER`,
+    `ActorType.SYSTEM`. Gate one of six, unconditional on state or
+    environment, already refuses exactly this
+    (`RefusalReason.NOT_A_HUMAN`, proved by
+    `test_an_agent_cannot_act_on_the_surface` before this slab existed) — so a
+    mapping publish can never auto-execute a re-computation of a feed's data,
+    without a second law written to stop it. The refusal is recorded through
+    `refused_action`, into the SAME `ops.action_record` ledger CF-V2-E12-03
+    built and `act_on_batch` already writes to — "every refusal leaves a
+    row" applies here exactly as it does to a human's declined retry. A
+    steward who reads `GET /operations/batches/{batch_id}/action-history`
+    finds the candidate named, reasoned and scoped; running it for real is
+    still their own `POST .../actions` call, with their own approval
+    identifier where the profile requires one.
+
+    If `authorize` ever stopped refusing a SYSTEM actor, this function would
+    have nothing left to stop it auto-running a reprocess — so it raises
+    rather than falling through, because a bug that made an agent's action
+    self-authorize is exactly the incident this law exists to prevent.
+
+    IDEMPOTENT PER BATCH, the same discipline every other trigger in this
+    module keeps: a batch that already carries ANY `reprocess_batch` record
+    (refused, requested or verified) is never offered a second one, so a
+    mapping publish that runs twice — or a steward who already acted — does
+    not grow a duplicate candidate.
+    """
+    stamp = now or datetime.now(UTC)
+    covered = set(mapping.source_columns)
+    if not covered:
+        return ()
+
+    eligible_states = ALLOWED_STATES[OpsAction.REPROCESS_BATCH]
+    already_actioned = {
+        row.record.target
+        for row in metadata.list_action_records(feed_id=feed_id, limit=500)
+        if row.record.action is OpsAction.REPROCESS_BATCH
+    }
+    feed_paused = metadata.current_suspension(feed_id).is_active_at(stamp)
+
+    created: list[ActionRecordRow] = []
+    for batch in control.list_batches(feed_id, 500):
+        if batch.batch_id in already_actioned or batch.state not in eligible_states:
+            continue
+        matched = sorted(
+            {
+                drift.column_name
+                for drift in control.get_schema_drift(batch.batch_id)
+                if drift.classification == DriftKind.UNMAPPED_COLUMN.value
+                and drift.column_name in covered
+            }
+        )
+        if not matched:
+            continue
+
+        plan = reprocess_batch(
+            batch_id=batch.batch_id,
+            feed_id=feed_id,
+            rows=_bronze_row_count(control, batch.batch_id),
+            new_batch_id=uuid.uuid4().hex[:12],
+        )
+        plan.prove_idempotent()
+
+        columns = ", ".join(matched)
+        request = ActionRequest(
+            action=OpsAction.REPROCESS_BATCH,
+            target=batch.batch_id,
+            actor=UNMAPPED_COLUMN_CALLER,
+            reason=(
+                f"mapping v{mapping.version} was just published and now covers {columns} — "
+                f"{batch.batch_id} arrived before that and could not have known, so "
+                f"{plan.row_count:,} row(s) landed with no line reading it. Superseding "
+                f"batch {plan.batch_id} would recompute silver_raw onward from the same "
+                "Bronze rows under the fixed mapping."
+            ),
+        )
+        try:
+            authorize(
+                request,
+                environment=environment,
+                batch_state=batch.state,
+                feed_paused=feed_paused,
+                now=stamp,
+            )
+        except RefusedError as refused:
+            created.append(
+                metadata.record_action_event(
+                    ActionRecordRow(
+                        record_id=str(uuid.uuid4()),
+                        feed_id=feed_id,
+                        record=refused_action(request, refused.refusal, now=stamp),
+                    )
+                )
+            )
+        else:
+            raise RuntimeError(
+                f"{request.action.value} on {batch.batch_id} authorized for a SYSTEM "
+                "actor. 'Agents propose; humans dispose' must refuse this before it ever "
+                "reaches here — this trigger has no execution path of its own, and letting "
+                "it fall through would auto-run a reprocess nobody confirmed."
+            )
+    return tuple(created)
