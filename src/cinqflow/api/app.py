@@ -19,7 +19,7 @@ that can only be tested the way production runs it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -217,7 +217,7 @@ from cinqflow.core.registry import feed as feed_registry
 from cinqflow.core.registry import operations as operations_registry
 from cinqflow.core.registry import search as registry_search
 from cinqflow.core.registry import source as source_registry
-from cinqflow.core.registry.contract import DriftKind, SchemaContract
+from cinqflow.core.registry.contract import SchemaContract
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.core.registry.wave0 import wave_0_register
@@ -245,7 +245,7 @@ from cinqflow.ports.control_tables import (
     BatchNotFoundError,
     ControlTableError,
     ControlTablesPort,
-    SchemaDrift,
+    schema_contract_evidence,
 )
 from cinqflow.ports.metadata_db import (
     ActionRecordRow,
@@ -6624,36 +6624,6 @@ def _variance_out(variance: variances_core.Variance) -> VarianceOut:
     )
 
 
-#: W1-32 — the drift kinds `core.drift.attach_blast_radius` enriches with a
-#: blast radius. A finding of one of these kinds is worth a reviewer's eye
-#: even when it never blocked the batch — REMOVED and UNMAPPED_COLUMN name a
-#: governance gap, and RENAMED names one this run already read through.
-_NOTABLE_EVEN_WHEN_NOT_BLOCKING = frozenset(
-    {DriftKind.REMOVED.value, DriftKind.RENAMED.value, DriftKind.UNMAPPED_COLUMN.value}
-)
-
-
-def _schema_contract_evidence(drift: Sequence[SchemaDrift]) -> str:
-    """The SCHEMA_CONTRACT check's evidence — the one surface a
-    `core.drift.DriftAssessment` result reaches an operator through today.
-
-    Blocking drift still wins the line outright: a batch that failed at the
-    door is what a reviewer needs to see first. Short of that, this is where
-    `attach_blast_radius`'s work becomes visible — REMOVED, RENAMED and
-    UNMAPPED_COLUMN findings carry their own blast radius in `detail` now, so
-    surfacing their OWN text (rather than re-deriving a summary) is the whole
-    change: no new column, no new endpoint, the same `SchemaDrift.detail`
-    `record_schema_drift` has always written.
-    """
-    blocking = [d for d in drift if d.blocked_batch]
-    if blocking:
-        return f"blocking drift: {', '.join(d.column_name for d in blocking)}"
-    notable = [d for d in drift if d.classification in _NOTABLE_EVEN_WHEN_NOT_BLOCKING]
-    if notable:
-        return "; ".join(d.detail for d in notable)
-    return f"{len(drift)} drift finding(s), none blocking"
-
-
 def _certification_checks(
     control: ControlTablesPort, batch: BatchControl
 ) -> tuple[batch_certification.Check, ...]:
@@ -6728,7 +6698,7 @@ def _certification_checks(
             kind=batch_certification.CheckKind.SCHEMA_CONTRACT,
             passed=not any(d.blocked_batch for d in drift),
             completed=True,
-            evidence=_schema_contract_evidence(drift),
+            evidence=schema_contract_evidence(drift),
             citation=CitationId(kind=CitationKind.BATCH, subject=batch.batch_id),
         )
     )

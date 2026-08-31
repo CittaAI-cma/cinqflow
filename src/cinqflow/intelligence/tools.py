@@ -60,6 +60,7 @@ from cinqflow.ports.control_tables import (
     BatchControl,
     BatchNotFoundError,
     ControlTablesPort,
+    schema_contract_evidence,
 )
 from cinqflow.ports.control_tables import SlaCycle as SlaCycleRow
 from cinqflow.ports.metadata_db import MetadataDbPort, ObjectNotFoundError
@@ -1072,7 +1073,13 @@ def _certification_checks(
 ) -> tuple[batch_certification.Check, ...]:
     """Mirrors `api.app._certification_checks` — every check a control-plane
     read, INCOMPLETE (never assumed passed) when nothing is recorded yet. See
-    the module note above for why this is written here rather than imported."""
+    the module note above for why this is written here rather than imported.
+
+    W1-37: the SCHEMA_CONTRACT check's evidence text is the one exception —
+    `ports.control_tables.schema_contract_evidence` is a PURE function over
+    rows this call has already fetched, so nothing about the layering note
+    above stops importing it, and nothing justifies re-deriving it a second,
+    possibly-drifting way. See that function's own docstring."""
     checks: list[batch_certification.Check] = []
     recons = control.get_reconciliation(batch.batch_id)
     balanced = all(r.balances for r in recons)
@@ -1135,11 +1142,7 @@ def _certification_checks(
             kind=batch_certification.CheckKind.SCHEMA_CONTRACT,
             passed=not any(d.blocked_batch for d in drift),
             completed=True,
-            evidence=(
-                f"{len(drift)} drift finding(s), none blocking"
-                if not any(d.blocked_batch for d in drift)
-                else f"blocking drift: {', '.join(d.column_name for d in drift if d.blocked_batch)}"
-            ),
+            evidence=schema_contract_evidence(drift),
         )
     )
     owed = next(

@@ -32,6 +32,7 @@ from cinqflow.core.model.vocabulary import (
     FileState,
     Layer,
 )
+from cinqflow.core.registry.contract import DriftKind
 
 # The eleven. All Delta-backed at the target, Postgres-backed at rung 0.5,
 # ALL linked by batch_id for end-to-end traceability.
@@ -129,6 +130,47 @@ class SchemaDrift:
     detail: str
     blocked_batch: bool
     detected_ts: datetime
+
+
+#: W1-32 — the drift kinds `core.drift.attach_blast_radius` enriches with a
+#: blast radius. A finding of one of these kinds is worth a reviewer's eye
+#: even when it never blocked the batch — REMOVED and UNMAPPED_COLUMN name a
+#: governance gap, and RENAMED names one this run already read through.
+_NOTABLE_EVEN_WHEN_NOT_BLOCKING = frozenset(
+    {DriftKind.REMOVED.value, DriftKind.RENAMED.value, DriftKind.UNMAPPED_COLUMN.value}
+)
+
+
+def schema_contract_evidence(drift: Sequence[SchemaDrift]) -> str:
+    """The SCHEMA_CONTRACT certification check's evidence text.
+
+    W1-37: lives here, not duplicated once in `api.app._certification_checks`
+    and once in `intelligence.tools._certification_checks`, because it is a
+    PURE function over `SchemaDrift` rows this module already defines — no
+    port call, no adapter, nothing the `intelligence -> adapters -> ports ->
+    core` layering forbids either caller from reaching. `_certification_
+    checks` itself stays duplicated (it needs a live `ControlTablesPort` to
+    read from, which `intelligence` may not import from `api` or `workers`
+    to get), but the one piece of that function that is pure string-building
+    belongs in ONE place — so a caller asking a model is answered by the
+    identical arithmetic a human reading the screen would see, never a
+    second, slightly different, opinion.
+
+    Blocking drift still wins the line outright: a batch that failed at the
+    door is what a reviewer needs to see first. Short of that, this is where
+    `attach_blast_radius`'s work becomes visible — REMOVED, RENAMED and
+    UNMAPPED_COLUMN findings carry their own blast radius in `detail`, so
+    surfacing their OWN text (rather than re-deriving a summary) is the whole
+    of it: the same `SchemaDrift.detail` `record_schema_drift` has always
+    written.
+    """
+    blocking = [d for d in drift if d.blocked_batch]
+    if blocking:
+        return f"blocking drift: {', '.join(d.column_name for d in blocking)}"
+    notable = [d for d in drift if d.classification in _NOTABLE_EVEN_WHEN_NOT_BLOCKING]
+    if notable:
+        return "; ".join(d.detail for d in notable)
+    return f"{len(drift)} drift finding(s), none blocking"
 
 
 @dataclass(frozen=True)
