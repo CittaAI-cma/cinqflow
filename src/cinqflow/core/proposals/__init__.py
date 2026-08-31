@@ -29,6 +29,8 @@ overwritten by a decision.
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum, unique
@@ -439,6 +441,98 @@ def measure(proposal: Proposal, *, deterministic_keys: frozenset[str] = frozense
         inferred_total=total - len(deterministic),
         inferred_corrected=len(corrected_names) - len(deterministic_corrected),
         additions=additions,
+    )
+
+
+# ── the health metric, across proposals · CF-V1-E6-02 ───────────────────────
+#
+#     "the acceptance rate per agent per week is THE health metric"
+#     — this module's own `proposal_acceptance` route, one plane up
+#
+# `measure()` grades ONE decided proposal. Nothing before this line adds two
+# of them together — which is the entire gap this closes: the arithmetic
+# already existed, and so did a place to see it for a single proposal, but
+# never a place that summed across every proposal an agent produced.
+@dataclass(frozen=True)
+class WeeklyAcceptance:
+    """One agent's acceptance, summed over every proposal decided in one ISO
+    week.
+
+    SUMMED, NOT AVERAGED. Two decided proposals of very different size do not
+    deserve equal weight in a week's number — the same reason `measure()`
+    counts FIELDS rather than proposals one level up. Averaging rates would
+    let five easy proposals outvote the one hard one a reviewer actually spent
+    an afternoon correcting.
+    """
+
+    agent: str
+    iso_year: int
+    iso_week: int
+    acceptance: Acceptance
+    proposal_count: int
+
+    @property
+    def rate(self) -> float:
+        return self.acceptance.rate
+
+    @property
+    def week_label(self) -> str:
+        """ISO 8601's own week-date form — `2026-W35` — sorts exactly as it
+        reads, which a `(year, month)` label cannot promise across a week that
+        crosses a month boundary."""
+        return f"{self.iso_year}-W{self.iso_week:02d}"
+
+
+def weekly_acceptance(
+    measured: Sequence[tuple[Proposal, Acceptance]],
+) -> tuple[WeeklyAcceptance, ...]:
+    """Bucket by agent and the ISO week `created_ts` falls in.
+
+    ISO week rather than a calendar week: `datetime.isocalendar()` hands it to
+    every caller for free, and it is what an operations cadence actually means
+    by "this week" — a plain calendar week can put a Monday and the Sunday
+    immediately before it in different months, and therefore different
+    buckets, for a change nobody made.
+
+    Takes (proposal, its measured `Acceptance`) pairs rather than measuring
+    proposals itself: WHICH `deterministic_keys` apply is a per-agent,
+    per-payload decision the caller already has to make to grade one proposal
+    at all, and re-deciding it in here would be a second place that decision
+    could drift from the first. This function reads only `agent` and
+    `created_ts` off the proposal — it does not open the payload.
+
+    Sorted agent-then-week, oldest week first within each agent — `trend()`'s
+    own convention one plane over, so a chart built from this reads left to
+    right without a second sort.
+    """
+    buckets: dict[tuple[str, int, int], list[Acceptance]] = defaultdict(list)
+    for proposal, acceptance in measured:
+        iso = proposal.created_ts.isocalendar()
+        buckets[(proposal.agent, iso.year, iso.week)].append(acceptance)
+
+    return tuple(
+        WeeklyAcceptance(
+            agent=agent,
+            iso_year=year,
+            iso_week=week,
+            acceptance=_sum_acceptance(accs),
+            proposal_count=len(accs),
+        )
+        for (agent, year, week), accs in sorted(buckets.items())
+    )
+
+
+def _sum_acceptance(accs: Sequence[Acceptance]) -> Acceptance:
+    """Field-by-field sum. A week's `Acceptance` is not a mean of rates — see
+    `WeeklyAcceptance`'s own docstring for why."""
+    return Acceptance(
+        total=sum(a.total for a in accs),
+        corrected=sum(a.corrected for a in accs),
+        deterministic_total=sum(a.deterministic_total for a in accs),
+        deterministic_corrected=sum(a.deterministic_corrected for a in accs),
+        inferred_total=sum(a.inferred_total for a in accs),
+        inferred_corrected=sum(a.inferred_corrected for a in accs),
+        additions=sum(a.additions for a in accs),
     )
 
 

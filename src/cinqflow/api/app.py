@@ -166,6 +166,7 @@ from cinqflow.api.schemas import (
     VarianceOut,
     VersionDiffOut,
     WaiveVarianceIn,
+    WeeklyAcceptanceOut,
     WizardOut,
     WizardStepOut,
     WorkQueueOut,
@@ -2258,6 +2259,47 @@ def create_app(
             if r.get("settled_by") == "computation"
         )
         return _acceptance_out(proposals.measure(proposal, deterministic_keys=deterministic))
+
+    @app.get(
+        f"{API_PREFIX}/agents/{{agent}}/acceptance",
+        response_model=list[WeeklyAcceptanceOut],
+        tags=["intelligence"],
+    )
+    def agent_weekly_acceptance(
+        agent: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        limit: int = 200,
+    ) -> list[WeeklyAcceptanceOut]:
+        """The health metric the route above's own docstring already named:
+        the acceptance rate THIS agent earned, per ISO week, summed across
+        every proposal a person has decided — CF-V1-E6-02's missing half.
+
+        Reads APPROVED and APPLIED proposals, the same pair
+        `Proposal.is_accepted_untouched` reads — a rejected proposal was
+        never accepted, and a pending one has not been graded yet.
+
+        `deterministic_keys` is left at `measure()`'s default (empty) here on
+        purpose: which `settled_by` value counts as deterministic differs by
+        agent and payload shape, which is exactly why the single-proposal
+        route above computes it per agent rather than generically. Repeating
+        that per-agent mapping here would put agent-specific business logic
+        inside a function this route exists to keep agent-agnostic — and the
+        number reported here is the OVERALL rate, which does not depend on
+        the deterministic/inferred split.
+
+        Not hard-coded to one agent beyond the path parameter: any agent name
+        that has ever written a proposal works, including one this build has
+        never heard of, because the aggregation reads only what `Proposal`
+        and `Acceptance` already carry.
+        """
+        decided = [
+            p
+            for state in (ProposalState.APPROVED, ProposalState.APPLIED)
+            for p in metadata.list_proposals(agent=agent, state=state, limit=limit)
+        ]
+        measured = [(p, proposals.measure(p)) for p in decided]
+        return [_weekly_acceptance_out(week) for week in proposals.weekly_acceptance(measured)]
 
     # ── governance · CF-V1-E11-01 — the one lifecycle, exposed ───────────────
     #
@@ -5582,6 +5624,15 @@ def _acceptance_out(acceptance: proposals.Acceptance) -> AcceptanceOut:
         inferred_rate=acceptance.inferred_rate,
         additions=acceptance.additions,
         report=acceptance.report(SCHEMA_ACCEPTANCE_GATE),
+    )
+
+
+def _weekly_acceptance_out(weekly: proposals.WeeklyAcceptance) -> WeeklyAcceptanceOut:
+    return WeeklyAcceptanceOut(
+        agent=weekly.agent,
+        week=weekly.week_label,
+        proposal_count=weekly.proposal_count,
+        acceptance=_acceptance_out(weekly.acceptance),
     )
 
 

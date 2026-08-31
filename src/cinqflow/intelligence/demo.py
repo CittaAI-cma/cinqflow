@@ -51,7 +51,7 @@ from cinqflow.core.model.vocabulary import (
     Layer,
     RiskClass,
 )
-from cinqflow.core.proposals import Proposal
+from cinqflow.core.proposals import Correction, Proposal, approve
 from cinqflow.core.proposals import submit as submit_proposal
 from cinqflow.core.registry import contract as contract_registry
 from cinqflow.core.registry.contract import ContractColumn, DqRule, SchemaContract, Severity
@@ -277,6 +277,7 @@ def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
         )
     )
     _seed_mapping_review(store, now=now)
+    _seed_agent_acceptance_history(store, now=now)
 
 
 def _seed_mapping_review(store: MetadataDbPort, *, now: datetime) -> None:
@@ -416,6 +417,70 @@ def _seed_mapping_review(store: MetadataDbPort, *, now: datetime) -> None:
             now=now - timedelta(hours=2),
         )
     )
+
+
+def _seed_agent_acceptance_history(store: MetadataDbPort, *, now: datetime) -> None:
+    """W1-35 (F6) · CF-V1-E6-02 — a handful of DECIDED mapping-suggestion
+    proposals, spanning a few ISO weeks, so `/ai/acceptance` has a real trend
+    to render rather than the empty series everything above this line would
+    otherwise leave the health metric with.
+
+    APPROVED, never carried on to `apply()`: `weekly_acceptance` reads only
+    `Proposal.agent`, `.created_ts` and its measured `Acceptance`, all of
+    which an APPROVED proposal already carries — and stopping there means
+    this history never writes a second MAPPING version behind
+    `MAPPING_REVIEW_FEED_ID`'s own v1, which `_seed_mapping_review`'s still-
+    PENDING proposal is the one demo proposal that gets to do.
+
+    None of the four falls in `now`'s OWN ISO week — the oldest is four weeks
+    back, the newest one week back. `_seed_mapping_review`'s own proposal for
+    this same agent sits at `now - 2 hours`, always in `now`'s week, and once
+    something approves it (as `mapping-proposal-review.spec.ts` does) that
+    week's bucket carries a second, unrelated proposal on top of whatever
+    this function wrote there. Stopping a full week short of `now` keeps this
+    history's four numbers exactly what they were seeded as, no matter what
+    else this shared demo plane does with the current week's bucket.
+
+    The counts climb week over week on purpose — a flat 100% from the first
+    week would look like a placeholder that never had anything to correct.
+    """
+    weekly_history = (
+        (now - timedelta(weeks=4), 6, 3),
+        (now - timedelta(weeks=3), 8, 2),
+        (now - timedelta(weeks=2), 10, 1),
+        (now - timedelta(weeks=1), 5, 0),
+    )
+    for index, (created_ts, total, corrected) in enumerate(weekly_history):
+        payload = {
+            "key": "source_column",
+            "records": [{"source_column": f"acceptance_history_col{i}"} for i in range(total)],
+        }
+        corrections = tuple(
+            Correction(
+                field_path=f"acceptance_history_col{i}",
+                proposed="agent-said",
+                accepted="human-said",
+            )
+            for i in range(corrected)
+        )
+        proposal = Proposal(
+            proposal_id=f"mapping-suggestion-acceptance-history-{index}",
+            agent=MAPPING_SUGGESTION_AGENT_NAME,
+            capability=MAPPING_SUGGESTION_CAPABILITY,
+            risk_class=RiskClass.R2,
+            run_id=f"seed-mapping-acceptance-history-{index}",
+            feed_id=MAPPING_REVIEW_FEED_ID,
+            payload=payload,
+            created_by=MAPPING_SUGGESTION_ACTOR,
+            created_ts=created_ts,
+        )
+        decided = approve(
+            submit_proposal(proposal, now=created_ts),
+            approver=REVIEWER,
+            corrections=corrections,
+            now=created_ts,
+        )
+        store.record_proposal(decided)
 
 
 def plane() -> tuple[MemMetadataDb, MemStoreControlTables]:

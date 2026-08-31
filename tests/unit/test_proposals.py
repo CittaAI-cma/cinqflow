@@ -20,6 +20,7 @@ import pytest
 from cinqflow.core.model.governed import Actor, LifecycleState, ObjectType
 from cinqflow.core.model.vocabulary import ActorType, RiskClass
 from cinqflow.core.proposals import (
+    Acceptance,
     AgentDecisionError,
     Correction,
     NotAutomatableError,
@@ -32,6 +33,7 @@ from cinqflow.core.proposals import (
     measure,
     reject,
     submit,
+    weekly_acceptance,
 )
 
 pytestmark = pytest.mark.unit
@@ -353,3 +355,102 @@ def test_a_rejection_keeps_its_reason() -> None:
     assert decided.state is ProposalState.REJECTED
     assert decided.decided_by == STEWARD
     assert "member id" in decided.decision_comment
+
+
+# ── the health metric, across proposals · W1-35 / CF-V1-E6-02 ───────────────
+#
+# `measure()` grades one proposal; these prove the sum across many, bucketed
+# the way an operator actually asks the question: "how is this agent doing,
+# this week?"
+
+WEEK_35_MON = datetime(2026, 8, 24, 9, tzinfo=UTC)
+WEEK_35_SUN = datetime(2026, 8, 30, 17, tzinfo=UTC)
+WEEK_36_MON = datetime(2026, 8, 31, 9, tzinfo=UTC)
+
+
+def _decided(
+    agent: str, created_ts: datetime, *, total: int, corrected: int
+) -> tuple[Proposal, Acceptance]:
+    """A decided proposal with a KNOWN correction rate: `corrected` of `total`
+    fields changed, everything else accepted untouched."""
+    payload = {
+        "key": "source_name",
+        "records": [{"source_name": f"col{i}"} for i in range(total)],
+    }
+    corrections = tuple(
+        Correction(field_path=f"col{i}", proposed="agent-said", accepted="human-said")
+        for i in range(corrected)
+    )
+    proposal = _proposal(
+        proposal_id=f"prop-{agent}-{created_ts.date()}-{total}-{corrected}",
+        agent=agent,
+        payload=payload,
+        created_ts=created_ts,
+    )
+    decided = approve(
+        submit(proposal, now=created_ts),
+        approver=BA,
+        corrections=corrections,
+        now=created_ts,
+    )
+    return decided, measure(decided)
+
+
+def test_weekly_acceptance_buckets_by_agent_and_iso_week() -> None:
+    """Two agents, two ISO weeks — a synthetic set with known rates, checked
+    against the exact bucket the ISO week (not the calendar month) puts them
+    in. 2026-08-31 is a Monday, and it starts ISO week 36 even though
+    2026-08-30 — the day before — is still in week 35."""
+    pairs = [
+        _decided("schema-inference", WEEK_35_MON, total=3, corrected=1),
+        _decided("schema-inference", WEEK_35_SUN, total=2, corrected=0),
+        _decided("schema-inference", WEEK_36_MON, total=4, corrected=4),
+        _decided("mapping-suggestion", WEEK_35_MON, total=5, corrected=1),
+    ]
+
+    buckets = {(w.agent, w.iso_year, w.iso_week): w for w in weekly_acceptance(pairs)}
+    assert set(buckets) == {
+        ("schema-inference", 2026, 35),
+        ("schema-inference", 2026, 36),
+        ("mapping-suggestion", 2026, 35),
+    }
+
+    week35 = buckets[("schema-inference", 2026, 35)]
+    assert week35.proposal_count == 2
+    assert week35.week_label == "2026-W35"
+    # SUMMED, not averaged: 1 correction over 5 total fields, not the mean of
+    # 2/3 and 1.0 — averaging would read 0.833, not the 0.8 the raw counts say.
+    assert (week35.acceptance.total, week35.acceptance.corrected) == (5, 1)
+    assert week35.rate == pytest.approx(0.8)
+
+    week36 = buckets[("schema-inference", 2026, 36)]
+    assert week36.proposal_count == 1
+    assert week36.week_label == "2026-W36"
+    assert week36.rate == 0.0
+
+    mapping_week35 = buckets[("mapping-suggestion", 2026, 35)]
+    assert mapping_week35.proposal_count == 1
+    assert (mapping_week35.acceptance.total, mapping_week35.acceptance.corrected) == (5, 1)
+    assert mapping_week35.rate == pytest.approx(0.8)
+
+
+def test_weekly_acceptance_sorts_agent_then_oldest_week_first() -> None:
+    """`trend()`'s own convention one plane over: oldest first, so a chart
+    built from this reads left to right without a second sort."""
+    pairs = [
+        _decided("schema-inference", WEEK_36_MON, total=1, corrected=0),
+        _decided("schema-inference", WEEK_35_MON, total=1, corrected=0),
+        _decided("mapping-suggestion", WEEK_35_MON, total=1, corrected=0),
+    ]
+    ordered = weekly_acceptance(pairs)
+    assert [(w.agent, w.iso_week) for w in ordered] == [
+        ("mapping-suggestion", 35),
+        ("schema-inference", 35),
+        ("schema-inference", 36),
+    ]
+
+
+def test_weekly_acceptance_of_nothing_is_empty() -> None:
+    """No proposals is not a bucket scoring 100% — it is no buckets at all,
+    the same discipline `Acceptance.passes` holds a single proposal to."""
+    assert weekly_acceptance([]) == ()

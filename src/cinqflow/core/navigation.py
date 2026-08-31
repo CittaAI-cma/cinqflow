@@ -183,6 +183,19 @@ DESTINATIONS: tuple[Destination, ...] = (
         group=NavGroup.AI,
         answers="Every agent run, its cost against cap, its grounding, and its refusals.",
     ),
+    #: CF-V1-E6-02 (W1-35/F6). `proposals.measure` and the per-proposal
+    #: acceptance route already existed; this is the first place the SUM
+    #: across proposals — the number that route's own docstring called THE
+    #: health metric — has anywhere to be seen.
+    Destination(
+        key="agent-acceptance",
+        label="Agent Acceptance",
+        route="/ai/acceptance",
+        group=NavGroup.AI,
+        answers="How often a person accepted what an agent proposed, per agent, per week.",
+        wave=1,
+        prominent_for=frozenset({Role.BUSINESS_ANALYST, Role.DATA_STEWARD}),
+    ),
     Destination(
         key="users",
         label="Users & Roles",

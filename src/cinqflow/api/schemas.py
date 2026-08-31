@@ -1320,6 +1320,22 @@ class AcceptanceOut(BaseModel):
     report: str
 
 
+class WeeklyAcceptanceOut(BaseModel):
+    """One agent's acceptance, summed over every proposal decided in one ISO
+    week — CF-V1-E6-02's own health metric, finally with a place to see it
+    across proposals rather than one at a time.
+
+    `week` is the ISO week-date label (`2026-W35`), not a calendar month —
+    it sorts exactly as it reads, which is what a client renders a sparkline
+    from without a second sort.
+    """
+
+    agent: str
+    week: str
+    proposal_count: int
+    acceptance: AcceptanceOut
+
+
 # ── the mapping studio · CF-V1-E6-03 ─────────────────────────────────────────
 
 
