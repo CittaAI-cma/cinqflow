@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from cinqflow.core.compiler.plan import LogicalPlan, StepKind
+from cinqflow.core.mapping import FeedMapping
 from cinqflow.core.model.vocabulary import ErrorCategory, Layer
 from cinqflow.core.recon import DropReason, StageReconciliation
 from cinqflow.core.registry.contract import (
@@ -70,6 +71,7 @@ def apply(
     rules: tuple[DqRule, ...],
     batch_id: str,
     reads_as: dict[str, str] | None = None,
+    mapping: FeedMapping | None = None,
 ) -> ExecutionResult:
     """Run the cast -> map -> evaluate_rules steps over parsed rows.
 
@@ -83,6 +85,12 @@ def apply(
     rename that produced the alias also produced a draft contract v(n+1) for
     a steward. Refusing to read a spelling the glossary itself settled would
     null a contracted column and quarantine a perfectly good file.
+
+    `mapping` is W1-30: the feed's PUBLISHED `FeedMapping`, when it has one.
+    `None` is the common case today — nothing publishes a mapping
+    automatically — and it means the MAP step runs exactly as it always has,
+    the bare rename `ContractColumn.reads_from` declares. A feed that has
+    never had a mapping published cannot tell the difference.
     """
     steps = set(plan.step_kinds)
     loaded: list[dict[str, Any]] = []
@@ -92,7 +100,12 @@ def apply(
 
     for row_number, raw in enumerate(rows, start=1):
         mapped, failure = _cast_and_map(
-            raw, contract, row_number, run_cast=StepKind.CAST in steps, reads_as=reads_as
+            raw,
+            contract,
+            row_number,
+            run_cast=StepKind.CAST in steps,
+            reads_as=reads_as,
+            mapping=mapping,
         )
         if failure is not None:
             quarantined.append(failure)
@@ -178,16 +191,54 @@ def _cast_and_map(
     *,
     run_cast: bool,
     reads_as: dict[str, str] | None = None,
+    mapping: FeedMapping | None = None,
 ) -> tuple[dict[str, Any], QuarantinedRow | None]:
     """Cast to contracted types and rename to canonical names, in one pass.
 
-    In Wave 0 the mapping IS the rename declared on the contract column. Wave
-    1's mapping studio adds transforms; the step stays where it is.
+    Two ways to get from a raw value to a canonical one:
+
+      • no published mapping (`mapping is None`, still the common case): the
+        bare rename `ContractColumn.reads_from` declares. Wave 0's behaviour,
+        untouched by W1-30.
+      • a PUBLISHED `FeedMapping` (W1-30): every value comes from
+        `FeedMapping.apply_to` instead — the transform taxonomy the mapping
+        studio writes (cast, split, concat, lookup, conditional, constant)
+        finally governs a running batch, not only its own unit test.
+
+    Casting against the CONTRACT's declared type happens HERE either way.
+    `core.mapping.apply` deliberately returns strings — its own docstring
+    says `cast_value` already owns type conversion for the whole platform —
+    so a mapping says WHICH string populates a field, and the contract still
+    says how to parse it.
     """
     aliases = reads_as or {}
+    transformed: dict[str, object] = {}
+    if mapping is not None:
+        # `reads_as` aliases are applied to the RAW row's keys BEFORE
+        # `apply_to` runs, not after: a mapping line is authored against the
+        # contract's own spelling, and a settled rename this run must not
+        # make that spelling go missing from underneath it.
+        aliased_row = _alias_for_mapping(raw, aliases)
+        transformed, rejecting_line = mapping.apply_to(aliased_row)
+        if rejecting_line is not None:
+            return {}, QuarantinedRow(
+                row_number=row_number,
+                # Attributed to the MAPPING LINE that refused the row, not to
+                # a DQ rule or the contract — it is the line's own null or
+                # unlisted-code policy that made this call.
+                rule_id=f"MAPPING-{rejecting_line.address}",
+                reason=rejecting_line.describe(),
+                columns=rejecting_line.source_columns,
+                row=dict(raw),
+            )
+
     mapped: dict[str, Any] = {}
     for column in contract.columns:
-        source_value = raw.get(aliases.get(column.reads_from, column.reads_from), "")
+        if mapping is not None:
+            found = transformed.get(column.name)
+            source_value = "" if found is None else str(found)
+        else:
+            source_value = raw.get(aliases.get(column.reads_from, column.reads_from), "")
         if not run_cast:
             mapped[column.name] = source_value.strip() or None
             continue
@@ -204,6 +255,26 @@ def _cast_and_map(
                 row=dict(raw),
             )
     return mapped, None
+
+
+def _alias_for_mapping(raw: dict[str, str], reads_as: dict[str, str]) -> dict[str, str]:
+    """The raw row, with every settled rename's CONTRACT spelling also
+    populated from the spelling that actually arrived this run.
+
+    A `FeedMapping` line is authored against the published contract's own
+    vocabulary — the spelling a BA sees in the mapping studio — never against
+    whatever name a payer happens to send on a given delivery. Applying
+    `reads_as` here, before `apply_to` runs, means a settled rename does not
+    have to be adopted into the contract before a mapping line written in the
+    contract's spelling keeps reading a real value.
+    """
+    if not reads_as:
+        return raw
+    aliased = dict(raw)
+    for was, now in reads_as.items():
+        if now in raw:
+            aliased[was] = raw[now]
+    return aliased
 
 
 def _first_broken_rule(
@@ -249,6 +320,6 @@ def _ledger(quarantined: list[QuarantinedRow]) -> tuple[DropReason, ...]:
 
 def error_category_for(rule_id: str) -> ErrorCategory:
     """Which control-plane error category a rule failure belongs to."""
-    if rule_id.startswith("CAST-"):
+    if rule_id.startswith(("CAST-", "MAPPING-")):
         return ErrorCategory.TRANSFORMATION
     return ErrorCategory.VALIDATION

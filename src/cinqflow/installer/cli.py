@@ -419,9 +419,11 @@ def ingest(
 
     with commit(loaded) as connection:
         from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+        from cinqflow.core import mapping as mapping_core
         from cinqflow.core.model.governed import ObjectType
         from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
         from cinqflow.intelligence.demo import fingerprint_match_agent_for
+        from cinqflow.ports.metadata_db import ObjectNotFoundError
         from cinqflow.workers.drift import propose_contract_update
         from cinqflow.workers.incidents import IncidentWorker
         from cinqflow.workers.ops import OpsVerifier
@@ -459,6 +461,21 @@ def ingest(
                 for obj in metadata_db.list(ObjectType.GLOSSARY_TERM)
             )
         )
+        # W1-30: the feed's PUBLISHED FeedMapping, when it has one. PUBLISHED
+        # only — `is_executable` is the same gate CF-V1-E6-02's exemplar pool
+        # already uses (api/app.py's `_own_published_mapping`), because the
+        # engine reads published metadata and nothing else. Nothing publishes
+        # a mapping automatically yet, so `feed_mapping` stays `None` for
+        # this feed today — and `None` means the MAP step runs exactly as it
+        # always has.
+        try:
+            mapping_obj = metadata_db.get(ObjectType.MAPPING, FEED.feed_id)
+        except ObjectNotFoundError:
+            feed_mapping = None
+        else:
+            feed_mapping = (
+                mapping_core.from_governed(mapping_obj) if mapping_obj.is_executable else None
+            )
         outcome = runner.run(
             landed,
             feed=FEED,
@@ -470,6 +487,7 @@ def ingest(
             resume_from=stage,
             batch_id=batch_id,
             glossary=glossary,
+            mapping=feed_mapping,
         )
         if outcome.renames and outcome.batch_id is not None:
             # "Never block on compatible drift — log it and PROPOSE the

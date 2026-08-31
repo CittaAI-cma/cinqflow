@@ -13,7 +13,7 @@ the real Postgres plane inside a rolled-back transaction.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import psycopg
 import pytest
@@ -21,16 +21,107 @@ import pytest
 from cinqflow.adapters.local.pg_compute import PostgresCompute
 from cinqflow.adapters.local.pg_control import Connection
 from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
+from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
 from cinqflow.adapters.mock.storage import MemFsStorage
 from cinqflow.core.landing import LandingOutcome
-from cinqflow.core.model.vocabulary import BatchState, ErrorCategory, LandingFolder, Layer
+from cinqflow.core.mapping import (
+    FeedMapping,
+    MappingLine,
+    Transform,
+    TransformKind,
+    UnlistedCode,
+    from_governed,
+    mapping_as_governed,
+)
+from cinqflow.core.model.governed import Actor, LifecycleState, ObjectType
+from cinqflow.core.model.vocabulary import (
+    ActorType,
+    BatchState,
+    ErrorCategory,
+    LandingFolder,
+    Layer,
+)
 from cinqflow.core.registry.golden_fidelis import CONTRACT, DQ_002, FEED, PLAN, landing_key
 from cinqflow.core.registry.golden_fidelis import roster_csv as _roster
+from cinqflow.core.schema_spec import TypeName
 from cinqflow.workers.pipeline import PipelineRunner
 
 pytestmark = [pytest.mark.pipeline, pytest.mark.postgres]
 
 KEY = landing_key("2026-08-01")
+
+#: W1-30's mapping fixtures. Separate actors from `test_mapping_on_the_real_plane.py`
+#: on purpose — this file is proving the MAP step, not mapping storage, and a
+#: shared constant would make it look like the same concern.
+MAPPING_BA = Actor(subject="dev-ba@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Meera")
+MAPPING_STEWARD = Actor(
+    subject="dev-steward@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Ola"
+)
+MAPPING_NOW = datetime(2026, 8, 30, 9, 0, tzinfo=UTC)
+
+
+def _fidelis_mapping(*, on_unlisted: UnlistedCode = UnlistedCode.SUBSTITUTE) -> FeedMapping:
+    """Every CONTRACT column, mapped — one CAST, one LOOKUP, the rest DIRECT.
+
+    Deliberately covers the whole contract: a line silently missing would
+    leave a column always empty, which would be a fixture bug wearing the
+    costume of a pipeline bug.
+    """
+    return FeedMapping(
+        feed_id=FEED.feed_id,
+        version=1,
+        contract_version=CONTRACT.version,
+        lines=(
+            MappingLine(
+                target_entity="members",
+                target_field="source_member_id",
+                source_columns=("MemberID",),
+            ),
+            MappingLine(
+                target_entity="members", target_field="first_name", source_columns=("First_Name",)
+            ),
+            MappingLine(
+                target_entity="members", target_field="last_name", source_columns=("Last_Name",)
+            ),
+            MappingLine(
+                target_entity="members",
+                target_field="date_of_birth",
+                source_columns=("DOB",),
+                transform=Transform(kind=TransformKind.CAST, target_type=TypeName.DATE),
+            ),
+            MappingLine(
+                target_entity="members",
+                target_field="line_of_business",
+                source_columns=("LOB",),
+                transform=Transform(
+                    kind=TransformKind.LOOKUP,
+                    lookup=(("MEDICAID", "Medicaid"),),
+                    on_unlisted=on_unlisted,
+                    default_value="Other",
+                ),
+            ),
+        ),
+    )
+
+
+def _publish_mapping(plane: Connection, mapping: FeedMapping) -> FeedMapping:
+    """DRAFT -> PENDING_REVIEW -> APPROVED -> PUBLISHED, the one real
+    lifecycle every governed object travels — then read back through
+    `from_governed`, exactly as `cinqflow ingest` would load it. Proving the
+    round trip matters here: the object `PipelineRunner.run` receives must be
+    the one the store actually holds, not the Python value the test built."""
+    store = PostgresMetadataDb(plane)
+    draft = store.save(mapping_as_governed(mapping, author=MAPPING_BA, created_ts=MAPPING_NOW))
+    for target, actor in (
+        (LifecycleState.PENDING_REVIEW, MAPPING_BA),
+        (LifecycleState.APPROVED, MAPPING_STEWARD),
+        (LifecycleState.PUBLISHED, MAPPING_STEWARD),
+    ):
+        draft, entry = draft.transition_to(target, actor=actor, now=MAPPING_NOW)
+        draft = store.record_transition(draft, entry)
+    published = store.get(ObjectType.MAPPING, FEED.feed_id)
+    assert published.is_executable, "the fixture must publish, or this test proves nothing"
+    return from_governed(published)
 
 
 @pytest.fixture
@@ -331,3 +422,97 @@ def test_the_first_occurrence_wins_and_reaches_silver_raw(runner, plane: Connect
     assert plane.fetch_one(
         "SELECT count(*) FROM bronze.members_raw WHERE batch_id = %s", (outcome.batch_id,)
     ) == (2,), "both rows are in Bronze — the loser stays recoverable"
+
+
+# ── W1-30: the published mapping governs the MAP step ────────────────────────
+#
+#     "FeedMapping.apply_to is called nowhere in production code, only in its
+#      own unit test. Until this lands, a published mapping is decorative."
+#      — W1-30
+#
+# The rest of this file never publishes a mapping, so every test above it is
+# ALSO this slab's regression suite: if the wiring below broke a feed with no
+# published FeedMapping, those tests — not these — would be the ones to fail.
+
+
+def test_a_published_mapping_governs_the_map_step(runner, plane: Connection) -> None:
+    """The richer taxonomy applies at RUNTIME now, not only in
+    `test_mapping_taxonomy.py`: a LOOKUP translates `line_of_business`, and a
+    CAST line still lands `date_of_birth` as a real date — proving the
+    contract's own caster still owns the arithmetic, exactly as
+    `core.mapping.apply`'s docstring insists it must."""
+    mapping = _publish_mapping(plane, _fidelis_mapping())
+    outcome = _run(runner, mapping=mapping)
+
+    assert outcome.state is BatchState.COMPLETED
+    assert outcome.result is not None
+    # The same 5 seeded null-name rows, still caught the same way: the
+    # mapping's `first_name` line is a plain DIRECT read of `First_Name`, so
+    # DQ-002 sees exactly what it always saw.
+    assert outcome.result.reconciliation.explain() == (
+        "200 in = 195 out + 5 Member First Name Not Null (DQ-002). Balanced."
+    )
+    row = plane.fetch_one(
+        "SELECT line_of_business, date_of_birth FROM silver_raw.members "
+        "WHERE batch_id = %s AND source_member_id = %s",
+        (outcome.batch_id, "MBR000006"),
+    )
+    assert row == ("Medicaid", date(1990, 1, 1)), (
+        "the LOOKUP line never ran, or the CAST line's value never reached the contract's caster"
+    )
+
+
+def test_with_no_published_mapping_the_bare_rename_path_is_unchanged(
+    runner, plane: Connection
+) -> None:
+    """THE acceptance criterion: a feed with no published FeedMapping — still
+    the common case, since nothing publishes one automatically — must behave
+    BYTE-IDENTICALLY to how it behaved before W1-30. No mapping is published
+    in this test at all."""
+    outcome = _run(runner)
+
+    assert outcome.state is BatchState.COMPLETED
+    assert outcome.result is not None
+    assert outcome.result.reconciliation.explain() == (
+        "200 in = 195 out + 5 Member First Name Not Null (DQ-002). Balanced."
+    )
+    row = plane.fetch_one(
+        "SELECT line_of_business, date_of_birth FROM silver_raw.members "
+        "WHERE batch_id = %s AND source_member_id = %s",
+        (outcome.batch_id, "MBR000006"),
+    )
+    assert row == ("MEDICAID", date(1990, 1, 1)), (
+        "the contract's bare rename must be untouched when no mapping is published"
+    )
+
+
+def test_a_mapping_rejection_routes_to_quarantine_not_a_silent_drop(
+    runner, plane: Connection
+) -> None:
+    """`FeedMapping.apply_to`'s own contract: the FIRST rejecting line wins,
+    and the row is attributed — not silently dropped. Reuses the exact
+    quarantine path a CAST failure already uses, so a mapping-refused row is
+    just as recoverable as any other attributed exclusion."""
+    mapping = _publish_mapping(plane, _fidelis_mapping(on_unlisted=UnlistedCode.REJECT_ROW))
+    lines = ["MemberID,First_Name,Last_Name,DOB,LOB"]
+    for index in range(1, 5):
+        lines.append(f"MBR{index:06d},FIRST{index},LAST{index},19900101,MEDICAID")
+    lines.append("MBR000005,FIRST5,LAST5,19900101,TRICARE")  # not in the lookup table
+    outcome = _run(runner, content=("\n".join(lines) + "\n").encode(), mapping=mapping)
+
+    assert outcome.state is BatchState.COMPLETED, "one refused row must not fail the whole batch"
+    assert outcome.result is not None
+    assert outcome.result.balances is True
+    assert outcome.result.reconciliation.records_in == 5
+    assert outcome.result.reconciliation.records_out == 4
+    assert outcome.result.reconciliation.attributed_drops == 1
+    (dropped,) = outcome.result.quarantined
+    assert dropped.rule_id == "MAPPING-members.line_of_business"
+    assert "line_of_business" in dropped.reason  # attributed, not a bare drop with no reason
+    assert "TRICARE" not in dropped.reason, "the payer's value must never land in a log message"
+
+    quarantined_row = plane.fetch_one(
+        "SELECT count(*) FROM quarantine.quarantined_rows WHERE batch_id = %s AND rule_id = %s",
+        (outcome.batch_id, "MAPPING-members.line_of_business"),
+    )
+    assert quarantined_row == (1,), "the refused row must be stored, so it can be reprocessed"

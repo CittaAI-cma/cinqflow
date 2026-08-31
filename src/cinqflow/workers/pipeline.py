@@ -27,6 +27,7 @@ from cinqflow.core.compiler.plan import LogicalPlan
 from cinqflow.core.drift import DriftAssessment, Rename
 from cinqflow.core.drift import classify as classify_drift
 from cinqflow.core.landing import LandingDecision, LandingOutcome, classify
+from cinqflow.core.mapping import FeedMapping
 from cinqflow.core.model.vocabulary import BatchState, ErrorCategory, FileState, Layer
 from cinqflow.core.parsers import ParseError, parse
 from cinqflow.core.recon import error_id_hash
@@ -120,6 +121,7 @@ class PipelineRunner:
         suspension: Suspension | None = None,
         release: ReleaseDecision | None = None,
         glossary: Glossary | None = None,
+        mapping: FeedMapping | None = None,
     ) -> RunOutcome:
         """Landing -> Bronze -> Silver Raw. Every outcome registers a file.
 
@@ -127,6 +129,11 @@ class PipelineRunner:
         already running. The check is here, at the seam where a batch is
         opened, rather than in a scheduler — a second entry point that skipped
         it would make the pause advisory.
+
+        `mapping` is W1-30: the feed's PUBLISHED `FeedMapping`, already loaded
+        by the caller — the same shape as `contract`, `rules` and `glossary`.
+        `None` (the common case: nothing publishes a mapping automatically)
+        means the MAP step's behaviour is exactly what it always was.
         """
         # BEFORE anything is read, registered or moved. A paused feed's file
         # is left exactly where it is, so resuming picks it up on the next run
@@ -220,6 +227,7 @@ class PipelineRunner:
                 decision=decision,
                 resume_from=resume_from,
                 glossary=glossary,
+                mapping=mapping,
             )
         except _StageFailureError as failure:
             self._fail(batch, failure)
@@ -285,6 +293,7 @@ class PipelineRunner:
         decision: LandingDecision,
         resume_from: Layer | None,
         glossary: Glossary | None = None,
+        mapping: FeedMapping | None = None,
     ) -> RunOutcome:
         content = self._storage.read_bytes(file.key)
         try:
@@ -371,6 +380,7 @@ class PipelineRunner:
             rules=rules,
             batch_id=batch,
             reads_as=assessment.reads_as if assessment else None,
+            mapping=mapping,
         )
         self._compute.load_silver_raw(
             plan=plan, batch_id=batch, result=result, source_system=self._source_system
