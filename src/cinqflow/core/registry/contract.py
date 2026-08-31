@@ -116,6 +116,10 @@ class DriftKind(StrEnum):
     REMOVED = "removed"  # a contracted column is gone: breaks the mapping
     RENAMED = "renamed"  # same concept, new name: needs a human, not a failure
     REORDERED = "reordered"  # harmless — we read by name, never by position
+    #: W1-32 — additive AND contract-unknown, and no line in the feed's own
+    #: PUBLISHED mapping reads it either: coverage drift `classify()` can only
+    #: see once it is handed the mapping, not just the contract.
+    UNMAPPED_COLUMN = "unmapped_column"
 
 
 @dataclass(frozen=True)

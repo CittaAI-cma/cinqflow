@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from cinqflow.adapters.local.pg_compute import PostgresCompute
 from cinqflow.core.compiler.execute import ExecutionResult, apply, error_category_for
 from cinqflow.core.compiler.plan import LogicalPlan
-from cinqflow.core.drift import DriftAssessment, Rename
+from cinqflow.core.drift import DriftAssessment, Rename, attach_blast_radius
 from cinqflow.core.drift import classify as classify_drift
 from cinqflow.core.landing import LandingDecision, LandingOutcome, classify
 from cinqflow.core.mapping import FeedMapping
@@ -310,7 +310,17 @@ class PipelineRunner:
         findings = compare_to_contract(parsed.columns, contract)
         assessment: DriftAssessment | None = None
         if glossary is not None and findings:
-            assessment = classify_drift(findings, contract=contract, glossary=glossary)
+            # W1-32: `mapping` (already loaded by the caller, same shape as
+            # `contract`/`rules`/`glossary`) lets classify_drift see a second
+            # kind of drift the contract alone cannot: an additive column no
+            # published mapping line reads. `attach_blast_radius` runs right
+            # after, at the same seam, and folds `blast_radius` — wired to a
+            # real caller for the first time — into each REMOVED, RENAMED and
+            # UNMAPPED_COLUMN finding's own `detail`.
+            assessment = classify_drift(
+                findings, contract=contract, glossary=glossary, mapping=mapping
+            )
+            assessment = attach_blast_radius(assessment, contract=contract, rules=rules)
             findings = assessment.findings
         for finding in findings:
             self._control.record_schema_drift(

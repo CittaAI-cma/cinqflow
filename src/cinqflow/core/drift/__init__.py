@@ -33,8 +33,9 @@ and nothing else.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from cinqflow.core.mapping import FeedMapping
 from cinqflow.core.registry.contract import (
     DqRule,
     DriftFinding,
@@ -97,6 +98,7 @@ def classify(
     *,
     contract: SchemaContract,
     glossary: Glossary,
+    mapping: FeedMapping | None = None,
 ) -> DriftAssessment:
     """Fold glossary meaning over the structural findings.
 
@@ -104,6 +106,17 @@ def classify(
     structural comparison said it — this function only ever downgrades a
     REMOVED+ADDED pair into one RENAMED, never invents severity and never
     hides a finding.
+
+    `mapping` is W1-32: the feed's PUBLISHED `FeedMapping`, the same optional
+    argument `core.compiler.execute.apply` has carried since W1-30. `None`
+    (still the common case) means this function's CONTRACT-only reading is
+    unchanged — every existing caller and every test above this comment never
+    passes one. When a mapping IS present, every `addition` (a column already
+    known to be additive and not a settled rename) gets ONE more question
+    asked of it: does any line of the PUBLISHED mapping read this column? A
+    column nobody governs is not just "additive" — its values are silently
+    discarded, which the CONTRACT alone has no way to see and the MAPPING is
+    the only object that can answer.
     """
     removed = [f for f in findings if f.kind is DriftKind.REMOVED]
     added = [f for f in findings if f.kind is DriftKind.ADDED]
@@ -160,6 +173,29 @@ def classify(
             reclassified.append(came)
             additions.append(came.column)
 
+    # W1-32: additive AND contract-unknown is not the whole question once a
+    # mapping is in scope — additive AND UNGOVERNED is. The plain ADDED
+    # finding stands (this function never hides a finding, only enriches
+    # one), and this is the enrichment: a second, more specific finding for
+    # exactly the additions the published mapping has no line for.
+    if mapping is not None:
+        covered = set(mapping.source_columns)
+        for column in additions:
+            if column in covered:
+                continue
+            reclassified.append(
+                DriftFinding(
+                    kind=DriftKind.UNMAPPED_COLUMN,
+                    column=column,
+                    detail=(
+                        f"{column!r} arrived, is not under contract, and no line of the "
+                        f"published mapping (v{mapping.version}) reads it — its values are "
+                        "silently discarded until someone maps it"
+                    ),
+                    blocks_batch=False,
+                )
+            )
+
     return DriftAssessment(
         findings=tuple(reclassified), renames=renames, additions=tuple(additions)
     )
@@ -191,3 +227,51 @@ def blast_radius(
             break
     affected = tuple(rule.rule_id for rule in rules if canonical and canonical in rule.columns)
     return BlastRadius(source_column=source_column, canonical_field=canonical, rule_ids=affected)
+
+
+def attach_blast_radius(
+    assessment: DriftAssessment, *, contract: SchemaContract, rules: tuple[DqRule, ...]
+) -> DriftAssessment:
+    """W1-32 — wire `blast_radius` into the real path, at the same seam
+    `classify` already runs at. Called right after it, from `workers.pipeline`.
+
+    Before this slab `blast_radius` was called from nowhere but its own unit
+    test. There is no new surface here: `DriftFinding.detail` is the one field
+    `SchemaDrift` carries out to an operator today (the batch certification
+    screen's SCHEMA_CONTRACT check, `api.app._certification_checks`), so the
+    radius is folded into the SAME string rather than a new column nobody
+    would think to read.
+
+    REMOVED and UNMAPPED_COLUMN ask for the radius of the finding's own
+    column — that IS the source column either way. RENAMED asks for the
+    radius of the OLD spelling (`Rename.was`), not the finding's `column`
+    (`Rename.now`): the old spelling is the one with real lineage in the
+    CURRENT, published contract — the new one has none until a steward
+    approves the proposed v(n+1).
+
+    A column that is additive AND covered by no mapping line has, by
+    definition, no contract lineage either — `blast_radius` correctly hands
+    it back an EMPTY radius, the same answer it gives its own unit test's
+    `plan_tier`. That emptiness is not a bug to route around: "nothing reads
+    this yet" is itself the honest, reportable fact for a column nobody has
+    mapped.
+    """
+    was_of = {rename.now: rename.was for rename in assessment.renames}
+    enriched: list[DriftFinding] = []
+    for finding in assessment.findings:
+        source: str | None
+        match finding.kind:
+            case DriftKind.REMOVED | DriftKind.UNMAPPED_COLUMN:
+                source = finding.column
+            case DriftKind.RENAMED:
+                source = was_of.get(finding.column)
+            case _:
+                source = None
+        if source is None:
+            enriched.append(finding)
+            continue
+        radius = blast_radius(source, contract=contract, rules=rules)
+        enriched.append(replace(finding, detail=f"{finding.detail} — {radius.explain()}"))
+    return DriftAssessment(
+        findings=tuple(enriched), renames=assessment.renames, additions=assessment.additions
+    )

@@ -424,7 +424,7 @@ def ingest(
         from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
         from cinqflow.intelligence.demo import fingerprint_match_agent_for
         from cinqflow.ports.metadata_db import ObjectNotFoundError
-        from cinqflow.workers.drift import propose_contract_update
+        from cinqflow.workers.drift import propose_contract_update, propose_mapping_redirect
         from cinqflow.workers.incidents import IncidentWorker
         from cinqflow.workers.ops import OpsVerifier
 
@@ -500,6 +500,19 @@ def ingest(
                 renames=outcome.renames,
                 run_id=outcome.batch_id,
             )
+            # W1-32: the SAME settled renames, asked a second question — does
+            # the PUBLISHED mapping still read the old spelling? A rename
+            # proposes a contract update AND a mapping redirect independently;
+            # neither implies the other, and a feed with no published mapping
+            # simply has nothing for this one to redirect.
+            if feed_mapping is not None:
+                propose_mapping_redirect(
+                    metadata_db,
+                    feed_id=FEED.feed_id,
+                    mapping=feed_mapping,
+                    renames=outcome.renames,
+                    run_id=outcome.batch_id,
+                )
         # CF-V2-E12-03's second act: the engine just ran, so any REQUESTED
         # action on this batch can now be verified against what the control
         # tables actually say — in the same transaction as the run itself.

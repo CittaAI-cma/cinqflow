@@ -41,6 +41,7 @@ from cinqflow.core.model.vocabulary import (
     LandingFolder,
     Layer,
 )
+from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
 from cinqflow.core.registry.golden_fidelis import CONTRACT, DQ_002, FEED, PLAN, landing_key
 from cinqflow.core.registry.golden_fidelis import roster_csv as _roster
 from cinqflow.core.schema_spec import TypeName
@@ -516,3 +517,84 @@ def test_a_mapping_rejection_routes_to_quarantine_not_a_silent_drop(
         (outcome.batch_id, "MAPPING-members.line_of_business"),
     )
     assert quarantined_row == (1,), "the refused row must be stored, so it can be reprocessed"
+
+
+# ── W1-32: mapping-coverage drift, and blast_radius wired into the real path ─
+#
+#     "a column that's additive-and-contract-unknown AND has no mapping line
+#      covering it becomes a new finding"
+#     "blast_radius(...) already exists and is fully correct, but is called
+#      from nowhere except its own test" — W1-32
+#
+# `first_name` -> `First_Name` for the RENAME test on purpose: DQ-002 is the
+# one rule this feed carries, and its `columns` names `first_name` — the one
+# canonical field whose blast radius is genuinely non-empty here.
+GLOSSARY_WITH_FIRST_NAME_TERM = Glossary(
+    terms=(
+        GlossaryTerm(
+            glossary_id="BG-002",
+            term="Member First Name",
+            definition="The member's first name, as the estate spells it.",
+            mapped_columns_original=("First_Name", "FirstName"),
+        ),
+    )
+)
+
+
+def test_an_unmapped_new_column_becomes_a_finding_with_its_blast_radius(
+    runner, plane: Connection
+) -> None:
+    """`PayerRiskScore` is additive, under no contract and read by no line of
+    the published mapping — UNMAPPED_COLUMN, folded into the SAME
+    `schema_drift_log` channel every other finding already uses, with
+    `attach_blast_radius`'s text in `detail` for the certification screen."""
+    mapping = _publish_mapping(plane, _fidelis_mapping())
+    lines = ["MemberID,First_Name,Last_Name,DOB,LOB,PayerRiskScore"]
+    for index in range(1, 4):
+        lines.append(f"MBR{index:06d},FIRST{index},LAST{index:05d},19900101,MEDICAID,{index * 10}")
+    outcome = _run(
+        runner,
+        content=("\n".join(lines) + "\n").encode(),
+        glossary=Glossary(terms=()),
+        mapping=mapping,
+    )
+
+    assert outcome.state is BatchState.COMPLETED
+    _, _, control = runner
+    drift = control.get_schema_drift(outcome.batch_id)
+    (finding,) = [d for d in drift if d.classification == "unmapped_column"]
+    assert finding.column_name == "PayerRiskScore"
+    assert finding.blocked_batch is False, "coverage drift never blocks a batch"
+    assert "PayerRiskScore" in finding.detail
+    assert "mapping" in finding.detail.lower()
+    # `attach_blast_radius`'s own text IS folded in — honestly empty, because
+    # nothing downstream reads a column nobody has mapped yet. `blast_radius`
+    # gives this same answer to its own unit test's `plan_tier`; that is not
+    # this wiring failing to find something, it is the correct, reportable
+    # fact for a column with no lineage.
+    assert "affected rules: no rules" in finding.detail
+    # The plain structural finding is not hidden by the richer one.
+    assert any(d.classification == "added" and d.column_name == "PayerRiskScore" for d in drift)
+
+
+def test_a_settled_rename_carries_a_real_non_empty_blast_radius(runner, plane: Connection) -> None:
+    """`First_Name` -> `FirstName` settles as a RENAME (BG-002 names both).
+    `attach_blast_radius` reads the OLD spelling's lineage — `first_name` is
+    what DQ-002 checks — so this finding's radius is genuinely non-empty,
+    naming the rule a reviewer would otherwise have to go look up."""
+    lines = ["MemberID,FirstName,Last_Name,DOB,LOB"]
+    for index in range(1, 4):
+        lines.append(f"MBR{index:06d},FIRST{index},LAST{index:05d},19900101,MEDICAID")
+    outcome = _run(
+        runner,
+        content=("\n".join(lines) + "\n").encode(),
+        glossary=GLOSSARY_WITH_FIRST_NAME_TERM,
+    )
+
+    assert outcome.state is BatchState.COMPLETED
+    assert [(r.was, r.now) for r in outcome.renames] == [("First_Name", "FirstName")]
+    _, _, control = runner
+    drift = control.get_schema_drift(outcome.batch_id)
+    (finding,) = [d for d in drift if d.classification == "renamed"]
+    assert finding.blocked_batch is False
+    assert "DQ-002" in finding.detail, "the OLD spelling's real lineage must be what is reported"
