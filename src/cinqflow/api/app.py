@@ -4365,12 +4365,22 @@ def _published_mappings(
 def _own_published_mapping(
     metadata: MetadataDbPort, feed_id: str
 ) -> tuple[mapping_core.FeedMapping, ...]:
-    """This feed's own published mapping, if it has one. The DECISION."""
-    try:
-        obj = metadata.get(ObjectType.MAPPING, feed_id)
-    except ObjectNotFoundError:
+    """This feed's own published mapping, if it has one. The DECISION.
+
+    W1-36: NOT `metadata.get(ObjectType.MAPPING, feed_id)` — `version=None`
+    means the highest version NUMBER, regardless of lifecycle state, so a
+    DRAFT/PENDING_REVIEW/APPROVED version sitting on top of an
+    already-PUBLISHED one (exactly what starting to edit a mapping, or
+    accepting a mapping-suggestion proposal, produces) would shadow the
+    published version and make this look like a feed with no mapping at
+    all. Walk the full history and take the highest version that is
+    ACTUALLY executable — the same pattern `_refuse_silent_row_loss` below
+    uses to find "the currently PUBLISHED one".
+    """
+    published = [obj for obj in metadata.history(ObjectType.MAPPING, feed_id) if obj.is_executable]
+    if not published:
         return ()
-    return (mapping_core.from_governed(obj),) if obj.is_executable else ()
+    return (mapping_core.from_governed(max(published, key=lambda o: o.version)),)
 
 
 def _accepted_mapping_records(payload: dict[str, Any], body: ApproveProposalIn) -> dict[str, Any]:

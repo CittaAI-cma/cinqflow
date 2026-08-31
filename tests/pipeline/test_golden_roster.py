@@ -125,6 +125,26 @@ def _publish_mapping(plane: Connection, mapping: FeedMapping) -> FeedMapping:
     return from_governed(published)
 
 
+def _resolve_executable_mapping(plane: Connection) -> FeedMapping | None:
+    """The REAL production resolution — `api.app._own_published_mapping` —
+    against the real Postgres plane. `installer/cli.py`'s `ingest` command
+    inlines the identical "walk history, keep only what's executable, take
+    the highest version" pattern (proven equal to this function's own logic
+    in the W1-36 fix), so exercising this one production function here is
+    exercising the same fix both call sites now share.
+
+    W1-36: neither call site may use `metadata_db.get(ObjectType.MAPPING,
+    feed_id)` with no `version` — that returns the highest VERSION NUMBER
+    regardless of lifecycle state, so a DRAFT/PENDING_REVIEW/APPROVED version
+    sitting on top of an already-PUBLISHED one (exactly what starting to edit
+    a mapping, or accepting any mapping-suggestion proposal, produces) would
+    make it look like the feed has no mapping at all."""
+    from cinqflow.api.app import _own_published_mapping
+
+    found = _own_published_mapping(PostgresMetadataDb(plane), FEED.feed_id)
+    return found[0] if found else None
+
+
 @pytest.fixture
 def runner(plane: Connection) -> tuple[PipelineRunner, MemFsStorage, PostgresControlTables]:
     storage = MemFsStorage()
@@ -460,6 +480,46 @@ def test_a_published_mapping_governs_the_map_step(runner, plane: Connection) -> 
     )
     assert row == ("Medicaid", date(1990, 1, 1)), (
         "the LOOKUP line never ran, or the CAST line's value never reached the contract's caster"
+    )
+
+
+def test_a_draft_on_top_of_the_published_mapping_does_not_shadow_it(
+    runner, plane: Connection
+) -> None:
+    """W1-36 regression. Publish v1, then open (but never submit or publish)
+    a v2 draft on top of it — exactly what happens the instant a BA starts
+    editing a mapping, or accepts ANY mapping-suggestion proposal (the accept
+    flow always lands a fresh, unpublished draft). The engine must still run
+    under v1's transforms — a LOOKUP translating `line_of_business` to
+    "Medicaid" — not silently fall back to the bare-rename path because the
+    naive "highest version number" read resolves to the unpublished draft."""
+    mapping = _publish_mapping(plane, _fidelis_mapping())
+
+    v2_draft = FeedMapping(
+        feed_id=FEED.feed_id,
+        version=2,
+        contract_version=CONTRACT.version,
+        lines=mapping.lines[:2],  # a trimmed draft — never submitted, never published
+    )
+    PostgresMetadataDb(plane).save(
+        mapping_as_governed(v2_draft, author=MAPPING_BA, created_ts=MAPPING_NOW)
+    )
+
+    resolved = _resolve_executable_mapping(plane)
+    assert resolved is not None, "v1 is validly PUBLISHED — this must not resolve to no mapping"
+    assert resolved.version == 1
+
+    outcome = _run(runner, mapping=resolved)
+
+    assert outcome.state is BatchState.COMPLETED
+    assert outcome.result is not None
+    row = plane.fetch_one(
+        "SELECT line_of_business, date_of_birth FROM silver_raw.members "
+        "WHERE batch_id = %s AND source_member_id = %s",
+        (outcome.batch_id, "MBR000006"),
+    )
+    assert row == ("Medicaid", date(1990, 1, 1)), (
+        "the draft on top must not have shadowed v1's LOOKUP and CAST lines"
     )
 
 

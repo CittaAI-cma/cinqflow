@@ -427,7 +427,6 @@ def ingest(
             fingerprint_match_agent_for,
             mapping_suggestion_agent_for,
         )
-        from cinqflow.ports.metadata_db import ObjectNotFoundError
         from cinqflow.workers.drift import (
             propose_contract_update,
             propose_mapping_for_unmapped_columns,
@@ -487,14 +486,26 @@ def ingest(
         # a mapping automatically yet, so `feed_mapping` stays `None` for
         # this feed today — and `None` means the MAP step runs exactly as it
         # always has.
-        try:
-            mapping_obj = metadata_db.get(ObjectType.MAPPING, FEED.feed_id)
-        except ObjectNotFoundError:
-            feed_mapping = None
-        else:
-            feed_mapping = (
-                mapping_core.from_governed(mapping_obj) if mapping_obj.is_executable else None
-            )
+        #
+        # W1-36: NOT `metadata_db.get(ObjectType.MAPPING, feed_id)` — that
+        # returns the highest VERSION NUMBER regardless of lifecycle state,
+        # so a DRAFT/PENDING_REVIEW/APPROVED version sitting on top of an
+        # already-PUBLISHED one (exactly what starting to edit a mapping, or
+        # accepting ANY mapping-suggestion proposal, produces) would shadow
+        # the published version and silently fall back to the bare-rename
+        # path. Walk the full history and take the highest version that is
+        # ACTUALLY executable — the same pattern `_refuse_silent_row_loss`
+        # in api/app.py uses to find "the currently PUBLISHED one".
+        executable_versions = [
+            obj
+            for obj in metadata_db.history(ObjectType.MAPPING, FEED.feed_id)
+            if obj.is_executable
+        ]
+        feed_mapping = (
+            mapping_core.from_governed(max(executable_versions, key=lambda o: o.version))
+            if executable_versions
+            else None
+        )
         outcome = runner.run(
             landed,
             feed=FEED,

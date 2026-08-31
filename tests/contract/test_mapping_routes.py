@@ -22,6 +22,15 @@ from fastapi.testclient import TestClient
 from cinqflow.adapters.mock.authn import StaticAuthn
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.api import create_app
+
+# W1-36 regression: `_own_published_mapping` is the exact function the
+# adversarial review flagged alongside `installer/cli.py`'s inline lookup as
+# needing the SAME "highest EXECUTABLE version, not highest version number"
+# fix. Every other test in this file goes through the HTTP surface only; this
+# one private import is deliberate, because nothing routes this function's
+# return value back out over HTTP in an observable way — the regression can
+# only be pinned by calling it directly.
+from cinqflow.api.app import _own_published_mapping
 from cinqflow.core.mapping import FeedMapping, MappingLine, mapping_as_governed
 from cinqflow.core.model.governed import Actor, ObjectType
 from cinqflow.core.model.vocabulary import ActorType
@@ -527,3 +536,31 @@ def test_the_gate_compares_against_the_published_version_not_the_previous_one(
         "loss — and the field would have gone dark against what is actually running"
     )
     assert "members.line_of_business" in refused.text
+
+
+def test_own_published_mapping_survives_an_unpublished_draft_on_top(
+    client: TestClient, store: MemMetadataDb
+) -> None:
+    """W1-36: `metadata.get(ObjectType.MAPPING, feed_id)` with no `version`
+    returns the highest VERSION NUMBER, full stop — not "whichever version is
+    currently PUBLISHED". A v2 draft opened the instant anyone starts editing
+    a mapping (or accepts ANY mapping-suggestion proposal, which always lands
+    as a fresh draft) would make `_own_published_mapping` return nothing, even
+    though v1 is validly PUBLISHED and is exactly what the pipeline is
+    running. `_own_published_mapping` must walk the object's full history and
+    find the highest version that is ACTUALLY executable."""
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": [_line()]}, headers=_as(BA))
+    _publish(client)
+
+    # v2 — a draft opened on top of the published v1, never submitted.
+    client.put(f"/api/feeds/{FEED_ID}/mapping", json={"lines": BOTH_LINES}, headers=_as(BA))
+
+    # Sanity check: the naive "latest version, full stop" read is a draft.
+    naive = store.get(ObjectType.MAPPING, FEED_ID)
+    assert naive.version == 2
+    assert not naive.is_executable
+
+    resolved = _own_published_mapping(store, FEED_ID)
+    assert resolved, "the published v1 must still be found despite the unpublished v2 on top"
+    assert resolved[0].version == 1
+    assert [line.target_field for line in resolved[0].lines] == ["first_name"]
