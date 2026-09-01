@@ -1015,3 +1015,134 @@ export interface ParityCheck {
   mismatched: number;
   match_rate_pct: string;
 }
+
+// ── the five-step onboarding wizard · CF-V1-E4-01/02/03 ─────────────────────
+//
+// These have existed on the API since the wizard shipped, and until now no
+// page in this application declared them — the guided journey the MVP calls
+// its headline promise had a complete backend and no front door.
+
+/** One thing standing between the BA and done.
+ *
+ *  `route` is `CitationId.route`, already resolved server-side, so
+ *  "one-click navigation back to them" is a link this client renders rather
+ *  than a mapping it has to know how to build. */
+export interface Obstacle {
+  key: string;
+  what: string;
+  why_it_matters: string;
+  how_to_fix: string;
+  citation: string | null;
+  route: string;
+  blocking: boolean;
+}
+
+/** One of the five, as it actually is.
+ *
+ *  `status` is one of the seven words a user is ever shown; `state` is the
+ *  richer machine the wizard needs to decide which control to draw. The UI
+ *  reads the word and never invents an eighth. */
+export interface WizardStep {
+  step: string;
+  ordinal: number;
+  label: string;
+  state: string;
+  status: StatusWord;
+  is_complete: boolean;
+  version: number | null;
+  citation: string | null;
+  obstacles: Obstacle[];
+}
+
+/** The single readiness view — what is complete, what is missing, what needs
+ *  somebody else. Computed from the governed objects on every request, so it
+ *  cannot disagree with the lifecycle it describes. */
+export interface Wizard {
+  feed_id: string;
+  steps: WizardStep[];
+  resume_at: string;
+  is_publishable: boolean;
+  outstanding: Obstacle[];
+  gaps: Obstacle[];
+  operations_outstanding: string[];
+  explanation: string;
+}
+
+export interface RuleOutcome {
+  rule_id: string;
+  name: string;
+  tested: number;
+  flagged: number;
+  hit_rate: number;
+  quarantined: boolean;
+}
+
+export interface DropExplanation {
+  rule_id: string;
+  reason: string;
+  record_count: number;
+  columns: string[];
+}
+
+/** One row before and after — masked in the PACK, never on the way out of an
+ *  API, so the masking still applies once somebody exports it. */
+export interface EvidenceExample {
+  row_number: number;
+  before: Record<string, string>;
+  after: Record<string, string>;
+}
+
+export interface EvidenceGap {
+  key: string;
+  what: string;
+  why_it_is_acceptable: string;
+  citation: string | null;
+}
+
+export interface EvidenceFailure {
+  step: string;
+  explanation: string;
+  citation: string | null;
+  route: string;
+}
+
+/** What a reviewer receives, generated rather than assembled.
+ *
+ *  `fingerprint` is the whole staleness mechanism: it is computed from the
+ *  configuration the test ran against, so editing a mapping afterwards makes
+ *  the pack demonstrably describe a different feed. */
+export interface EvidencePack {
+  feed_id: string;
+  fingerprint: string;
+  produced_ts: string;
+  rows_in: number;
+  rows_loaded: number;
+  rows_quarantined: number;
+  balanced: boolean;
+  accounts_for_every_row: boolean;
+  partial: boolean;
+  summary: string;
+  sample_filename: string;
+  drops: DropExplanation[];
+  rules: RuleOutcome[];
+  examples: EvidenceExample[];
+  gaps: EvidenceGap[];
+  failure: EvidenceFailure | null;
+  markdown: string;
+}
+
+export interface NarrativeChapter {
+  occurred_ts: string;
+  who: string;
+  what: string;
+  object_type: string;
+  detail: string;
+}
+
+/** The whole journey, oldest first — built from the audit ledger, so an act
+ *  that produced no audit entry does not appear, which is correct. */
+export interface Narrative {
+  feed_id: string;
+  chapters: NarrativeChapter[];
+  story: string;
+}

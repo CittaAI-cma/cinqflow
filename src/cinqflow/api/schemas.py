@@ -1271,6 +1271,24 @@ class ProposedMappingOut(BaseModel):
     citations: list[str] = Field(default_factory=list)
 
 
+class DocumentConflictOut(BaseModel):
+    """CF-V1-E16-06 — the guide said one thing, the file showed another.
+
+    BOTH numbers and BOTH citations, and the resolution says which one the
+    platform proceeded on. "Sample evidence wins by DEFAULT" is not "the guide
+    is wrong": a truncated delivery and a bad specification look identical
+    from here, and a reviewer shown only the winner cannot tell them apart.
+    """
+
+    what: str
+    document_says: int
+    sample_shows: int
+    document_citation: str
+    sample_citation: str
+    quote: str
+    resolution: str
+
+
 class ProposalOut(BaseModel):
     """One agent proposal, as the review screen renders it.
 
@@ -1312,7 +1330,26 @@ class ProposalOut(BaseModel):
     mapping_lines: list[ProposedMappingOut] = Field(default_factory=list)
     rules: list[ProposedRuleOut] = Field(default_factory=list)
     needs_steward_review: list[str] = Field(default_factory=list)
+    #: CF-V1-E7-04. A SEPARATE list from `needs_steward_review`, because the
+    #: two name different people and different acts. A steward DECIDES whether
+    #: a column is PHI (E5-03); a technical reviewer CORRECTS logic the
+    #: generator could not write safely (E7-04) — "the AI's interpretation
+    #: shown beside the BA's original sentence", with the engineering escape
+    #: hatch behind it. Folding them into one field would send a rule nobody
+    #: can express to a person who cannot write it either.
+    #:
+    #: This field is why the story's measurable now holds. The agent had
+    #: always written `payload["needs_technical_review"]`; the serializer read
+    #: `payload["needs_steward_review"]`; the key never matched, so EVERY
+    #: routed rule arrived at the API as an empty list — "zero silent
+    #: publications" was silently false.
+    needs_technical_review: list[str] = Field(default_factory=list)
     masked_columns: list[str] = Field(default_factory=list)
+    #: CF-V1-E16-06's exception path. Empty on every proposal where no
+    #: companion guide was uploaded, and on every one where the guide agrees
+    #: with the file — a conflict is never asserted from the absence of a
+    #: claim.
+    document_conflicts: list[DocumentConflictOut] = Field(default_factory=list)
 
 
 class DetectPhiIn(BaseModel):
@@ -1702,6 +1739,18 @@ class FailureOut(BaseModel):
     explanation: str
     citation: str | None = None
     route: str = ""
+
+
+class SampleTestIn(BaseModel):
+    """CF-V1-E4-02 — which sample to run over. Optional, and usually omitted.
+
+    Omitted, the route uses the most recently PROFILED sample: the file the
+    schema was inferred from, the mapping was checked against and the rules
+    were previewed on. Naming a different one is for the case a BA has
+    uploaded a second, corrected file and wants the evidence to describe THAT.
+    """
+
+    file_key: str = ""
 
 
 class EvidencePackOut(BaseModel):

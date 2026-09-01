@@ -80,6 +80,7 @@ from cinqflow.api.schemas import (
     DestinationOut,
     DetectPhiIn,
     DifferenceOut,
+    DocumentConflictOut,
     DocumentOut,
     DocumentPageOut,
     DropExplanationOut,
@@ -182,6 +183,7 @@ from cinqflow.api.schemas import (
     RulePreviewOut,
     RulePreviewPackOut,
     RunbookOut,
+    SampleTestIn,
     SatelliteRepointOut,
     SimilarFeedOut,
     SourceIn,
@@ -330,6 +332,7 @@ from cinqflow.ports.metadata_db import (
     ObjectNotFoundError,
 )
 from cinqflow.ports.notification import Alert, NotificationPort, Severity
+from cinqflow.ports.orchestration import OrchestrationPort, Schedule
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.delivery import DeliveryOutcome, DeliveryWorker
 from cinqflow.workers.drift import propose_reprocess_for_newly_mapped_columns
@@ -338,6 +341,7 @@ from cinqflow.workers.incidents import priors_for, recovery_guides
 from cinqflow.workers.knowledge import KnowledgeIngestWorker
 from cinqflow.workers.ops import OpsVerifier
 from cinqflow.workers.profiler import Profiler, ProfileTargetMissingError
+from cinqflow.workers.sample_test import SampleTestError, SampleTestWorker
 from cinqflow.workers.sla import current_alerts
 
 API_PREFIX = "/api"
@@ -515,6 +519,11 @@ def create_app(
     knowledge_ingest_factory: KnowledgeIngestFactory | None = None,
     ods_model_provisioner: OdsModelProvisioner | None = None,
     notify: NotificationPort | None = None,
+    #: CF-V1-E4-03. "Activate scheduling only at publication — nothing runs on
+    #: a schedule before." Unfitted, publishing a feed schedules nothing and
+    #: says so in a warning, which is the honest degrade on a socket with no
+    #: scheduler — never a silent success.
+    orchestration: OrchestrationPort | None = None,
     alert_enrichment_agent: AlertEnrichmentAgent | None = None,
     layer_reader: LayerReader | None = None,
     budget: Budget | None = None,
@@ -542,6 +551,7 @@ def create_app(
     # that forgot to pass one is DEVELOPMENT explicitly rather than by
     # accident — see `_environment_of`.
     app.state.profile = profile
+    app.state.orchestration = orchestration
     app.state.control_tables = control_tables or MemStoreControlTables()
     # No default. Unlike control tables, there is no in-memory landing zone
     # that would be honest here: a profiler pointed at an empty store would
@@ -946,6 +956,7 @@ def create_app(
     def pause_feed(
         feed_id: str,
         body: PauseFeedIn,
+        request: Request,
         metadata: Store,
         audit: Audit,
         principal: Annotated[Principal, Depends(require(Action.PAUSE_FEED))],
@@ -966,6 +977,13 @@ def create_app(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(refused)) from None
 
         metadata.record_suspension(event)
+        # CF-V1-E3-04 / CF-V1-E8-03. "Pause must stop new processing
+        # immediately while letting in-flight batches finish safely." The
+        # ledger is the record; the SCHEDULER is what actually stops the next
+        # run starting, and until the pin was fitted nothing told it. In-flight
+        # batches are untouched by design — `orchestration.pause` gates what
+        # STARTS, and `workers.pipeline` finishes what it began.
+        _pause_schedule(request.app.state.orchestration, feed_id, event.reason, audit, principal)
         audit.record(
             object_type=ObjectType.FEED,
             object_id=feed_id,
@@ -982,6 +1000,7 @@ def create_app(
     )
     def resume_feed(
         feed_id: str,
+        request: Request,
         body: ResumeFeedIn,
         metadata: Store,
         audit: Audit,
@@ -992,6 +1011,7 @@ def create_app(
         if not principal.scopes.covers_feed(feed_id):
             raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
         _load(metadata, feed_id)
+        _resume_schedule(request.app.state.orchestration, feed_id, audit, principal)
         metadata.record_suspension(
             suspension.resume(
                 feed_id, actor=principal.as_actor(), now=datetime.now(UTC), reason=body.reason
@@ -3262,6 +3282,26 @@ def create_app(
         # lifecycle engine has no store to read — and BEFORE the act, so
         # nothing is persisted by a refusal.
         if object_type is ObjectType.DQ_RULE:
+            # CF-V1-E7-04, the SEVENTH gate and the one that was missing.
+            # `core.rules.review.guard_publication` was written for exactly
+            # this seam — "this keeps a rule that was LATER questioned out of
+            # production" — and had no caller anywhere in `src/`. So a
+            # sentence the generator refused to write, routed to the technical
+            # review queue and visible on the queue screen, could be approved
+            # by the ordinary proposal path and reach `applied`. The story's
+            # measurable is "100% of below-threshold rules routed (zero silent
+            # publications)"; routing held, and publication did not.
+            try:
+                _refuse_rules_in_technical_review(metadata, object_id)
+            except rule_review.ReviewError as refused:
+                audit.record(
+                    object_type=ObjectType.DQ_RULE,
+                    object_id=object_id,
+                    action="refused:technical_review_open",
+                    actor=principal.as_actor(),
+                    detail=str(refused),
+                )
+                raise HTTPException(status.HTTP_409_CONFLICT, str(refused)) from None
             try:
                 _refuse_unapprovable_rules(metadata, object_id)
             except rule_policy.PolicyError as refused:
@@ -3317,6 +3357,78 @@ def create_app(
         if not principal.scopes.covers_feed(feed_id):
             raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
         return _wizard_out(_wizard_for(metadata, feed_id))
+
+    @app.post(
+        f"{API_PREFIX}/feeds/{{feed_id}}/evidence",
+        response_model=EvidencePackOut,
+        tags=["onboarding"],
+    )
+    def run_sample_test(
+        feed_id: str,
+        body: SampleTestIn,
+        request: Request,
+        metadata: Store,
+        audit: Audit,
+        principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
+    ) -> EvidencePackOut:
+        """CF-V1-E4-02 — the one button. Run the draft config over the sample.
+
+        THE KEY TO A GATE THAT HAD NONE. `POST /onboarding/submit` refuses
+        without a pack; `GET /evidence` could only read one; and
+        `core.onboarding.evidence.build_pack` had ZERO callers anywhere in
+        `src/`. Every deployment could walk the wizard to step 5 and no
+        further. This route is the missing verb.
+
+        A FAILED RUN IS A 200, NOT A 500. "the pack is still produced up to the
+        failure, the failing step is explained in plain language, and the
+        wizard links straight to the mapping line at fault" — so a mapping
+        type error returns the pack, with `failure` populated and a route on
+        it. The only 4xx here are "there is no feed", "there is no sample" and
+        "there is no contract yet", which are the three cases where no run
+        could be attempted at all.
+
+        `POST` on the same path `GET` reads, deliberately: the pack is a
+        resource, this creates it, and a second path (`/evidence/run`) would
+        make the address of the artifact differ from the address of the act
+        that makes it.
+        """
+        if not principal.scopes.covers_feed(feed_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        storage = request.app.state.storage
+        if storage is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no storage pin is fitted on this deployment, so there is no sample to read. "
+                "The end-to-end test runs over the file you uploaded at step 1.",
+            )
+
+        file_key = body.file_key or _latest_sample_key(metadata, feed_id)
+        if not file_key:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"feed {feed_id!r} has no sample file yet. Upload one at step 1 — the "
+                "end-to-end test runs your configuration over it.",
+            )
+
+        worker = SampleTestWorker(metadata=metadata, storage=storage)
+        try:
+            outcome = worker.run(feed_id=feed_id, file_key=file_key, actor=principal.as_actor())
+        except SampleTestError as refused:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(refused)) from None
+
+        pack = outcome.pack
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=feed_id,
+            action="run:end_to_end_test",
+            actor=principal.as_actor(),
+            detail=(
+                f"{pack.rows_in} in / {pack.rows_loaded} loaded / {pack.rows_quarantined} "
+                f"quarantined · fingerprint {pack.fingerprint[:16]}"
+                + (f" · FAILED at {pack.failure.step}" if pack.failure else "")
+            ),
+        )
+        return _pack_out(pack)
 
     @app.get(
         f"{API_PREFIX}/feeds/{{feed_id}}/evidence",
@@ -3612,6 +3724,12 @@ def create_app(
         if object_type is ObjectType.ODS_BATCH_CERTIFICATION:
             warning = _notify_consumers_after_ods_batch_certification_publish(
                 metadata, object_id, principal, app.state.notify, audit
+            )
+            if warning is not None:
+                result = result.model_copy(update={"warnings": [*result.warnings, warning]})
+        if object_type is ObjectType.FEED:
+            warning = _activate_schedule_after_feed_publish(
+                metadata, object_id, principal, app.state.orchestration, audit
             )
             if warning is not None:
                 result = result.model_copy(update={"warnings": [*result.warnings, warning]})
@@ -5876,6 +5994,135 @@ def _embed_published_document(
     return None
 
 
+def _pause_schedule(
+    orchestration: OrchestrationPort | None,
+    feed_id: str,
+    reason: str,
+    audit: AuditLog,
+    principal: Principal,
+) -> None:
+    """CF-V1-E3-04's second axis, reaching the thing that starts runs.
+
+    Degrades silently with no pin fitted (the mock socket has no scheduler)
+    and to an AUDIT ROW on failure — never to an exception, because the pause
+    itself is already durable in the suspension ledger and a 500 here would
+    tell an operator their pause failed when the record says it did not. What
+    a failure DOES mean is that the scheduler may still start a run, so it is
+    recorded rather than swallowed.
+    """
+    if orchestration is None:
+        return
+    try:
+        orchestration.pause(feed_id, reason=reason or "paused by an operator")
+    except Exception as failed:
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=feed_id,
+            action="schedule_pause_failed",
+            actor=principal.as_actor(),
+            detail=f"the suspension is recorded but the scheduler was not told: {failed}",
+        )
+
+
+def _resume_schedule(
+    orchestration: OrchestrationPort | None,
+    feed_id: str,
+    audit: AuditLog,
+    principal: Principal,
+) -> None:
+    """The other half. Called BEFORE the ledger write, deliberately: a resume
+    that reaches the scheduler and then fails to record leaves a feed running
+    and visibly un-resumed, which somebody investigates. The reverse order
+    leaves a feed recorded as running that never starts, which nobody does."""
+    if orchestration is None:
+        return
+    try:
+        orchestration.resume(feed_id)
+    except Exception as failed:
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=feed_id,
+            action="schedule_resume_failed",
+            actor=principal.as_actor(),
+            detail=f"the scheduler was not told to resume: {failed}",
+        )
+
+
+def _activate_schedule_after_feed_publish(
+    metadata: MetadataDbPort,
+    object_id: str,
+    principal: Principal,
+    orchestration: OrchestrationPort | None,
+    audit: AuditLog,
+) -> str | None:
+    """CF-V1-E4-03 — publication is what starts the clock.
+
+        "Activate scheduling only at publication — nothing runs on a schedule
+         before."
+
+    NOTHING REGISTERED A SCHEDULE, ON ANY DEPLOYMENT, EVER. `core.onboarding
+    .release.registrable_schedule` was written for "the orchestration wiring"
+    and had no caller; `OrchestrationPort.register` had none either; and
+    `create_app` did not take the pin at all. So `queue.schedule` stayed empty,
+    `orchestration.due()` returned nothing on a plane with published feeds,
+    and `cinqflow tick` correctly reported "nothing due" forever. The story's
+    clause was not merely unenforced — the mechanism it gates was unreachable.
+
+    THE SAME AFTER-THE-TRANSITION SHAPE the four hooks beside this one use:
+    called once `_governance_act` has committed Published, degrading to a
+    WARNING rather than a 500, because the feed IS published either way and a
+    500 here would be a lie about what the lifecycle already recorded.
+
+    `orchestration=None` degrades SILENTLY — the mock socket fits no scheduler
+    and a warning on every publish there would be noise about a pin nobody
+    asked for. A FITTED scheduler that refuses is a warning, because that is a
+    published feed which will not run.
+    """
+    if orchestration is None:
+        return None
+    try:
+        feed = metadata.get(ObjectType.FEED, object_id)
+    except ObjectNotFoundError:  # pragma: no cover - just published
+        return None
+    cron = onboarding_release.registrable_schedule(feed)
+    if cron is None:
+        # Published with no cron is a legitimate feed — a manual-upload roster
+        # arrives when the payer sends it. Saying so is better than silence.
+        return (
+            f"{object_id} is published with no schedule, so nothing will start it "
+            "automatically. Deliveries still land and process on arrival."
+        )
+    operations = feed.body.get("operations") or {}
+    service_level = operations.get("service_level") or {}
+    try:
+        orchestration.register(
+            object_id,
+            Schedule(
+                cron=cron,
+                timezone=str(service_level.get("timezone") or "UTC"),
+                grace_period_minutes=int(service_level.get("grace_minutes") or 0),
+            ),
+        )
+    except Exception as failed:
+        detail = f"schedule not activated: {failed}"
+        audit.record(
+            object_type=ObjectType.FEED,
+            object_id=object_id,
+            action="schedule_activation_failed:publish",
+            actor=principal.as_actor(),
+            detail=detail,
+        )
+        return detail
+    audit.record(
+        object_type=ObjectType.FEED,
+        object_id=object_id,
+        action="activate:schedule",
+        actor=principal.as_actor(),
+        detail=f"registered {cron}",
+    )
+    return None
+
+
 def _provision_ods_model_after_publish(
     metadata: MetadataDbPort,
     object_id: str,
@@ -6868,6 +7115,15 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
         applied_object_id=proposal.applied_object_id,
         applied_version=proposal.applied_version,
         grounding_citations=[str(c) for c in proposal.grounding_citations],
+        # CF-V1-E16-06. Read straight off the STORED payload rather than
+        # recomputed here: the conflict a reviewer reads and the conflict the
+        # agent recorded when it proposed must be one document, and a route
+        # that recomputed it would silently start disagreeing the first time
+        # somebody re-uploaded the guide.
+        document_conflicts=[
+            DocumentConflictOut(**conflict)
+            for conflict in proposal.payload.get("document_conflicts", ())
+        ],
         columns=(
             []
             if is_phi_agent or is_mapping_agent or is_rule_agent or is_fingerprint_agent
@@ -6885,6 +7141,14 @@ def _proposal_out(proposal: Proposal, *, model_called: bool = True) -> ProposalO
             [ProposedRuleOut(**_rule_record_fields(r)) for r in records] if is_rule_agent else []
         ),
         needs_steward_review=list(proposal.payload.get("needs_steward_review", ())),
+        # CF-V1-E7-04. Read from the key the agent actually writes. It never
+        # was: `rule_authoring` writes `needs_technical_review` and this line
+        # read `needs_steward_review`, so a rule the generator refused to
+        # write arrived on the review screen as a rule with no check, no SQL
+        # and confidence 0.0 — indistinguishable from a bad suggestion, and
+        # routed to nobody. "100% of below-threshold rules routed (zero silent
+        # publications)" was false at the boundary, not in the agent.
+        needs_technical_review=list(proposal.payload.get("needs_technical_review", ())),
         masked_columns=list(proposal.payload.get("masked_columns", ())),
         needs_input=list(proposal.payload.get("needs_input", ())),
         refusals=list(proposal.payload.get("refusals", ())),
@@ -7285,7 +7549,52 @@ def _configuration_objects(metadata: MetadataDbPort, feed_id: str) -> tuple[Gove
 
 
 def _configuration_fingerprint(metadata: MetadataDbPort, feed_id: str) -> str:
-    return evidence.configuration_fingerprint(_configuration_objects(metadata, feed_id))
+    """The fingerprint the CURRENT configuration would produce.
+
+    `sample_fingerprint` is passed, and this is the half that was missing.
+    `evidence.configuration_fingerprint` has always taken it — the sample is
+    part of a configuration's identity, because a pack that vouched for one
+    file and a submission carrying another are evidence about two different
+    things. Nothing ever passed it, because nothing ever WROTE a pack
+    (`build_pack` had no caller in `src/`), so the omission could not show:
+    the reader compared `sample_fingerprint=""` against a stored value that
+    did not exist.
+
+    The moment CF-V1-E4-02's route began producing packs it did show, and
+    loudly — every pack was born stale, because the writer knew the sample's
+    fingerprint and the reader assumed the empty string. Both sides now read
+    it from the same place: the profiled sample the whole wizard is about.
+    """
+    return evidence.configuration_fingerprint(
+        _configuration_objects(metadata, feed_id),
+        sample_fingerprint=_sample_fingerprint(metadata, feed_id),
+    )
+
+
+def _sample_fingerprint(metadata: MetadataDbPort, feed_id: str) -> str:
+    """The content hash of the sample the wizard is working from.
+
+    `FileProfile.source_fingerprint` rather than a fresh `storage.fingerprint`
+    call: the profile is content-addressed and already carries it, so this
+    needs no storage pin and cannot disagree with the statistics on screen.
+    Empty when nothing has been profiled — which is the same value the pack
+    would carry, so a feed with no sample is not spuriously stale.
+    """
+    profiles = list(metadata.list_profiles(feed_id=feed_id, limit=1))
+    return profiles[0].profile.source_fingerprint if profiles else ""
+
+
+def _latest_sample_key(metadata: MetadataDbPort, feed_id: str) -> str:
+    """CF-V1-E4-02 — which file the test runs over, when the caller names none.
+
+    The most recent PROFILED sample, because that is the file the BA has been
+    looking at for the whole wizard: the schema was inferred from it, the
+    mapping was checked against it, and the rules were previewed on it. Any
+    other default would run the test over a file nothing else in the journey
+    has seen.
+    """
+    profiles = list(metadata.list_profiles(feed_id=feed_id, limit=1))
+    return profiles[0].profile.source_key if profiles else ""
 
 
 def _stored_pack(metadata: MetadataDbPort, feed_id: str) -> evidence.EvidencePack | None:
@@ -7688,6 +7997,42 @@ def _policy_set_out(metadata: MetadataDbPort, obj: GovernedObject) -> RulePolicy
             for rung in rule_policy.Consequence
         ],
     )
+
+
+def _refuse_rules_in_technical_review(metadata: MetadataDbPort, feed_id: str) -> None:
+    """CF-V1-E7-04 — a rule still in technical review cannot be approved.
+
+    The queue is DERIVED, not stored (`_review_candidates` reads the agent's
+    own proposal, so the queue and the proposal cannot disagree), which means
+    this gate recomputes it on every approval rather than reading a flag
+    somebody has to remember to clear. That is the same recomputation
+    `core.scheduling` uses for holds, and for the same reason: a stored gate
+    is one somebody clears by hand.
+
+    A feed with no rule proposals has an empty queue and is unaffected — a
+    steward approving hand-written rules never meets this gate.
+    """
+    try:
+        obj = metadata.get(ObjectType.DQ_RULE, feed_id)
+    except ObjectNotFoundError:  # pragma: no cover - the act itself would 404
+        return
+    reviews = rule_review.route(
+        _review_candidates(metadata, feed_id),
+        feed_id=feed_id,
+        floor=rule_authoring_graph.CONFIDENCE_FLOOR,
+    )
+    try:
+        specs = rules_core.rules_from_governed(obj)
+    except rules_core.RuleError:
+        # A rule body this cannot parse is one NO route can read — the policy
+        # editor (`configure_rule_policies`) and the preview both call the
+        # same loader and would fail identically. So an unparseable set is
+        # already unusable, and crashing HERE would replace "your rules are in
+        # technical review" with a stack trace about an identifier, which is
+        # an answer about the wrong thing. The gate below has nothing to match
+        # against; the gates after it still run.
+        return
+    rule_review.guard_publication(specs, reviews)
 
 
 def _refuse_unapprovable_rules(metadata: MetadataDbPort, feed_id: str) -> None:

@@ -48,6 +48,7 @@ from cinqflow.core.retrieval import (
     as_rows,
     platform_index,
 )
+from cinqflow.core.retrieval.service import RetrievalQuery
 from cinqflow.core.tools import (
     CATALOGUE,
     READ_ONLY_WHITELIST,
@@ -811,7 +812,22 @@ def _search_knowledge(context: ToolContext, args: dict[str, Any]) -> ToolResult:
     if not embeddings:
         return ToolResult(tool="search_knowledge")
 
-    hits = context.vector.retrieve(embeddings[0].vector, limit=limit, scope_filter={})
+    # CF-V1-E16-05's guardrail: "the scope filter has already excluded them —
+    # the restriction lives in the query, not in the answer." This call used
+    # to pass `scope_filter={}`, which is the default a signature with an
+    # optional filter would have had — `ports.vector.VectorPort.retrieve`
+    # made the parameter REQUIRED precisely so that omission had to be
+    # written down, and here it was. `RetrievalQuery` renders the caller's
+    # own feed scopes; `admits` is the second net for the multi-feed case the
+    # port's equality filter cannot express.
+    scoped = RetrievalQuery.for_caller(query, context.principal, limit=limit)
+    hits = [
+        hit
+        for hit in context.vector.retrieve(
+            embeddings[0].vector, limit=limit, scope_filter=scoped.scope_filter()
+        )
+        if scoped.admits(dict(hit.chunk.metadata))
+    ]
     if not hits:
         return ToolResult(tool="search_knowledge", note="no semantic match")
     return ToolResult(

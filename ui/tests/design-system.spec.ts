@@ -137,12 +137,20 @@ test("a pasted drawer URL renders the full page, not an empty shell", async ({ p
   await expect(page.getByText("rows_in == rows_out")).toBeVisible();
 });
 
-test("the five panels are announced as a tab set", async ({ page }) => {
+test("the batch panels are announced as a tab set", async ({ page }) => {
   await signIn(page, "dev-engineer@cinqcare.test");
   await page.goto("/operations/control/batch/8842");
   const tablist = page.getByRole("tablist");
   await expect(tablist).toBeVisible();
-  expect(await tablist.getByRole("tab").count()).toBe(5);
+  // Six since CF-V2-E5-04 added `drift` beside stages, inputs, errors,
+  // quarantine and recon. The COUNT is not the point and pinning it made this
+  // a test that fails whenever the product gains a panel; what matters is
+  // that the panels are a real tab set, keyboard-reachable and announced.
+  const tabs = await tablist.getByRole("tab").count();
+  expect(tabs).toBeGreaterThanOrEqual(5);
+  for (const name of ["stages", "recon", "errors"]) {
+    await expect(tablist.getByRole("tab", { name: new RegExp(name, "i") })).toBeVisible();
+  }
 });
 
 /* ────────────────────────────────── persona ─────────────────────────────── */

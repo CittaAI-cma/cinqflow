@@ -14,7 +14,9 @@ a test that makes the attempt; a review of seventeen implementations is not.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -27,6 +29,7 @@ from cinqflow.core.model.governed import Actor
 from cinqflow.core.model.vocabulary import ActorType
 from cinqflow.core.operations import fingerprint as fingerprinting
 from cinqflow.core.registry import feed as feed_registry
+from cinqflow.core.retrieval.service import RetrievalQuery
 from cinqflow.core.tools import (
     CATALOGUE,
     FORBIDDEN_READS,
@@ -675,3 +678,73 @@ def test_get_certification_for_an_unknown_batch_is_absent_not_an_error(
 ) -> None:
     result = invoke(_context(seeded), "get_certification", {"batch_id": "no-such-batch"})
     assert result.out_of_scope
+
+
+# ── CF-V1-E16-05 · the scope filter lives in the QUERY ───────────────────────
+
+
+def test_search_knowledge_pushes_the_callers_scope_into_the_vector_query(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    """The regression this locks down was a literal `scope_filter={}`.
+
+        "Given a caller's question would surface chunks beyond their scopes,
+         when retrieval executes, then the scope filter has already excluded
+         them — the restriction lives in the query, not in the answer."
+        — CF-V1-E16-05, guardrail
+
+    `ports.vector.VectorPort.retrieve` made `scope_filter` REQUIRED rather
+    than optional precisely so that omitting it had to be WRITTEN DOWN — "a
+    signature with an optional filter is a signature whose default is a
+    leak". It was written down, as an empty dict, and every knowledge search
+    ran unscoped.
+
+    Asserted at the PORT, with a recording stand-in, because that is the only
+    place the claim is actually about: a test that checked the returned rows
+    would pass just as well against a post-filter, which is the weaker thing
+    the story explicitly rules out.
+    """
+    recorded: list[dict[str, str]] = []
+
+    class RecordingVector:
+        def index(self, chunks: object, vectors: object) -> None: ...
+        def supersede(self, **_: object) -> None: ...
+        def count(self) -> int:
+            return 1
+
+        def retrieve(
+            self, vector: tuple[float, ...], *, limit: int = 10, scope_filter: dict[str, str]
+        ) -> tuple[object, ...]:
+            recorded.append(dict(scope_filter))
+            return ()
+
+    class StubGateway:
+        def embed(self, **_: object) -> tuple[object, ...]:
+            from cinqflow.core.model.llm import Embedding
+
+            return (
+                Embedding(vector=(1.0, 0.0), model="m", model_version="v", cost_usd=Decimal("0")),
+            )
+
+    context = replace(
+        _context(seeded, feeds=frozenset({"fidelis-downstate-roster"})),
+        vector=RecordingVector(),  # type: ignore[arg-type]
+        llm=StubGateway(),  # type: ignore[arg-type]
+    )
+    invoke(context, "search_knowledge", {"query": "a truncated file"})
+
+    assert recorded == [{"feed_id": "fidelis-downstate-roster"}], (
+        "the caller's scope must reach the store as a QUERY FILTER, not be applied to results"
+    )
+
+
+def test_an_unrestricted_caller_still_sends_a_filter_argument(
+    seeded: tuple[MemMetadataDb, MemStoreControlTables],
+) -> None:
+    """`{}` is correct HERE and only here — an unrestricted caller has no
+    restriction to push down. The bug was `{}` for everyone."""
+    query = RetrievalQuery.for_caller(
+        "x",
+        Principal(subject="p", display_name="P", scopes=Scopes(feeds=frozenset({"*"}))),
+    )
+    assert query.scope_filter() == {}

@@ -56,6 +56,12 @@ from cinqflow.core.rules import (
 )
 from cinqflow.core.rules.preview import evidence_pack, preview_all
 from cinqflow.intelligence.gateway import LlmGateway, ManualPathRequiredError
+from cinqflow.intelligence.retrieval import (
+    RetrievalResult,
+    RetrievalService,
+    as_fenced_grounding,
+    ground_for_feed,
+)
 from cinqflow.ports.metadata_db import MetadataDbPort
 
 AGENT_ACTOR = Actor(subject=AGENT, actor_type=ActorType.AI, display_name="Rule authoring")
@@ -139,6 +145,13 @@ class RuleAuthoringAgent:
     llm: LlmGateway
     metadata: MetadataDbPort
     confidence_floor: float = CONFIDENCE_FLOOR
+    #: CF-V1-E7-01 · CF-V1-E16-05. "Ground generation in retrieved precedent
+    #: rules — the 110-rule library and every approved rule arrive as cited
+    #: few-shots via the retrieval service." The feed's OWN published rules
+    #: stay a direct read (they are the governed objects, versioned); what
+    #: retrieval adds is the library and the precedents from elsewhere in the
+    #: estate that this feed's own row set cannot see.
+    retrieval: RetrievalService | None = None
 
     def propose(
         self,
@@ -172,8 +185,14 @@ class RuleAuthoringAgent:
         grounding = self._ground(
             stated, feed_id=feed_id, contract=contract, glossary=glossary, published=published
         )
+        retrieved = ground_for_feed(
+            self.retrieval,
+            text=" ".join(question.stated for question in grounding.open_questions) or feed_id,
+            feed_id=feed_id,
+            run_id=run,
+        )
         answers, called, escalated, prompt_hash, cost = self._author(
-            grounding, caller=caller, run_id=run
+            grounding, retrieved=retrieved, caller=caller, run_id=run
         )
         rules, review, refusals = self._assemble(
             grounding, answers, published=published, escalated=escalated
@@ -198,7 +217,7 @@ class RuleAuthoringAgent:
                 created_by=AGENT_ACTOR,
                 created_ts=stamp,
                 confidence=_overall_confidence(rules, review),
-                grounding_citations=_citations(grounding),
+                grounding_citations=_citations(grounding) + retrieved.grounding.citations,
                 prompt_hash=prompt_hash,
             ),
             now=stamp,
@@ -235,7 +254,7 @@ class RuleAuthoringAgent:
     # ── node 2 · author (small) ──────────────────────────────────────────────
 
     def _author(
-        self, grounding: Grounding, *, caller: Actor, run_id: str
+        self, grounding: Grounding, *, retrieved: RetrievalResult, caller: Actor, run_id: str
     ) -> tuple[dict[str, dict[str, Any]], bool, bool, str, Decimal]:
         """The one model call — and only when there is something to ask."""
         if grounding.needs_no_model:
@@ -247,7 +266,7 @@ class RuleAuthoringAgent:
                 run_id=run_id,
                 prompt_id="rule-authoring.author",
                 caller=caller,
-                context=grounding.as_prompt_grounding(),
+                context=grounding.as_prompt_grounding() + as_fenced_grounding(retrieved),
                 # THE BA'S OWN SENTENCES, inside the untrusted fence. They are
                 # a person's free text about a payer's data, which is exactly
                 # what the fence is for — and the constraints say in as many

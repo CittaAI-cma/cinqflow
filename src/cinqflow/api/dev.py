@@ -18,19 +18,27 @@ from cinqflow.adapters.local.folder_connector import FolderDropConnector
 from cinqflow.adapters.local.localfs_storage import LocalFsStorage
 from cinqflow.adapters.local.upload_connector import UploadConnector
 from cinqflow.adapters.mock.authn import StaticAuthn
+from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
 from cinqflow.api import create_app
 from cinqflow.intelligence.demo import (
     BATCH_ID,
     BUDGET,
+    DEMO_VECTOR,
     agent_for,
     alert_enrichment_agent_for,
+    demo_gateway,
     fingerprint_match_agent_for,
     layer_reader_for,
+    mapping_suggestion_agent_for,
     merge_evidence_agent_for,
+    phi_detection_for,
     plane,
+    rule_authoring_for,
     schema_inference_for,
 )
+from cinqflow.ports.metadata_db import MetadataDbPort
 from cinqflow.workers.incidents import IncidentWorker
+from cinqflow.workers.knowledge import KnowledgeIngestWorker
 
 #: The same root `profiles/local.yaml` names, so a file delivered through the
 #: dev server and one delivered by `cinqflow ingest` land in one zone.
@@ -95,6 +103,18 @@ def build(landing_root: str | None = None) -> Any:
         layer_reader=layer_reader_for(),
         agent_factory=agent_for,
         schema_inference_factory=schema_inference_for,
+        # CF-V1-E5-03 · CF-V1-E6-02 · CF-V1-E7-01/04 · CF-V1-E16-04. Four Wave-1
+        # capabilities that were built, routed and tested, and then fitted by no
+        # server at all: `POST /detect-phi`, `POST /suggest-mapping`,
+        # `POST /author-rules` and every publish hook's embed step answered 503
+        # (or degraded silently) on this socket AND on rung 0.5. The
+        # deterministic half of each is real, so all four demonstrate for real
+        # against the scripted stand-in — which is the argument
+        # `schema_inference_factory` above has always made for itself.
+        phi_detection_factory=phi_detection_for,
+        mapping_suggestion_factory=mapping_suggestion_agent_for,
+        rule_authoring_factory=rule_authoring_for,
+        knowledge_ingest_factory=knowledge_ingest_for,
         # CF-V3-E9-03. Same reasoning as schema_inference_for above: `gather`
         # is real, so `POST /api/identity/merge-preview` returns a true plan
         # and comparison on every dev-server start, narrative aside.
@@ -104,6 +124,27 @@ def build(landing_root: str | None = None) -> Any:
         # exercise on every dev-server start, with no credential involved.
         alert_enrichment_agent=alert_enrichment_agent_for(control, store),
         budget=BUDGET,
+    )
+
+
+def knowledge_ingest_for(metadata: MetadataDbPort) -> KnowledgeIngestWorker:
+    """CF-V1-E16-04 on the mock socket, over the process-wide `DEMO_VECTOR`.
+
+    Composed HERE and not in `intelligence/demo.py` for the layering reason
+    `intelligence/plane.py` states at length: `workers/` sits above
+    `intelligence/` in `.importlinter`'s layer contract.
+
+    ONE store for the process, not one per call: `create_app` invokes a
+    factory per request, and a store built per call would embed a runbook on
+    publish into a dictionary discarded before anything could retrieve from
+    it — `search_knowledge` would keep answering "the knowledge plane is
+    empty" one request after a publish visibly succeeded.
+    """
+    return KnowledgeIngestWorker(
+        phi_scrub=PatternPhiScrub(),
+        llm=demo_gateway(metadata),
+        vector=DEMO_VECTOR,
+        metadata=metadata,
     )
 
 

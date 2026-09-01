@@ -63,6 +63,20 @@ export default async function FeedPage({
         <CitationChip citationId={feed.citation_id} />
       </p>
 
+      {/* CF-V1-E4-01. The guided journey's front door. The wizard is a
+          per-FEED journey, not a destination — there is no route to it that
+          does not name a feed — so it is linked from here rather than added
+          to the navigation manifest, where its `answers` line would have to
+          be written for a page nobody can open without picking a feed first. */}
+      <p className="inline action-row">
+        <Link className="action" href={`/data/intake/feed/${encodeURIComponent(feedId)}/onboarding`}>
+          Onboarding checklist →
+        </Link>
+        <span className="note">
+          Five steps: sample, schema, mapping, rules, publish. It resumes wherever you left off.
+        </span>
+      </p>
+
       <div className="card">
         <dl className="kv">
           <dt>Domain</dt>

@@ -70,6 +70,12 @@ from cinqflow.core.registry.canonical import CanonicalModel
 from cinqflow.core.registry.contract import SchemaContract
 from cinqflow.core.registry.glossary import Glossary
 from cinqflow.intelligence.gateway import LlmGateway, ManualPathRequiredError
+from cinqflow.intelligence.retrieval import (
+    RetrievalResult,
+    RetrievalService,
+    as_fenced_grounding,
+    ground_for_feed,
+)
 from cinqflow.ports.metadata_db import MetadataDbPort
 
 #: The actor a proposal is created by. AI, always.
@@ -158,6 +164,15 @@ class MappingSuggestionAgent:
     llm: LlmGateway
     metadata: MetadataDbPort
     confidence_floor: float = CONFIDENCE_FLOOR
+    #: CF-V1-E6-02 · CF-V1-E16-05. "Retrieve precedents through the platform
+    #: retrieval service (scope-filtered, hybrid, cited) — never from a
+    #: private store; the reviewer opens the same citations the model reasoned
+    #: from." The glossary and this feed's own published mappings stay a
+    #: DIRECT read, and that is not a contradiction: they are not a private
+    #: store, they are the governed objects themselves, read at their source
+    #: with a version. Retrieval adds what those cannot reach — the payer's
+    #: companion guide, a runbook, a closed incident's narrative.
+    retrieval: RetrievalService | None = None
 
     def propose(
         self,
@@ -190,8 +205,17 @@ class MappingSuggestionAgent:
             published_mappings=published_mappings,
             approvers=approvers or {},
         )
+        # CF-V1-E16-06. Retrieved by the column names the deterministic half
+        # could NOT settle — a companion guide earns its tokens on
+        # `SUBSCR_REL_CD`, never on `member_id`.
+        retrieved = ground_for_feed(
+            self.retrieval,
+            text=" ".join(column.source_column for column in grounding.open_questions) or feed_id,
+            feed_id=feed_id,
+            run_id=run,
+        )
         answers, extras, called, unreached, prompt_hash, cost = self._suggest(
-            grounding, caller=caller, run_id=run
+            grounding, retrieved=retrieved, caller=caller, run_id=run
         )
         lines, refusals, findings = self._assemble(
             grounding,
@@ -222,7 +246,7 @@ class MappingSuggestionAgent:
                 created_by=AGENT_ACTOR,
                 created_ts=stamp,
                 confidence=_overall_confidence(lines),
-                grounding_citations=_citations(grounding),
+                grounding_citations=_citations(grounding) + retrieved.grounding.citations,
                 prompt_hash=prompt_hash,
             ),
             now=stamp,
@@ -265,7 +289,12 @@ class MappingSuggestionAgent:
     # ── node 2 · suggest (small) ─────────────────────────────────────────────
 
     def _suggest(
-        self, grounding: Grounding, *, caller: Actor, run_id: str
+        self,
+        grounding: Grounding,
+        *,
+        retrieved: RetrievalResult,
+        caller: Actor,
+        run_id: str,
     ) -> tuple[
         dict[str, dict[str, Any]],
         tuple[dict[str, Any], ...],
@@ -308,7 +337,7 @@ class MappingSuggestionAgent:
                     run_id=run_id,
                     prompt_id="mapping-suggestion.suggest",
                     caller=caller,
-                    context=batch.as_prompt_grounding(),
+                    context=batch.as_prompt_grounding() + as_fenced_grounding(retrieved),
                     input_text="\n".join(c.source_column for c in batch.open_questions),
                 )
             except ManualPathRequiredError:

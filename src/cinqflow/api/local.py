@@ -22,15 +22,23 @@ connection checked out per request from a pool (`psycopg[pool]` is already a
 base dependency — see requirements/base.txt), which is a contained follow-up
 here, not a redesign: only this file's wiring would change.
 
-THE AGENTS ARE STILL THE SCRIPTED STAND-IN `intelligence.demo` uses, even
-though `profiles/local.yaml` names a real `openai-compatible` endpoint and
-`.env` already carries real credentials for it. Wiring the real LLM adapter is
-a genuinely separate integration — secret resolution, the per-model price
-table `LlmGateway` requires, a PHI-scrub adapter choice (`presidio` exists at
-`adapters/local/presidio_scrub.py`, unused here), routing — and deserves its
-own pass and its own verification rather than a silent half-wire alongside
-feed registration. Real data plane; scripted intelligence plane. Upgrading the
-second is `docs/adr/` work, not a flag on this module.
+THE INTELLIGENCE PLANE IS REAL HERE NOW, and it is real the same way the data
+plane is: read from the profile, not decided in this file. `IntelligencePlane
+.from_profile` fits the `llm`, `phi_scrub` and `vector` pins exactly as
+`profiles/local.yaml` names them — `openai-compatible` against the endpoint in
+`.env`, `presidio` for PHI, `pgvector` on the connection below — and every
+agent this server exposes is built from that one plane. Nothing in this module
+names an endpoint, a model or a scrubber; switching this deployment to the
+client tenant is a profile edit, which is the whole claim the socket ladder
+makes.
+
+FOUR CAPABILITIES THAT USED TO ANSWER 503 HERE NOW ANSWER FOR REAL:
+`POST /detect-phi` (CF-V1-E5-03), `POST /suggest-mapping` (CF-V1-E6-02),
+`POST /author-rules` (CF-V1-E7-01) and the knowledge-ingest worker every
+publish hook calls (CF-V1-E16-04). All four were built, tested and routed;
+none was ever passed to `create_app` by any server, which is a different
+thing from being built — an agent nothing constructs is an agent the platform
+does not have.
 """
 
 from __future__ import annotations
@@ -39,26 +47,27 @@ import argparse
 
 from fastapi import FastAPI
 
+from cinqflow.adapters.local.file_document_parse import FileDocumentParser
 from cinqflow.adapters.local.localfs_storage import LocalFsStorage
 from cinqflow.adapters.local.pg_catalog import PostgresCatalog
 from cinqflow.adapters.local.pg_control import Connection, connect
 from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
 from cinqflow.adapters.local.pg_layers import PostgresLayerReader
 from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+from cinqflow.adapters.local.pg_orchestration import PostgresOrchestration
 from cinqflow.adapters.local.pg_sql_query import PostgresSqlQuery
+from cinqflow.adapters.local.secrets import DotenvSecrets
 from cinqflow.adapters.mock.authn import StaticAuthn
 from cinqflow.adapters.mock.notification import ConsoleNotification
 from cinqflow.api import create_app
+from cinqflow.core.model.profile import ProfileError
 from cinqflow.installer import profile as profile_module
 from cinqflow.installer.connectors import connectors_from
 from cinqflow.installer.ods_model import provision_ods_model
-from cinqflow.intelligence.demo import (
-    BUDGET,
-    agent_for,
-    alert_enrichment_agent_for,
-    merge_evidence_agent_for,
-    schema_inference_for,
-)
+from cinqflow.intelligence.plane import IntelligencePlane
+from cinqflow.intelligence.wiring import budget_from
+from cinqflow.ports.metadata_db import MetadataDbPort
+from cinqflow.workers.knowledge import KnowledgeIngestWorker
 
 DEFAULT_PROFILE = "profiles/local.yaml"
 #: The same default `cinqflow ingest`/`cinqflow install` assume — see
@@ -102,6 +111,36 @@ def build(profile_path: str = DEFAULT_PROFILE, landing_root: str | None = None) 
         sql=PostgresSqlQuery(connection), catalog=PostgresCatalog(connection)
     )
 
+    # CF-V0-E16-01 · CF-V1-E5-02/03 · CF-V1-E6-02 · CF-V1-E7-01 · CF-V1-E16-04.
+    # ONE plane, fitted from the SAME profile the data plane above came from,
+    # holding the SAME connection so `pgvector` writes into the database this
+    # server already has open rather than opening a second one. Every agent
+    # below is built off it; none is constructed with an endpoint or a key.
+    secrets = DotenvSecrets()
+    intelligence = IntelligencePlane.from_profile(profile, secrets, connection=connection)
+
+    def knowledge_ingest(store: MetadataDbPort) -> KnowledgeIngestWorker:
+        """CF-V1-E16-04 — composed HERE rather than by `IntelligencePlane`.
+
+        `workers/` sits ABOVE `intelligence/` in `.importlinter`'s layer
+        contract, because a knowledge-ingest worker is an Archetype-B pipeline
+        stage, not an agent: it chunks, gates on PHI and indexes, and makes no
+        judgement a model could make. The plane hands over the three pins it
+        needs; this server assembles them, exactly as it assembles
+        `ods_model_provisioner` from a connection it already holds.
+        """
+        if intelligence.vector is None:  # pragma: no cover - local.yaml fits pgvector
+            raise ProfileError(
+                f"{profile.source}: the vector pin is unfitted, so nothing can be embedded. "
+                "Set `vector: {adapter: pgvector}` or remove the knowledge routes."
+            )
+        return KnowledgeIngestWorker(
+            phi_scrub=intelligence.phi_scrub,
+            llm=intelligence.gateway(store, secrets),
+            vector=intelligence.vector,
+            metadata=store,
+        )
+
     app = create_app(
         authn=StaticAuthn(),
         metadata_db=metadata,
@@ -112,9 +151,29 @@ def build(profile_path: str = DEFAULT_PROFILE, landing_root: str | None = None) 
         # naming an `endpoint_ref` and one more entry under `routes` here.
         connectors=connectors_from(profile, storage=storage),
         layer_reader=layer_reader,
-        agent_factory=agent_for,
-        schema_inference_factory=schema_inference_for,
-        merge_evidence_factory=merge_evidence_agent_for,
+        # CF-V1-E16-06. The companion guide's own door needs a parser fitted;
+        # `local-pypdf-docx` is what `profiles/local.yaml` names for the
+        # `document_parse` pin, and without it wizard step 1 accepted a sample
+        # and refused the specification that explains it.
+        document_parse=FileDocumentParser(),
+        agent_factory=lambda principal, control_tables, store: intelligence.pipeline_insight(
+            principal, control_tables, store, secrets
+        ),
+        schema_inference_factory=lambda store: intelligence.schema_inference(store, secrets),
+        # CF-V1-E5-03. Fitted for the first time on any server — `POST
+        # /detect-phi` answered 503 everywhere until now.
+        phi_detection_factory=lambda store: intelligence.phi_detection(store, secrets),
+        # CF-V1-E6-02. Likewise `POST /suggest-mapping`.
+        mapping_suggestion_factory=lambda store: intelligence.mapping_suggestion(store, secrets),
+        # CF-V1-E7-01 / E7-04. Likewise `POST /author-rules`, including the
+        # low-confidence routing that sends a below-threshold rule to
+        # technical review rather than to a pipeline.
+        rule_authoring_factory=lambda store: intelligence.rule_authoring(store, secrets),
+        # CF-V1-E16-04. Publishing a runbook or a companion guide is what makes
+        # its text knowledge; with no factory the publish hooks degraded
+        # SILENTLY and the vector store stayed empty forever.
+        knowledge_ingest_factory=knowledge_ingest,
+        merge_evidence_factory=lambda store: intelligence.merge_evidence(store, secrets),
         # CF-V3-E10-01. Closes over the SAME connection every other Postgres
         # pin here shares — publishing an ODS model through the generic
         # governance API provisions its real `silver_ods` tables for real.
@@ -126,9 +185,17 @@ def build(profile_path: str = DEFAULT_PROFILE, landing_root: str | None = None) 
         # pass, not a silent half-wire alongside a governance gate. Prints
         # to stdout (`echo=True`) so a developer running this server sees
         # a batch's publish notify for real, not merely "not configured".
+        # CF-V1-E4-03 / CF-V1-E8-03. Publishing a feed now REGISTERS its
+        # cron here, and pausing one tells the scheduler. Until this pin
+        # was fitted `queue.schedule` was never written by the product, so
+        # `due()` returned nothing on a plane full of published feeds and
+        # `cinqflow tick` was right to say "nothing due".
+        orchestration=PostgresOrchestration(connection),
         notify=ConsoleNotification(echo=True),
-        alert_enrichment_agent=alert_enrichment_agent_for(control, metadata),
-        budget=BUDGET,
+        alert_enrichment_agent=intelligence.alert_enrichment(control, metadata, secrets),
+        # From the profile's own `llm.budgets`, never a module constant — a cap
+        # is an environment fact, and this server's cap is `local.yaml`'s.
+        budget=budget_from(profile),
         profile=profile,
     )
     app.state.pg_connection = opened  # kept alive only — see note above

@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from cinqflow.core.agents.document_evidence import DocumentConflict, column_count_conflicts
 from cinqflow.core.agents.schema_inference.graph import (
     AGENT,
     CAPABILITY,
@@ -57,6 +58,12 @@ from cinqflow.core.profiling import FileProfile
 from cinqflow.core.proposals import Proposal, submit
 from cinqflow.core.registry.glossary import Glossary
 from cinqflow.intelligence.gateway import LlmGateway, ManualPathRequiredError
+from cinqflow.intelligence.retrieval import (
+    RetrievalResult,
+    RetrievalService,
+    as_fenced_grounding,
+    ground_for_feed,
+)
 from cinqflow.ports.metadata_db import MetadataDbPort
 
 #: The actor a proposal is created by. AI, always — `Proposal.__post_init__`
@@ -117,6 +124,10 @@ class InferenceResult:
     refusals: tuple[str, ...]
     model_called: bool
     cost_usd: Decimal = Decimal("0")
+    #: CF-V1-E16-06's exception path. Empty where no companion guide was
+    #: uploaded, and empty where the guide agrees with the file — a conflict
+    #: is never asserted from the ABSENCE of a claim.
+    conflicts: tuple[DocumentConflict, ...] = ()
 
     @property
     def needs_input(self) -> tuple[ProposedColumn, ...]:
@@ -139,6 +150,13 @@ class SchemaInferenceAgent:
     llm: LlmGateway
     metadata: MetadataDbPort
     confidence_floor: float = CONFIDENCE_FLOOR
+    #: CF-V1-E5-02 · CF-V1-E16-05 · CF-V1-E16-06. "Ground every proposal
+    #: through the platform retrieval service — glossary terms and precedent
+    #: contracts arrive as cited chunks, and the citations are shown beside
+    #: the proposal." Optional because the DETERMINISTIC half of this agent is
+    #: the half that carries most of its evidence, and a deployment with no
+    #: vector pin still proposes honestly — it simply cites fewer sources.
+    retrieval: RetrievalService | None = None
 
     def propose(
         self,
@@ -160,8 +178,33 @@ class SchemaInferenceAgent:
         stamp = now or datetime.now(UTC)
 
         grounding = self._ground(profile, feed_id=feed_id, glossary=glossary)
-        answers, called, prompt_hash, cost = self._infer(grounding, caller=caller, run_id=run)
+        # CF-V1-E16-06. The payer's own companion guide, if one has been
+        # uploaded and PUBLISHED for this feed, retrieved by the column names
+        # the deterministic half could not settle — which is exactly the set
+        # a specification is useful for. A guide nobody uploaded costs one
+        # lexical lookup and returns nothing.
+        retrieved = ground_for_feed(
+            self.retrieval,
+            text=" ".join(column.source_name for column in grounding.open_questions)
+            or profile.source_key,
+            feed_id=feed_id,
+            run_id=run,
+        )
+        answers, called, prompt_hash, cost = self._infer(
+            grounding, retrieved=retrieved, caller=caller, run_id=run
+        )
         columns, refusals = self._assemble(grounding, answers, glossary)
+        # CF-V1-E16-06. Checked AFTER the model has answered and BEFORE the
+        # proposal is written, because the proposal is the artifact a reviewer
+        # reads and `record_proposal` deliberately never rewrites a payload —
+        # a conflict attached afterwards would be a conflict that never
+        # persisted. The model is not asked to adjudicate: it is the party
+        # least able to check which of two numbers the file actually has.
+        conflicts = column_count_conflicts(
+            chunks=tuple((chunk.citation, chunk.text) for chunk in retrieved.grounding.chunks),
+            sample_columns=len(profile.columns),
+            sample_citation=profile.citation,
+        )
 
         proposal = submit(
             Proposal(
@@ -178,11 +221,21 @@ class SchemaInferenceAgent:
                     "records": [column.as_record() for column in columns],
                     "refusals": list(refusals),
                     "needs_input": [c.source_name for c in columns if c.needs_input],
+                    # Both sources, both cited, and which one the platform
+                    # proceeded on. "Sample evidence wins by DEFAULT" — the
+                    # guide is recorded, never discarded, because a truncated
+                    # delivery and a wrong guide look identical from here.
+                    "document_conflicts": [conflict.as_record() for conflict in conflicts],
                 },
                 created_by=AGENT_ACTOR,
                 created_ts=stamp,
                 confidence=_overall_confidence(columns),
-                grounding_citations=_citations(grounding),
+                # Deterministic citations FIRST, retrieved ones after: a
+                # reviewer reading top-down sees what the platform computed
+                # before what a document claimed, which is the order
+                # E16-06's own conflict rule puts them in ("sample evidence
+                # wins by default").
+                grounding_citations=_citations(grounding) + retrieved.grounding.citations,
                 prompt_hash=prompt_hash,
             ),
             now=stamp,
@@ -196,6 +249,7 @@ class SchemaInferenceAgent:
             refusals=refusals,
             model_called=called,
             cost_usd=cost,
+            conflicts=conflicts,
         )
 
     # ── node 1 · ground (NO MODEL) ───────────────────────────────────────────
@@ -207,7 +261,12 @@ class SchemaInferenceAgent:
     # ── node 2 · infer (small) ───────────────────────────────────────────────
 
     def _infer(
-        self, grounding: Grounding, *, caller: Actor, run_id: str
+        self,
+        grounding: Grounding,
+        *,
+        retrieved: RetrievalResult,
+        caller: Actor,
+        run_id: str,
     ) -> tuple[dict[str, dict[str, Any]], bool, str, Decimal]:
         """The one model call — and only when there is something to ask.
 
@@ -224,7 +283,7 @@ class SchemaInferenceAgent:
                 run_id=run_id,
                 prompt_id="schema-inference.infer",
                 caller=caller,
-                context=grounding.as_prompt_grounding(),
+                context=grounding.as_prompt_grounding() + as_fenced_grounding(retrieved),
                 input_text="\n".join(
                     f"{c.source_name}: " + " | ".join(c.evidence) for c in grounding.open_questions
                 ),

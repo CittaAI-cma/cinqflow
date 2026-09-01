@@ -101,7 +101,11 @@ function roster(): Buffer {
 }
 
 async function choose(page: Page, name: string, content: Buffer) {
-  await page.locator('input[type="file"]').setInputFiles({
+  // `#file` is the SAMPLE's input. CF-V1-E16-06 added a second file input to
+  // this page — the payer's companion guide (`#doc-file`) — so a bare
+  // `input[type="file"]` is ambiguous, and Playwright's strict mode says so
+  // rather than silently picking one. These tests are about the sample.
+  await page.locator("#file").setInputFiles({
     name,
     mimeType: "text/csv",
     buffer: content,
@@ -138,7 +142,7 @@ test("the upload form asks for a file, a business date, and nothing it does not 
   await signIn(page);
   await page.goto(`/data/intake/feed/${FEED}/deliver`);
   await expect(page.getByRole("heading", { name: /upload a sample file/i })).toBeVisible();
-  await expect(page.locator('input[type="file"]')).toBeVisible();
+  await expect(page.locator("#file")).toBeVisible();
   await expect(page.locator('input[name="business_date"]')).toBeVisible();
   // The pattern is SHOWN, so a rejection for not matching it is not a surprise.
   await expect(page.getByText(/file-name pattern/i)).toBeVisible();
@@ -160,7 +164,7 @@ test("the Data Intake door asks which feed, because there the feed is the questi
   await page.goto("/data/intake/deliver");
   await expect(page.getByRole("heading", { name: /deliver a file/i })).toBeVisible();
   await expect(page.getByLabel(/which feed/i)).toBeVisible();
-  await expect(page.locator('input[type="file"]')).toBeVisible();
+  await expect(page.locator("#file")).toBeVisible();
 });
 
 test("a delivery reports the platform's decision, never the redirect", async ({ page }) => {
@@ -306,5 +310,9 @@ test("a reader is told they may not deliver, rather than handed a button that 40
   const response = await page.goto(`/data/intake/feed/${FEED}/deliver`);
   expect(response?.status()).toBeLessThan(500);
   await expect(page.getByRole("button", { name: /^deliver$/i })).toBeDisabled();
-  await expect(page.getByText(/edit_feed/)).toBeVisible();
+  // Both forms on this page name the permission — the sample's and the
+  // companion guide's — and both are correct. `.first()` asserts that a
+  // reader is TOLD, which is what the test is about, rather than that they
+  // are told exactly once.
+  await expect(page.getByText(/edit_feed/).first()).toBeVisible();
 });

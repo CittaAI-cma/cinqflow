@@ -99,6 +99,19 @@ type Correction = {
   accepted: unknown;
   is_addition: boolean;
 };
+/** CF-V1-E16-06 — the guide said one thing, the file showed another.
+ *  BOTH numbers and BOTH citations: a truncated delivery and a bad
+ *  specification look identical from here, and a reviewer shown only the
+ *  winner cannot tell them apart. */
+type DocumentConflict = {
+  what: string;
+  document_says: number;
+  sample_shows: number;
+  document_citation: string;
+  sample_citation: string;
+  quote: string;
+  resolution: string;
+};
 type Proposal = {
   proposal_id: string;
   agent: string;
@@ -128,6 +141,7 @@ type Proposal = {
   masked_columns: string[];
   corrections: Correction[];
   model_called: boolean;
+  document_conflicts: DocumentConflict[];
 };
 type Acceptance = {
   total: number;
@@ -387,6 +401,27 @@ export default async function ProposalPage({
               ))}
             </tbody>
           </table>
+        </>
+      ) : null}
+
+      {/* CF-V1-E16-06's exception path. ABOVE the citations, because a
+          reviewer who scrolls past a contradiction to read the evidence has
+          read the evidence in the wrong order. */}
+      {result.document_conflicts.length > 0 ? (
+        <>
+          <h2>The uploaded document contradicts the sample</h2>
+          <ul className="tree-list">
+            {result.document_conflicts.map((conflict) => (
+              <li key={`${conflict.what}-${conflict.document_says}`}>
+                <strong>{conflict.what}</strong> — the document says{" "}
+                {conflict.document_says}, the file shows {conflict.sample_shows}.{" "}
+                <CitationChip citationId={conflict.document_citation} />{" "}
+                <CitationChip citationId={conflict.sample_citation} />
+                <p className="note">&ldquo;{conflict.quote}&rdquo;</p>
+                <p className="note">{conflict.resolution}</p>
+              </li>
+            ))}
+          </ul>
         </>
       ) : null}
 

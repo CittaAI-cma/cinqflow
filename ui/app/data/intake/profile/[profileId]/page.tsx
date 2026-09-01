@@ -2,6 +2,8 @@ import Link from "next/link";
 import { CitationChip } from "@/components/Cited";
 import { RefusalNotice } from "@/components/Refusal";
 import { attempt, isRefused } from "@/lib/api";
+import type { Principal } from "@/lib/types";
+import { AgentActions } from "./AgentActions";
 
 /**
  * One file profile. The destination a `profile:<fingerprint>` citation opens,
@@ -167,10 +169,10 @@ export default async function ProfilePage({
   searchParams,
 }: {
   params: Promise<{ profileId: string }>;
-  searchParams: Promise<{ column?: string }>;
+  searchParams: Promise<{ column?: string; refused?: string }>;
 }) {
   const { profileId } = await params;
-  const { column } = await searchParams;
+  const { column, refused } = await searchParams;
   const result = await attempt<FileProfile>(`/api/profiles/${encodeURIComponent(profileId)}`);
 
   if (isRefused(result)) {
@@ -186,6 +188,11 @@ export default async function ProfilePage({
   }
 
   const selected = column ? result.columns.find((c) => c.name === column) : undefined;
+  // CF-V1-E5-02/03 · E6-02. Who may ask an agent to interpret this profile —
+  // read from the caller's own permitted actions rather than from their role,
+  // so the button and the route agree by construction.
+  const me = await attempt<Principal>("/api/me");
+  const mayEdit = !isRefused(me) && me.permitted_actions.includes("edit_feed");
 
   return (
     <>
@@ -198,6 +205,18 @@ export default async function ProfilePage({
         <CitationChip citationId={`profile:${result.profile_id}`} /> — computed, never inferred.
         Profiled by {result.profiled_by}.
       </p>
+
+      {/* CF-V1-E5-02 · E5-03 · E6-02. The four AI capabilities were routed,
+          fitted and tested, and no page in this application called any of
+          them — the intelligence plane was reachable only by `curl`. This is
+          the door, placed where the evidence is: an agent that interprets a
+          profile belongs beside the profile it interprets. */}
+      <AgentActions
+        feedId={result.feed_id}
+        profileId={result.profile_id}
+        mayEdit={mayEdit}
+        refused={refused}
+      />
 
       {result.refusal ? (
         <div className="card">

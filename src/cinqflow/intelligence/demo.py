@@ -27,11 +27,11 @@ from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
+from cinqflow.adapters.mock.vector import ListVector
 from cinqflow.core import mapping as mapping_core
+from cinqflow.core.agents import ALL_TEMPLATES
 from cinqflow.core.agents.alert_enrichment.graph import AGENT as ALERT_ENRICHMENT_AGENT_NAME
-from cinqflow.core.agents.alert_enrichment.prompts import TEMPLATES as ALERT_ENRICHMENT_TEMPLATES
 from cinqflow.core.agents.fingerprint_match.graph import AGENT as FINGERPRINT_MATCH_AGENT_NAME
-from cinqflow.core.agents.fingerprint_match.prompts import TEMPLATES as FINGERPRINT_TEMPLATES
 from cinqflow.core.agents.mapping_suggestion.graph import (
     AGENT as MAPPING_SUGGESTION_AGENT_NAME,
 )
@@ -39,11 +39,6 @@ from cinqflow.core.agents.mapping_suggestion.graph import (
     CAPABILITY as MAPPING_SUGGESTION_CAPABILITY,
 )
 from cinqflow.core.agents.mapping_suggestion.graph import NO_CONFIDENT_TARGET
-from cinqflow.core.agents.mapping_suggestion.prompts import TEMPLATES as MAPPING_TEMPLATES
-from cinqflow.core.agents.merge_evidence.prompts import TEMPLATES as MERGE_EVIDENCE_TEMPLATES
-from cinqflow.core.agents.phi_detection.prompts import TEMPLATES as PHI_TEMPLATES
-from cinqflow.core.agents.pipeline_insight.prompts import TEMPLATES
-from cinqflow.core.agents.schema_inference.prompts import TEMPLATES as SCHEMA_TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
 from cinqflow.core.layers import QuarantineReason, ReconLine
 from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState
@@ -61,14 +56,18 @@ from cinqflow.core.proposals import submit as submit_proposal
 from cinqflow.core.registry import contract as contract_registry
 from cinqflow.core.registry.contract import ContractColumn, DqRule, SchemaContract, Severity
 from cinqflow.core.registry.feed import FeedRecord
+from cinqflow.core.retrieval import platform_index
 from cinqflow.core.schema_spec import TypeName
 from cinqflow.intelligence.agents.alert_enrichment import AlertEnrichmentAgent
 from cinqflow.intelligence.agents.fingerprint_match import FingerprintMatchAgent
 from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
 from cinqflow.intelligence.agents.merge_evidence import MergeEvidenceAgent
+from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
+from cinqflow.intelligence.agents.rule_authoring import RuleAuthoringAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.gateway import LlmGateway
+from cinqflow.intelligence.retrieval import RetrievalService
 from cinqflow.intelligence.tools import ToolContext
 from cinqflow.ports.control_tables import (
     BatchControl,
@@ -83,6 +82,11 @@ from cinqflow.ports.control_tables import (
 from cinqflow.ports.metadata_db import MetadataDbPort
 
 BUDGET = Budget(per_run_usd=Decimal("0.25"), per_agent_per_day_usd=Decimal("5.00"))
+
+#: CF-V1-E16-04. The dev server's knowledge plane — one store for the
+#: process, so a publish and the retrieval that follows it see the same
+#: chunks. Empty at import, which is what Wave 0 asserted and Wave 1 fills.
+DEMO_VECTOR = ListVector()
 
 FEED_ID = "fidelis-downstate-roster"
 BATCH_ID = "8842"
@@ -193,20 +197,14 @@ def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
             )
         )
     )
-    # W1-33: `MAPPING_TEMPLATES` joins the loop the moment this plane grows a
-    # real caller of `MappingSuggestionAgent.propose` (`workers.drift.
-    # propose_mapping_for_unmapped_columns`, via `mapping_suggestion_agent_
-    # for` below) — before this slab nothing on ANY plane ever called it, so
-    # the gap went unnoticed.
-    for template in (
-        *TEMPLATES,
-        *SCHEMA_TEMPLATES,
-        *PHI_TEMPLATES,
-        *FINGERPRINT_TEMPLATES,
-        *MAPPING_TEMPLATES,
-        *ALERT_ENRICHMENT_TEMPLATES,
-        *MERGE_EVIDENCE_TEMPLATES,
-    ):
+    # CF-V0-E16-02. `core.agents.ALL_TEMPLATES` rather than a tuple assembled
+    # here: this list was hand-maintained, and it was WRONG — `rule-authoring
+    # .author` was never in it, so `RuleAuthoringAgent` would have raised
+    # `ObjectNotFoundError: prompt:rule-authoring.author` on the first call
+    # the moment anything wired it (which nothing did until now). One
+    # catalogue, read by this seeder and by `installer.prompts.seed_prompts`
+    # alike, is what stops a second call site drifting the same way.
+    for template in ALL_TEMPLATES:
         store.save(_published(template.as_governed(author=AUTHOR)))
 
     started = now - timedelta(hours=9)
@@ -499,19 +497,31 @@ def plane() -> tuple[MemMetadataDb, MemStoreControlTables]:
     return store, control
 
 
+def demo_gateway(metadata: MetadataDbPort) -> LlmGateway:
+    """ONE scripted gateway shape, not six copies of it.
+
+    Every demo agent below used to inline the same six lines, which is how
+    `PatternPhiScrub` and `NoopObservability` came to be six independent
+    decisions instead of one. The real deployment answers this same question
+    from the profile (`intelligence.plane.IntelligencePlane`); this is rung
+    0's answer, and rung 0's answer is "no credential exists here".
+    """
+    return LlmGateway(
+        llm=ScriptedLlm(responder=scripted),
+        phi_scrub=PatternPhiScrub(),
+        metadata_db=metadata,
+        observability=NoopObservability(),
+        budget=BUDGET,
+        routing=Routing(small="mock-small", large="mock-large"),
+    )
+
+
 def agent_for(
     principal: Principal, control: ControlTablesPort, metadata: MetadataDbPort
 ) -> PipelineInsightAgent:
     """One agent per caller. A shared agent would be a shared scope."""
     return PipelineInsightAgent(
-        llm=LlmGateway(
-            llm=ScriptedLlm(responder=scripted),
-            phi_scrub=PatternPhiScrub(),
-            metadata_db=metadata,
-            observability=NoopObservability(),
-            budget=BUDGET,
-            routing=Routing(small="mock-small", large="mock-large"),
-        ),
+        llm=demo_gateway(metadata),
         tools=ToolContext(principal=principal, control=control, metadata=metadata),
         runtime=InProcAgentRuntime(),
     )
@@ -532,14 +542,7 @@ def fingerprint_match_agent_for(
     `PLATFORM_ACTOR`, named at the call site, not here.
     """
     return FingerprintMatchAgent(
-        llm=LlmGateway(
-            llm=ScriptedLlm(responder=scripted),
-            phi_scrub=PatternPhiScrub(),
-            metadata_db=metadata,
-            observability=NoopObservability(),
-            budget=BUDGET,
-            routing=Routing(small="mock-small", large="mock-large"),
-        ),
+        llm=demo_gateway(metadata),
         tools=ToolContext(
             principal=PLATFORM_PRINCIPAL,
             control=control,
@@ -566,15 +569,27 @@ def mapping_suggestion_agent_for(metadata: MetadataDbPort) -> MappingSuggestionA
     batch that already ran, not a request a person made.
     """
     return MappingSuggestionAgent(
-        llm=LlmGateway(
-            llm=ScriptedLlm(responder=scripted),
-            phi_scrub=PatternPhiScrub(),
-            metadata_db=metadata,
-            observability=NoopObservability(),
-            budget=BUDGET,
-            routing=Routing(small="mock-small", large="mock-large"),
-        ),
+        llm=demo_gateway(metadata),
         metadata=metadata,
+        retrieval=demo_retrieval(metadata),
+    )
+
+
+def demo_retrieval(metadata: MetadataDbPort) -> RetrievalService:
+    """CF-V1-E16-05 on the mock socket — real service, real fusion, no key.
+
+    The lexical half is the generated platform glossary, which is genuine
+    grounding; the semantic half runs over `DEMO_VECTOR`, so a runbook
+    published on this server IS retrievable from the next suggestion. The
+    embedding call goes through the scripted gateway, which is why the
+    dev server needs no credential to demonstrate hybrid retrieval end to
+    end.
+    """
+    return RetrievalService(
+        index=platform_index(),
+        vector=DEMO_VECTOR,
+        llm=demo_gateway(metadata),
+        phi_scrub=PatternPhiScrub(),
     )
 
 
@@ -587,15 +602,39 @@ def schema_inference_for(metadata: MetadataDbPort) -> SchemaInferenceAgent:
     demonstrable without a credential.
     """
     return SchemaInferenceAgent(
-        llm=LlmGateway(
-            llm=ScriptedLlm(responder=scripted),
-            phi_scrub=PatternPhiScrub(),
-            metadata_db=metadata,
-            observability=NoopObservability(),
-            budget=BUDGET,
-            routing=Routing(small="mock-small", large="mock-large"),
-        ),
+        llm=demo_gateway(metadata),
         metadata=metadata,
+        retrieval=demo_retrieval(metadata),
+    )
+
+
+def phi_detection_for(metadata: MetadataDbPort) -> PhiDetectionAgent:
+    """CF-V1-E5-03 on the dev server — the FIRST server ever to fit it.
+
+    `POST /api/feeds/{id}/detect-phi` has answered 503 on every deployment
+    since the route was written, because no `build()` passed a
+    `phi_detection_factory`. That is worth wiring against the scripted
+    stand-in for the same reason `schema_inference_for` is: the DETECTION
+    half is deterministic — `core.phi.classify` reads patterns and the
+    glossary, and the model is only ever asked to NAME what the platform
+    already found — so a demo file produces a genuine classification, a
+    genuine masking policy and a genuine 'possible PHI — free text' flag
+    with no credential involved.
+    """
+    return PhiDetectionAgent(llm=demo_gateway(metadata), scrub=PatternPhiScrub(), metadata=metadata)
+
+
+def rule_authoring_for(metadata: MetadataDbPort) -> RuleAuthoringAgent:
+    """CF-V1-E7-01 / CF-V1-E7-04 on the dev server — likewise never fitted.
+
+    The scripted model returns no rule, which is exactly the LOW-CONFIDENCE
+    path E7-04 exists for: the sentence is preserved verbatim, the rule is
+    routed to technical review, and NOTHING runs anywhere. A demo of the
+    guardrail is a more honest demo than a demo of the happy path would be
+    against a stand-in that cannot author.
+    """
+    return RuleAuthoringAgent(
+        llm=demo_gateway(metadata), metadata=metadata, retrieval=demo_retrieval(metadata)
     )
 
 
@@ -607,16 +646,7 @@ def merge_evidence_agent_for(metadata: MetadataDbPort) -> MergeEvidenceAgent:
     comparison even before any real model endpoint exists — the mock only
     ever leaves `narrative` empty, never invents one.
     """
-    return MergeEvidenceAgent(
-        llm=LlmGateway(
-            llm=ScriptedLlm(responder=scripted),
-            phi_scrub=PatternPhiScrub(),
-            metadata_db=metadata,
-            observability=NoopObservability(),
-            budget=BUDGET,
-            routing=Routing(small="mock-small", large="mock-large"),
-        )
-    )
+    return MergeEvidenceAgent(llm=demo_gateway(metadata))
 
 
 def scripted(prompt: str, task_class: Any) -> str:
@@ -833,14 +863,7 @@ def alert_enrichment_agent_for(
     right now.
     """
     return AlertEnrichmentAgent(
-        llm=LlmGateway(
-            llm=ScriptedLlm(responder=scripted),
-            phi_scrub=PatternPhiScrub(),
-            metadata_db=metadata,
-            observability=NoopObservability(),
-            budget=BUDGET,
-            routing=Routing(small="mock-small", large="mock-large"),
-        ),
+        llm=demo_gateway(metadata),
         tools=ToolContext(
             principal=PLATFORM_PRINCIPAL,
             control=control,

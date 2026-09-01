@@ -21,6 +21,7 @@ from rich.table import Table as RichTable
 from cinqflow.core.schema_spec import all_schemas
 from cinqflow.installer import profile as profile_module
 from cinqflow.installer.manifest import InstallationManifest
+from cinqflow.installer.prompts import PromptSeedReport
 
 app = typer.Typer(
     name="cinqflow",
@@ -59,11 +60,27 @@ ProfileOption = Annotated[
 def install(
     profile: ProfileOption = Path("profiles/local.yaml"),
     manifest_path: Annotated[Path, typer.Option("--manifest")] = DEFAULT_MANIFEST,
+    approved_by: Annotated[
+        str,
+        typer.Option(
+            "--approved-by",
+            help="The named person accepting this build's prompt registry onto the plane.",
+        ),
+    ] = "dev-platform@cinqcare.test",
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Render the DDL; write nothing.")
     ] = False,
 ) -> None:
-    """Provision a complete plane from nothing. Idempotent."""
+    """Provision a complete plane from nothing. Idempotent.
+
+    CF-V0-E16-02: this now also publishes the PROMPT REGISTRY. Schemas alone
+    produce a plane that provisions cleanly and then 500s on the first model
+    call any agent makes — `ObjectNotFoundError: prompt:pipeline-insight
+    .route` — because `LlmGateway.complete()` resolves its template from
+    `governance.object` and nothing had ever written those rows outside the
+    in-memory mock. A plane the installer declares complete must not be a
+    plane whose intelligence cannot start.
+    """
     loaded = profile_module.load(profile)
     console.print(
         f"[bold]cinqflow install[/bold]  profile={loaded.name}  "
@@ -108,6 +125,11 @@ def install(
 
     _execute(loaded, statements)
 
+    # CF-V0-E16-02. AFTER the DDL, because the rows need `governance.object`
+    # to exist; inside the same command, because an install that leaves the
+    # prompt registry empty has provisioned a platform that cannot answer.
+    prompt_report = _publish_prompt_registry(loaded, approved_by)
+
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest.write(manifest_path)
 
@@ -117,7 +139,31 @@ def install(
     for kind in ("extension", "schema", "table", "index"):
         summary.add_row(kind, str(sum(1 for o in manifest.objects if o.kind == kind)))
     console.print(summary)
+    console.print(prompt_report.explain())
     console.print(f"manifest → [bold]{manifest_path}[/bold]")
+
+
+def _publish_prompt_registry(loaded: profile_module.Profile, approved_by: str) -> PromptSeedReport:
+    """CF-V0-E16-02 — the prompt rows, through the real lifecycle.
+
+    Extracted from `install` rather than inlined so `seed-prompts` and
+    `install` share one path: two call sites that each published prompts
+    their own way is how the mock plane came to seed seven templates while
+    `rule-authoring.author` was missing from the list entirely.
+    """
+    from cinqflow.adapters.local.pg_control import commit
+    from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+    from cinqflow.core.model.identity import Principal, Role, Scopes
+    from cinqflow.installer.prompts import seed_prompts as publish
+
+    actor = Principal(
+        subject=approved_by,
+        display_name=approved_by.split("@")[0],
+        roles=frozenset({Role.PLATFORM_ENGINEER}),
+        scopes=Scopes(domains=frozenset({"*"}), feeds=frozenset({"*"})),
+    ).as_actor()
+    with commit(loaded) as connection:
+        return publish(PostgresMetadataDb(connection), approver=actor)
 
 
 @app.command()
@@ -265,6 +311,66 @@ def seed_glossary(
 
 
 @app.command()
+def seed_prompts(
+    profile: ProfileOption = Path("profiles/local.yaml"),
+    approved_by: Annotated[
+        str,
+        typer.Option(
+            "--approved-by",
+            help="The NAMED PERSON accepting this build's prompts onto this plane.",
+        ),
+    ] = "dev-platform@cinqcare.test",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Report; write nothing.")] = False,
+) -> None:
+    """CF-V0-E16-02 — publish this build's prompt registry onto the plane.
+
+    THE INSTALL STEP WHOSE ABSENCE MADE EVERY AGENT 500 ON A REAL PLANE.
+    `LlmGateway.complete()` resolves its template from the metadata store, so
+    a prompt is a governed, versioned, reviewable object rather than a string
+    in a function — which is right, and which is why nothing works until the
+    rows exist. `intelligence.demo.seed()` wrote them into the in-memory store
+    the mock socket uses, so CI and the rung-0 demo were always fine; a freshly
+    installed Postgres plane answered `POST /api/ask` with
+    `ObjectNotFoundError: prompt:pipeline-insight.route`.
+
+    Idempotent on (id, VERSION), not on id: re-running is safe, and a template
+    carrying a NEW version publishes beside the old one rather than silently
+    leaving last quarter's prompt in place.
+
+    Unlike `seed-glossary`, these arrive PUBLISHED, and the difference is
+    structural: a glossary term nobody approved is a definition nobody uses,
+    while a prompt nobody approved is a platform that does not run. The
+    approver is a named person for exactly that reason.
+    """
+    from cinqflow.adapters.local.pg_control import commit
+    from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+    from cinqflow.core.agents import ALL_TEMPLATES
+    from cinqflow.core.model.identity import Principal, Role, Scopes
+    from cinqflow.installer.prompts import seed_prompts as publish
+
+    loaded = profile_module.load(profile)
+    console.print(
+        f"[bold]cinqflow seed-prompts[/bold]  {len(ALL_TEMPLATES)} templates  "
+        f"approved by [bold]{approved_by}[/bold]"
+    )
+    if dry_run:
+        for template in ALL_TEMPLATES:
+            console.print(f"  {template.reference}  [dim]{template.task_class.value}[/dim]")
+        raise typer.Exit(0)
+
+    actor = Principal(
+        subject=approved_by,
+        display_name=approved_by.split("@")[0],
+        roles=frozenset({Role.PLATFORM_ENGINEER}),
+        scopes=Scopes(domains=frozenset({"*"}), feeds=frozenset({"*"})),
+    ).as_actor()
+
+    with commit(loaded) as connection:
+        report = publish(PostgresMetadataDb(connection), approver=actor)
+    console.print(report.explain())
+
+
+@app.command()
 def ask(
     question: str,
     as_user: str = "dev-analyst@cinqcare.test",
@@ -299,6 +405,128 @@ def ask(
         f"[dim]tools: {', '.join(answer.tools_called) or 'none'} · "
         f"confidence {answer.confidence} · ${answer.cost_usd}[/dim]"
     )
+
+
+@app.command()
+def tick(
+    profile: ProfileOption = Path("profiles/local.yaml"),
+    as_of: Annotated[
+        str | None,
+        typer.Option("--as-of", help="ISO timestamp. Defaults to now — override to replay a tick."),
+    ] = None,
+) -> None:
+    """CF-V1-E8-03 — run the scheduler once: what is due, what may start.
+
+    THE COMMAND `pg_orchestration.due()` WAS WRITTEN FOR. Its docstring has
+    named the missing caller since the pin was fitted — "the worker turns each
+    due run into `queue.enqueue(...)`" — and until `workers.scheduler` there
+    was nothing on the receiving end: `due()` had two references in the whole
+    repository, both tests. A schedule nothing ticks is a cron expression in
+    a database column.
+
+    Idempotent by design rather than by care. The queue dedupes on
+    `feed/business_date`, so running this twice in one minute enqueues once;
+    run it from cron, from a terminal, or from a test, and the answer is the
+    same.
+
+    It RELEASES; it does not run. What starts a released run is the consumer
+    on `pipeline.run_feed` — separate on purpose, so a tick that fires while
+    the plane is busy costs one queue insert rather than blocking.
+    """
+    from datetime import datetime
+
+    from cinqflow.adapters.local.pg_control import connect
+    from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
+    from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+    from cinqflow.adapters.local.pg_orchestration import PostgresOrchestration
+    from cinqflow.adapters.local.pg_queue import PostgresQueue
+    from cinqflow.workers.scheduler import SchedulerWorker
+
+    loaded = profile_module.load(str(profile))
+    stamp = datetime.fromisoformat(as_of) if as_of else None
+    with connect(loaded, autocommit=True) as connection:
+        report = SchedulerWorker(
+            orchestration=PostgresOrchestration(connection),
+            metadata=PostgresMetadataDb(connection),
+            control=PostgresControlTables(connection),
+            queue=PostgresQueue(connection),
+            # No notification pin wired here, deliberately. A CLI tick prints
+            # its holds to the operator standing in front of it; paging a
+            # channel from an interactive command would send an alert nobody
+            # asked for every time somebody checked the schedule.
+            notify=None,
+        ).tick(stamp)
+
+    console.print(report.explain())
+    for hold in report.held:
+        console.print(f"[yellow]{hold.explanation}[/yellow]")
+
+
+@app.command()
+def work(
+    profile: ProfileOption = Path("profiles/local.yaml"),
+    once: Annotated[
+        bool, typer.Option("--once", help="Process one message and stop, instead of draining.")
+    ] = False,
+) -> None:
+    """CF-V1-E8-03 — run what the scheduler queued. The other end of `tick`.
+
+    THE CHAIN, COMPLETE. `cinqflow tick` reads `orchestration.due()` and
+    enqueues `pipeline.run_feed`; this command claims those messages and runs
+    the spine for whichever feed they name. Before `workers.run_feed` existed
+    the topic had a producer and no consumer, and the only thing that could
+    run a pipeline at all was `cinqflow ingest` — hardcoded to the Wave-0
+    anchor feed by four module constants, so a second payer could not be run
+    without editing Python.
+
+    GENERIC BY CONSTRUCTION. Nothing here names a feed. The handler reads the
+    PUBLISHED contract, rules and mapping for whatever feed the message
+    carries, compiles the plan and runs every file waiting in that feed's own
+    incoming folder. Onboarding a new payer is a registry row.
+
+    SAFE TO RUN TWICE. Landing's fingerprint check skips a file it has already
+    processed, so a redelivered message after a crash re-reads the folder and
+    loads nothing twice — the guarantee lives in CF-V0-E8-02, not here.
+    """
+    from cinqflow.adapters.local.localfs_storage import LocalFsStorage
+    from cinqflow.adapters.local.pg_compute import PostgresCompute
+    from cinqflow.adapters.local.pg_control import connect
+    from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
+    from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+    from cinqflow.adapters.local.pg_queue import PostgresQueue
+    from cinqflow.workers.consumer import Consumer
+    from cinqflow.workers.pipeline import PipelineRunner
+    from cinqflow.workers.run_feed import FeedRunWorker
+    from cinqflow.workers.scheduler import RUN_FEED_TOPIC
+
+    loaded = profile_module.load(str(profile))
+    # The landing zone the PROFILE names — the same line `ingest` reads, so
+    # a file delivered by one command is visible to the other.
+    storage = LocalFsStorage(
+        root=str(loaded.pins.get("storage", {}).get("root") or ".cinqflow/landing")
+    )
+    with connect(loaded, autocommit=True) as connection:
+        metadata_db = PostgresMetadataDb(connection)
+        control_tables = PostgresControlTables(connection)
+        worker = FeedRunWorker(
+            metadata=metadata_db,
+            storage=storage,
+            runner=PipelineRunner(
+                storage=storage,
+                control=control_tables,
+                compute=PostgresCompute(connection),
+            ),
+        )
+        consumer = Consumer(PostgresQueue(connection))
+        consumer.register(RUN_FEED_TOPIC, worker.handle)
+        processed = 1 if consumer.run_once(RUN_FEED_TOPIC) else 0
+        if not once:
+            processed += consumer.drain_topic(RUN_FEED_TOPIC)
+
+    if processed == 0:
+        console.print("[dim]nothing queued.[/dim]")
+    else:
+        console.print(f"ran [bold]{processed}[/bold] queued feed run(s).")
 
 
 @app.command()
