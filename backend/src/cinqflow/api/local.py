@@ -50,7 +50,7 @@ from fastapi import FastAPI
 from cinqflow.adapters.local.file_document_parse import FileDocumentParser
 from cinqflow.adapters.local.localfs_storage import LocalFsStorage
 from cinqflow.adapters.local.pg_catalog import PostgresCatalog
-from cinqflow.adapters.local.pg_control import Connection, connect
+from cinqflow.adapters.local.pg_control import Connection, connect, connect_data_plane
 from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
 from cinqflow.adapters.local.pg_layers import PostgresLayerReader
 from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
@@ -70,6 +70,15 @@ from cinqflow.ports.metadata_db import MetadataDbPort
 from cinqflow.workers.knowledge import KnowledgeIngestWorker
 
 DEFAULT_PROFILE = "profiles/local.yaml"
+#: A DEFAULT, and deliberately not an environment lookup.
+#:
+#: `os.environ` here would fail `tests/unit/test_credentials_live_only_in_
+#: adapters.py`, and rightly: the profile is the ONE channel environment
+#: difference travels through, so a module that also reads the environment has
+#: invented a second one. The containerized servers name their profile in the
+#: ASGI app string instead — `cinqflow.api.local:build("profiles/dev.yaml")` —
+#: which both gunicorn and uvicorn accept, and which puts the choice somewhere
+#: a reader of the compose file can see it.
 #: The same default `cinqflow ingest`/`cinqflow install` assume — see
 #: `installer/cli.py:ingest`. Kept in step there, not re-derived here.
 DEFAULT_LANDING_ROOT = ".cinqflow/landing"
@@ -107,8 +116,22 @@ def build(profile_path: str = DEFAULT_PROFILE, landing_root: str | None = None) 
     # reader masks every column the schema contract flags before a row leaves
     # the adapter. Both pins share the one connection above, which is what
     # this rung is: a single developer's local server.
+    #
+    # PLUG AND PLAY. The reader above faces the DATA plane, which is not
+    # necessarily the database this server keeps its own state in. When
+    # `profiles/*.yaml` declares a `data_plane`, a SECOND connection is opened
+    # to it and the two medallion pins are fitted there instead — the platform
+    # then reads a warehouse holding none of its control tables, which is what
+    # "connectable to any data plane" has to mean if it means anything.
+    # When no `data_plane` is declared, the one connection is reused and this
+    # is byte-for-byte the rung-0.5 behaviour it has always had.
+    if profile.data_plane_is_separate:
+        opened_data = connect_data_plane(profile, autocommit=True)
+        data_connection: Connection = opened_data.__enter__()
+    else:
+        opened_data, data_connection = None, connection
     layer_reader = PostgresLayerReader(
-        sql=PostgresSqlQuery(connection), catalog=PostgresCatalog(connection)
+        sql=PostgresSqlQuery(data_connection), catalog=PostgresCatalog(data_connection)
     )
 
     # CF-V0-E16-01 · CF-V1-E5-02/03 · CF-V1-E6-02 · CF-V1-E7-01 · CF-V1-E16-04.
@@ -199,6 +222,9 @@ def build(profile_path: str = DEFAULT_PROFILE, landing_root: str | None = None) 
         profile=profile,
     )
     app.state.pg_connection = opened  # kept alive only — see note above
+    # Same reason, same trap: a data-plane connection whose context manager is
+    # garbage-collected is a data-plane connection that closes mid-request.
+    app.state.data_plane_connection = opened_data
     return app
 
 

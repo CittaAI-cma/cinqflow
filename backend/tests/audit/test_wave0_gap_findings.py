@@ -29,8 +29,12 @@ from tests.contract.seeded_plane import BATCH_ID, build_plane
 
 pytestmark = [pytest.mark.contract, pytest.mark.lane1]
 
-REPO = Path(__file__).parent.parent.parent
-UI_APP = REPO / "ui" / "app"
+#: `parent.parent.parent` is `backend/`, not the repo root — the Python tree
+#: moved one level down when the frontend became a sibling of it rather than a
+#: subdirectory. The UI is up and across.
+BACKEND = Path(__file__).parent.parent.parent
+REPO = BACKEND.parent
+UI_APP = REPO / "frontend" / "app"
 
 
 # ── FIXED · the numeric-fidelity eval gate now sees a dropped zero ──────────
@@ -78,7 +82,7 @@ def _page_exists(route: str) -> bool:
 def test_every_citation_kind_opens_a_real_ui_page(kind: CitationKind) -> None:
     citation = CitationId(kind, "x1")
     assert _page_exists(citation.route), (
-        f"{citation} routes to {citation.route}, which has no page under ui/app — "
+        f"{citation} routes to {citation.route}, which has no page under frontend/app — "
         "a well-formed citation that resolves to a 404 reads as evidence and opens nothing"
     )
 
@@ -103,7 +107,7 @@ def test_every_shipped_profile_names_only_registered_adapters(filename: str) -> 
     from cinqflow.ports import PIN_GROUPS, fitted
 
     _registered_adapters()
-    profile = load(REPO / "profiles" / filename)
+    profile = load(BACKEND / "profiles" / filename)
     missing = {
         pin: chosen
         for pins in PIN_GROUPS.values()
@@ -243,7 +247,7 @@ _CONTROL_TABLE_WRITERS_MUST_EXIST = (
 def test_every_declared_control_table_is_used_by_some_code(table: str) -> None:
     # The name may appear in declaration lists and tool descriptions; what
     # matters is the layer that executes SQL: adapters and workers.
-    sql_layers = (REPO / "src" / "cinqflow" / "adapters", REPO / "src" / "cinqflow" / "workers")
+    sql_layers = (BACKEND / "src" / "cinqflow" / "adapters", BACKEND / "src" / "cinqflow" / "workers")
     users = [
         path
         for layer in sql_layers
@@ -290,7 +294,7 @@ def test_uninstall_refuses_a_malicious_manifest_identifier(
 
     try:
         cli.uninstall(
-            profile=REPO / "profiles" / "local.yaml", manifest_path=manifest_path, yes=True
+            profile=BACKEND / "profiles" / "local.yaml", manifest_path=manifest_path, yes=True
         )
     except Exception:
         executed.clear()

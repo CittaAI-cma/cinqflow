@@ -55,15 +55,14 @@ class Connection:
         return self._raw
 
 
-def resolve_dsn(profile: Profile) -> str:
-    """Resolve the DSN, which is a `secret://name` reference in every profile.
+def _resolve(dsn: str, *, source: str, what: str) -> str:
+    """Resolve one `secret://name` reference to a DSN.
 
     The env var name is derived mechanically from the reference, so adding a
     secret is a profile line plus an env line — never a code change.
     """
-    dsn = profile.dsn
     if not dsn:
-        raise ValueError(f"{profile.source}: metadata_db has no dsn")
+        raise ValueError(f"{source}: {what} has no dsn")
     if not is_reference(dsn):
         return dsn
     name = reference_name(dsn)
@@ -75,6 +74,22 @@ def resolve_dsn(profile: Profile) -> str:
             "adapter resolves them — dotenv at rungs 0.5-1, Key Vault at rung 3."
         )
     return resolved
+
+
+def resolve_dsn(profile: Profile) -> str:
+    """The PLATFORM's own socket — registry, control tables, queue, vectors."""
+    return _resolve(profile.dsn, source=profile.source, what="metadata_db")
+
+
+def resolve_data_plane_dsn(profile: Profile) -> str:
+    """The socket the CLIENT's data lives in — bronze, silver, gold.
+
+    Identical to `resolve_dsn` when the profile declares no `data_plane`, which
+    is rung 0.5's one-Postgres shape. Declaring one is the whole plug-and-play
+    move: the same code then reads a warehouse that holds none of the
+    platform's own state.
+    """
+    return _resolve(profile.data_plane_dsn, source=profile.source, what="data_plane")
 
 
 def _connect(profile: Profile, *, autocommit: bool) -> psycopg.Connection[Any]:
@@ -94,6 +109,20 @@ def _connect(profile: Profile, *, autocommit: bool) -> psycopg.Connection[Any]:
     at connection startup, atomically, with no separate round trip to race.
     """
     return psycopg.connect(resolve_dsn(profile), autocommit=autocommit, options="-c TimeZone=UTC")
+
+
+@contextmanager
+def connect_data_plane(profile: Profile, *, autocommit: bool = True) -> Iterator[Connection]:
+    """A connection to the DATA plane, opened the same way and pinned to UTC.
+
+    A separate function rather than a flag on `connect` because the two sockets
+    are two different things with two different lifetimes, and a boolean at the
+    call site would hide which one a reader is looking at.
+    """
+    with psycopg.connect(
+        resolve_data_plane_dsn(profile), autocommit=autocommit, options="-c TimeZone=UTC"
+    ) as raw:
+        yield Connection(raw)
 
 
 @contextmanager

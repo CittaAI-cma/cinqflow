@@ -1,12 +1,30 @@
-# Rung 0.5 — the Postgres data plane. THE DEFAULT DEVELOPMENT PLANE.
+# Rung 3 — THE CLIENT'S TENANT. Managed infrastructure, nothing self-hosted.
 #
-# What has to be running: PostgreSQL 16 + pgvector. That is the entire list.
-#   docs/architecture/plates/05-socket-ladder.md → rungs[0.5]
+#   3: {socket: client_dev, proves: the_real_tenant}
+#   — docs/architecture/plates/05-socket-ladder.md
+#
+# THIS FILE IS THE ENTIRE DIFFERENCE between running on a laptop and running in
+# the client's Azure subscription. No code below the profile changes: Postgres
+# becomes Azure Database for PostgreSQL, MinIO becomes ADLS Gen2, Keycloak
+# becomes Entra, dotenv becomes Key Vault. Every one of those is a line here.
+#
+# The `secret://` references are IDENTICAL to local's. That is the point — the
+# reference format never changes, only what resolves it, which is why the
+# `secrets` pin flips from `dotenv` to `keyvault` and nothing else moves.
+#
+# MODE. Left at `full`, but a first production cutover normally runs
+# `propose_only` — the platform proposes and a human applies — until the
+# client has watched it be right. Changing that is this one line.
 
 profile_version: 1
-rung: 0.5
-socket: postgres_plane
-mode: full                      # full | propose_only | observe_only
+rung: 3
+socket: client_tenant
+mode: full
+
+# ── the data plane ───────────────────────────────────────────────────────────
+# The client's warehouse, which the platform did not create and does not own.
+data_plane:
+  dsn: "secret://data-pg-dsn"
 
 pins:
   # Every adapter named below is checked against the actual registry
@@ -22,7 +40,7 @@ pins:
   # so honestly this pin has no *fitted* adapter yet. See the Wave-0 audit.
   compute_job:    { adapter: none }
   orchestration:  { adapter: pg-scheduler }   # queue.schedule / queue.scheduled_run — W1 (CF-V1-E8-03)
-  storage:        { adapter: localfs, root: ".cinqflow/landing" }
+  storage:        { adapter: localfs, root: "/app/.cinqflow/landing" }  # -> adls at cutover
   # CF-V1-E3-05 — the 21st pin. How a file gets IN; `storage` only reads.
   # `upload` is the endpoint the wizard's first step needs; `folder-drop` is the
   # pull shape every poller has, and its drop directory is NOT the landing zone —
@@ -59,6 +77,9 @@ pins:
   queue:          { adapter: pg-skip-locked } # ADR-0014 — identical at rung 4
   cache:          { adapter: none }           # ADR-0014: no implementation until measured
   authn:          { adapter: static, users: profiles/dev-users.yaml }
+  # THE ONE LINE that turns every `secret://` above into a Key Vault lookup.
+  # Until the tenant's vault exists, dotenv resolves the same references from
+  # an injected .env — same format, same profile, different resolver.
   secrets:        { adapter: dotenv, path: ".env" }
   llm:
     adapter: openai-compatible
@@ -82,6 +103,11 @@ pins:
   vector:         { adapter: pgvector }       # knowledge.chunk — the K2 store's real seat (W1)
   phi_scrub:      { adapter: presidio }       # dev AND target — install requirements/ai.txt to energize
   notification:   { adapter: slack-webhook, webhook: "secret://slack-webhook" }  # approvals only in W1
+  # STILL `none`, and honestly so. The collector runs in the twin and the
+  # code emits OTLP through the SDK, but no adapter is registered behind
+  # this PORT — and a profile naming an adapter that does not exist fails
+  # conformance rather than certifying GREEN against nothing. It says
+  # `none` until something is fitted, which is the pin reporting the truth.
   observability:  { adapter: none }
   http_edge:      { adapter: none }           # uvicorn runs api/dev.py directly, outside this pin
   agent_runtime:  { adapter: inproc, tracing: off }  # langgraph fitted (ADR-0018); still not the default

@@ -1,0 +1,271 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LOCAL — rung 1, the twin, on a laptop, for nothing.
+#
+#   1: {socket: local_twin, cost: 0, proves: every_pin_energized_against_real_software}
+#   — docs/architecture/plates/05-socket-ladder.md
+#
+# The point of this rung is not "Docker". It is that EVERY PIN faces real
+# software rather than a stand-in, so an integration surprise is discovered
+# here rather than in a client's tenant.
+#
+# What LOCAL adds over dev: source is BIND-MOUNTED and both tiers reload. The
+# containers run the working tree, not an image of it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── the app tier ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      args:
+        # A 600 MB model on every local rebuild is a tax nobody agreed to pay.
+        # `phi_scrub` still runs; its recall is lower, and Lane-3 PHI evals are
+        # not claimed from a laptop anyway.
+        #
+        # LITERAL, for the same reason the profile is: .env is one file shared
+        # by three environments, so `${CINQFLOW_SPACY_MODEL:-en_core_web_sm}`
+        # here resolves to whatever dev and prod need — the fallback never
+        # fires, and local silently pays the tax anyway.
+        SPACY_MODEL: en_core_web_sm
+    volumes:
+      # The working tree, live. `--reload` below then picks up an edit without
+      # a rebuild, which is the entire reason to run local rather than dev.
+      - ./backend/src:/app/src
+      - ./backend/profiles:/app/profiles
+      - ./backend/scripts:/app/scripts
+      - ./backend/conformance:/app/conformance
+      - local-landing:/app/.cinqflow
+    environment:
+      # In-network addressing. The .env DSNs point at localhost so the backend
+      # can also be run straight on the laptop; inside the compose network the
+      # same two databases answer to their service names. Same credentials,
+      # same databases, one source of truth.
+      CINQFLOW_SECRET_PG_DSN: postgresql://${CINQFLOW_PG_PLATFORM_USER}:${CINQFLOW_PG_PLATFORM_PASSWORD}@postgres-platform:5432/${CINQFLOW_PG_PLATFORM_DB}
+      CINQFLOW_SECRET_DATA_PG_DSN: postgresql://${CINQFLOW_PG_DATA_USER}:${CINQFLOW_PG_DATA_PASSWORD}@postgres-data:5432/${CINQFLOW_PG_DATA_DB}
+    # NO PROFILE ARGUMENT, and that is correct rather than an omission:
+    # `api/local.py`'s DEFAULT_PROFILE *is* `profiles/local.yaml`, so this
+    # environment's profile is the module's default and naming it again would
+    # be a second place to keep it in step.
+    #
+    # It also could not be named here if it needed to be. `uvicorn --factory`
+    # calls the factory with NO arguments — `build('profiles/x.yaml')` is a
+    # gunicorn app-string feature, which is why the dev and prod overlays can
+    # name theirs and this one cannot. The failure is loud (`Attribute
+    # "build('…')" not found`), not silent, which is the only reason it is safe
+    # to rely on a default here.
+    #
+    # The profile is NOT passed through an env var in any environment:
+    # `api/local.py` may not read `os.environ` — the profile is the one channel
+    # environment difference travels through, and a module reading the
+    # environment too has invented a second one (tests/unit/
+    # test_credentials_live_only_in_adapters.py enforces exactly that).
+    command:
+      - sh
+      - -c
+      - >-
+        uvicorn --factory cinqflow.api.local:build
+        --reload --reload-dir /app/src --host 0.0.0.0 --port 8000
+    ports: ["${CINQFLOW_BACKEND_PORT:-8000}:8000"]
+    depends_on:
+      postgres-platform: {condition: service_healthy}
+      postgres-data: {condition: service_healthy}
+
+  frontend:
+    build:
+      target: dev
+    volumes:
+      - ./frontend/app:/app/app
+      - ./frontend/components:/app/components
+      - ./frontend/lib:/app/lib
+      - ./frontend/public:/app/public
+      # An anonymous volume so the container's own node_modules and build
+      # output are not shadowed by the host's — a host `.next` written by a
+      # laptop `next dev` is exactly the two-servers-one-directory corruption
+      # next.config.ts's `distDir` note describes.
+      - /app/node_modules
+      - /app/.next
+    environment:
+      CINQFLOW_API: http://127.0.0.1:${CINQFLOW_BACKEND_PORT:-8000}
+    ports: ["${CINQFLOW_FRONTEND_PORT:-3000}:3000"]
+    # `next dev` is up long before the BFF is; waiting for a healthy backend
+    # only delays the page that would have told you the backend is down.
+    depends_on:
+      backend: {condition: service_started}
+
+  # ── the PLATFORM plane ─────────────────────────────────────────────────────
+  # metadata_db + control_tables + vector + queue. One engine, four pins —
+  # which is why the Postgres plane is the DEFAULT development socket. This is
+  # the chip's OWN state and belongs to no client.
+  postgres-platform:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${CINQFLOW_PG_PLATFORM_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_platform_password
+      POSTGRES_DB: ${CINQFLOW_PG_PLATFORM_DB}
+    secrets: [pg_platform_password]
+    ports: ["${CINQFLOW_PG_PLATFORM_PORT:-5433}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CINQFLOW_PG_PLATFORM_USER} -d ${CINQFLOW_PG_PLATFORM_DB}"]
+      interval: 5s
+      retries: 20
+    volumes:
+      - twin-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # ── the DATA plane ─────────────────────────────────────────────────────────
+  # Bronze, silver, gold — the CLIENT's data. A separate engine on purpose: the
+  # platform must be able to read a warehouse that holds none of its control
+  # tables, because that is the difference between a chip and a monolith. At
+  # rung 3 this container is not deployed at all; `data_plane.dsn` in the
+  # profile points at Azure Database for PostgreSQL and no code changes.
+  postgres-data:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${CINQFLOW_PG_DATA_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_data_password
+      POSTGRES_DB: ${CINQFLOW_PG_DATA_DB}
+    secrets: [pg_data_password]
+    ports: ["${CINQFLOW_PG_DATA_PORT:-5434}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CINQFLOW_PG_DATA_USER} -d ${CINQFLOW_PG_DATA_DB}"]
+      interval: 5s
+      retries: 20
+    volumes:
+      - twin-pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # ── authn ──────────────────────────────────────────────────────────────────
+  # Keycloak at rung 1, Entra at rung 3 — same OIDC libraries, same code path,
+  # a different discovery URL in the profile.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    # Keycloak 26 has no `_FILE` variant for the bootstrap password — it reads
+    # `KC_BOOTSTRAP_ADMIN_PASSWORD` and nothing else, and silently refuses the
+    # username without it ("bootstrap-admin-username available only when
+    # bootstrap admin password is set"), which is a restart loop rather than an
+    # error anybody reads. The secret stays a FILE on disk; it is read into the
+    # variable in the container's own shell, one process before Keycloak, so it
+    # never appears in `docker inspect` or in this file.
+    # ENTRYPOINT, not command. The image's own entrypoint IS `kc.sh`, so a
+    # `command:` of `sh -c …` arrives as `kc.sh sh -c …` and Keycloak rejects
+    # `sh` as an unknown option — another restart loop that reads like a config
+    # error rather than a shell that never ran.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        export KC_BOOTSTRAP_ADMIN_PASSWORD="$$(cat /run/secrets/keycloak_password)" &&
+        exec /opt/keycloak/bin/kc.sh start-dev --http-port=8080
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+    secrets: [keycloak_password]
+    ports: ["${CINQFLOW_KEYCLOAK_PORT:-8081}:8080"]
+    restart: unless-stopped
+
+  # ── storage ────────────────────────────────────────────────────────────────
+  # MinIO speaks s3://; ADLS Gen2 speaks abfs://. The storage adapter absorbs
+  # that difference, which is the whole reason "Azure Blob is not S3-compatible"
+  # is a solved problem here rather than a discovery.
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${CINQFLOW_MINIO_USER}
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
+    secrets: [minio_password]
+    ports:
+      - "${CINQFLOW_MINIO_PORT:-9000}:9000"
+      - "${CINQFLOW_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - twin-minio:/data
+    restart: unless-stopped
+
+  # ── orchestration ──────────────────────────────────────────────────────────
+  # Airflow OSS is what the client runs; the orchestration pin is
+  # scheduled/triggered/paused through it here so the rung-3 DAG pattern is
+  # exercised rather than assumed.
+  airflow:
+    image: apache/airflow:2.10.5
+    command: ["standalone"]
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    ports: ["${CINQFLOW_AIRFLOW_PORT:-8082}:8080"]
+    depends_on:
+      postgres-platform: {condition: service_healthy}
+    restart: unless-stopped
+
+  # ── observability ──────────────────────────────────────────────────────────
+  # OTLP in, Grafana out — so "every model call is logged with prompt hash,
+  # model version, cost and caller" is visible rather than merely written.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.117.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./compose/otel-collector.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "${CINQFLOW_OTLP_GRPC_PORT:-4317}:4317"
+      - "${CINQFLOW_OTLP_HTTP_PORT:-4318}:4318"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    secrets: [grafana_password]
+    ports: ["${CINQFLOW_GRAFANA_PORT:-3001}:3000"]
+    restart: unless-stopped
+
+  # ── identity ───────────────────────────────────────────────────────────────
+  # A mock Verato: the crosswalk pin faces a real HTTP service, so the adapter
+  # is exercised against a live counterpart rather than a fake object. Wave 3
+  # replaces the image, not the port.
+  mock-verato:
+    image: mockserver/mockserver:5.15.0
+    environment:
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/verato.json
+    volumes:
+      - ./compose/mock-verato.json:/config/verato.json:ro
+    ports: ["${CINQFLOW_VERATO_PORT:-1080}:1080"]
+    restart: unless-stopped
+
+  # The payer source simulator, serving SFTP — so the connector is always
+  # tested against a live counterpart. The demo places no files by hand.
+  simulator:
+    image: atmoz/sftp:alpine
+    command: ["cinqflow::1001:::incoming"]
+    ports: ["${CINQFLOW_SFTP_PORT:-2222}:22"]
+    volumes:
+      - twin-sftp:/home/cinqflow/incoming
+    restart: unless-stopped
+
+# Secrets are FILES, never inline environment values — the same discipline the
+# connection profile enforces with `secret://name`. A password in a committed
+# file is a password in git, which is why these are GENERATED from .env by
+# `scripts/bootstrap-env.sh` and gitignored. .env stays the single source; the
+# files are how it reaches a container without passing through `environment:`.
+secrets:
+  pg_platform_password:
+    file: ./compose/secrets/pg_platform_password
+  pg_data_password:
+    file: ./compose/secrets/pg_data_password
+  keycloak_password:
+    file: ./compose/secrets/keycloak_password
+  minio_password:
+    file: ./compose/secrets/minio_password
+  grafana_password:
+    file: ./compose/secrets/grafana_password
+
+volumes:
+  # PINNED BY NAME, not left to the project prefix. This volume already holds
+  # the populated plane — 568,867 Bronze and 122,892 Silver rows loaded under
+  # the old `cinqflow-twin` project name. A compose project rename would
+  # otherwise create a fresh empty volume beside it and the data would simply
+  # appear to be gone. An explicit `name:` makes the identity of the disk a
+  # decision rather than a side effect of what the directory is called.
+  twin-pg:
+    name: cinqflow-twin_twin-pg
+    external: true
+  twin-pg-data:
+  twin-minio:
+  twin-sftp:
+  local-landing:

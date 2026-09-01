@@ -46,6 +46,20 @@ class Profile:
     #: configurable means per-environment, which means here and nowhere else.
     #: Absent keys fall back to `core.reliability.Weights`' defaults.
     reliability: dict[str, Any] = field(default_factory=dict)
+    #: THE DATA PLANE, ADDRESSED SEPARATELY FROM THE PLATFORM.
+    #:
+    #: The platform is a chip. `metadata_db` is the socket it keeps its OWN
+    #: state in — registry rows, control tables, the queue, the vector store —
+    #: and that socket is the platform's, at every rung. THIS is the socket the
+    #: client's data lives in: bronze/silver/gold, read by `catalog` and
+    #: `sql_query`, and it is not the same thing. Conflating them is what makes
+    #: a platform un-plug-and-play: it can then only ever read the warehouse it
+    #: happens to store itself in.
+    #:
+    #: An ABSENT section means "the data plane is the platform's own database" —
+    #: which is exactly rung 0.5's single-Postgres shape, so every existing
+    #: profile keeps its current behaviour with no edit.
+    data_plane: dict[str, Any] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -66,3 +80,27 @@ class Profile:
     @property
     def dsn(self) -> str:
         return str(self.pins.get("metadata_db", {}).get("dsn", ""))
+
+    @property
+    def data_plane_dsn(self) -> str:
+        """Where the CLIENT's data lives — bronze, silver, gold.
+
+        Falls back to the platform's own DSN, because "no data plane declared"
+        means "they are the same database", not "there is no data". That
+        fallback is what keeps `profiles/local.yaml` a one-Postgres profile
+        while `profiles/dev.yaml` points the same code at a warehouse that has
+        never heard of the control tables.
+        """
+        return str(self.data_plane.get("dsn", "")) or self.dsn
+
+    @property
+    def data_plane_is_separate(self) -> bool:
+        """True when the data plane is a DIFFERENT socket from the platform.
+
+        Callers use this to decide whether a second connection is warranted.
+        Comparing the resolved references (not the resolved DSNs) is deliberate:
+        core resolves no secrets, and two profiles naming the same reference
+        name the same plane by construction.
+        """
+        declared = str(self.data_plane.get("dsn", ""))
+        return bool(declared) and declared != self.dsn

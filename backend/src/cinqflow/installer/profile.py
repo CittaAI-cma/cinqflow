@@ -88,6 +88,12 @@ def load(path: str | Path) -> Profile:
         landing=raw.get("landing", {}),
         agents=raw.get("agents", {}),
         reliability=raw.get("reliability", {}),
+        # Not a pin, and deliberately not one: `data_plane` says WHERE the
+        # client's data is, while the pins say WHAT is fitted to read it. It
+        # goes through `_refuse_embedded_credentials` with everything else, so
+        # a literal DSN with a password in it is refused here exactly as it is
+        # under `pins`.
+        data_plane=raw.get("data_plane", {}),
     )
 
 

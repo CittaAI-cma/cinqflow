@@ -1,0 +1,138 @@
+# Rung 1 — THE TWIN, closed down. The shared dev environment.
+#
+# Every pin faces real software, exactly as rung 0.5 does, with one structural
+# difference that is the whole reason this profile exists separately:
+#
+#   THE DATA PLANE IS A DIFFERENT DATABASE.
+#
+# `data_plane.dsn` below resolves to `postgres-data`, which holds bronze,
+# silver and gold and none of the platform's control tables. The medallion
+# reader, the catalog and the SQL pin all face it; the registry, the queue and
+# the vector store stay on the platform's own socket. That separation is what
+# prod has, and dev is where it is proven rather than assumed — a platform
+# that has only ever read the database it stores itself in has not shown it
+# can read anybody else's.
+#
+#   docs/architecture/plates/05-socket-ladder.md → rungs[1]
+
+profile_version: 1
+rung: 1
+socket: local_twin
+mode: full
+
+# ── the data plane ───────────────────────────────────────────────────────────
+# The CLIENT's warehouse. Declared, therefore separate — `api.local` opens a
+# second connection to it and fits `catalog` and `sql_query` there.
+data_plane:
+  dsn: "secret://data-pg-dsn"
+
+pins:
+  # Every adapter named below is checked against the actual registry
+  # (conformance/kit.py:check_pin) — a name with nothing registered behind it
+  # now FAILS conformance instead of certifying GREEN against whichever mock
+  # happened to be fitted. Pins genuinely unfitted at rung 0.5 say `none`
+  # here, same as `cache` always has (ADR-0014) — reported, not hidden.
+
+  # ── group A · data plane ──────────────────────────────────────────────────
+  # PostgresCompute (adapters/local/pg_compute.py) IS real and IS what
+  # cinqflow ingest runs on — but it is not registered behind the compute_job
+  # PORT (its verbs are the pipeline stages, not the port's run/poll/metrics),
+  # so honestly this pin has no *fitted* adapter yet. See the Wave-0 audit.
+  compute_job:    { adapter: none }
+  orchestration:  { adapter: pg-scheduler }   # queue.schedule / queue.scheduled_run — W1 (CF-V1-E8-03)
+  storage:        { adapter: localfs, root: "/app/.cinqflow/landing" }  # the dev-landing volume
+  # CF-V1-E3-05 — the 21st pin. How a file gets IN; `storage` only reads.
+  # `upload` is the endpoint the wizard's first step needs; `folder-drop` is the
+  # pull shape every poller has, and its drop directory is NOT the landing zone —
+  # files are read from there and DELIVERED into the zone, so nothing that can
+  # write a file can also choose its landing key.
+  #
+  # CF-V1-E8-09 — routes, not one adapter. `default` is what a feed whose
+  # `endpoint_ref` names no route falls back to (every manual-upload feed).
+  # `fidelis-sftp` is a NAMED route: a feed registered with that
+  # `endpoint_ref` polls this drop directory instead — the certified dev
+  # stand-in for `sftp-poller`, which ADR-0023 defers to rung 3 as a client
+  # swapped in behind the SAME route name, with zero change to the registry
+  # row. Onboarding a new SFTP feed is one more entry here, never new code.
+  connector:
+    routes:
+      default:      { adapter: upload }
+      fidelis-sftp: { adapter: folder-drop, drop_root: ".cinqflow/drop/fidelis-sftp" }
+  control_tables: { adapter: pg-control, schema: control }
+  # W3-01 fitted a REAL adapter to this pin: `pg-information-schema` answers
+  # schemas/lineage/grants from information_schema, joined to the schema
+  # contract's own `is_phi` flag. It was `none` because nothing was fitted; a
+  # name with nothing behind it fails conformance, and leaving it `none` now
+  # would leave the medallion layer browser without its census on this plane.
+  catalog:        { adapter: pg-information-schema }
+  sql_query:      { adapter: pg-readonly }    # W1 (CF-V1-E7-02) — NOT on any agent whitelist
+  identity:       { adapter: mock, scenarios: goldensets/reference/verato-scenarios.yaml }
+  legacy_readonly: { adapter: none }          # Wave 5 only; removed at cutover
+  # CF-V1-E16-04 — the 22nd pin. Text with page anchors and whole tables,
+  # before anything is chunked. pypdf + python-docx, energized by requirements/ai.txt.
+  document_parse: { adapter: local-pypdf-docx }
+
+  # ── group B · platform ────────────────────────────────────────────────────
+  metadata_db:    { dsn: "secret://pg-dsn" }  # -> adapter "postgres" (profile.py:adapter_for)
+  queue:          { adapter: pg-skip-locked } # ADR-0014 — identical at rung 4
+  cache:          { adapter: none }           # ADR-0014: no implementation until measured
+  # Real OIDC against the twin's Keycloak. `static` is a laptop affordance;
+  # a shared environment with a static user list is a shared environment with
+  # no authentication, and every route's permission check then proves nothing.
+  authn:          { adapter: static, users: profiles/dev-users.yaml }
+  secrets:        { adapter: dotenv, path: ".env" }
+  llm:
+    adapter: openai-compatible
+    endpoint: "secret://llm-endpoint"
+    api_key: "secret://llm-key"
+    routing:
+      small: "secret://llm-model-small"       # classify · extract · rerank
+      large: "secret://llm-model-large"       # generate · reason
+    budgets:
+      per_run_usd: 0.25
+      per_agent_per_day_usd: 5.00
+    pin_versions: true                        # a floating model version is an unpinned experiment
+    # USD per 1M tokens, [prompt, completion]. Stated, never guessed: a model
+    # priced at zero makes every budget cap non-binding and every cost figure a
+    # lie, so the adapter refuses to construct without a price for each model.
+    # Keyed by the RESOLVED model name, so this is the one llm setting that is
+    # not a secret reference — a price is not a credential.
+    prices:
+      gpt-5-mini:  [0.25, 2.00]
+      gpt-5:       [1.25, 10.00]
+  vector:         { adapter: pgvector }       # knowledge.chunk — the K2 store's real seat (W1)
+  phi_scrub:      { adapter: presidio }       # dev AND target — install requirements/ai.txt to energize
+  notification:   { adapter: slack-webhook, webhook: "secret://slack-webhook" }  # approvals only in W1
+  # STILL `none`, and honestly so. The collector runs in the twin and the
+  # code emits OTLP through the SDK, but no adapter is registered behind
+  # this PORT — and a profile naming an adapter that does not exist fails
+  # conformance rather than certifying GREEN against nothing. It says
+  # `none` until something is fitted, which is the pin reporting the truth.
+  observability:  { adapter: none }
+  http_edge:      { adapter: none }           # uvicorn runs api/dev.py directly, outside this pin
+  agent_runtime:  { adapter: inproc, tracing: off }  # langgraph fitted (ADR-0018); still not the default
+
+# Landing folder layout is a platform constant, not an environment difference:
+#   /<domain>/<source_system>/<feed>/{incoming|processed|rejected|archive}/<business_date>/
+landing:
+  layout: "{domain}/{source_system}/{feed}/{folder}/{business_date}"
+  folders: [incoming, processed, rejected, archive, parked]
+
+agents:
+  pipeline_insight:
+    risk_class: R0                            # observe — always allowed, audited
+    tool_whitelist: read_only                 # NO write tool, at any confidence, in any environment
+  fingerprint_match:
+    risk_class: R2                            # proposes a draft runbook; a human approves — never applies one
+    tool_whitelist: read_only                 # NO write tool, at any confidence, in any environment
+  alert_enrichment:
+    risk_class: R0                            # explains; NEVER proposes — no core.proposals.submit call at all
+    tool_whitelist: read_only                 # NO write tool, at any confidence, in any environment
+
+# CF-V2-E12-05 / ADR-0015 — the reliability score's configuration. The
+# weighting is configurable, and configurable means per-environment, which
+# means HERE. Weights must sum to 1.0; bands are ADR-0015's illustrative
+# defaults, overridable per feed later.
+reliability:
+  weights: { dq: 0.25, sla: 0.20, reconciliation: 0.25, schema: 0.10, identity: 0.10, pipeline: 0.10 }
+  bands: { healthy_at: 90, at_risk_at: 70 }

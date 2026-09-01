@@ -11,10 +11,11 @@ htmlcov/
 
 # Node / Next.js
 node_modules/
-ui/.next/
-ui/.next-test/
-ui/out/
-ui/next-env.d.ts
+frontend/.next/
+frontend/.next-test/
+frontend/out/
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
 
 # Secrets — the secrets pin resolves `secret://name`; the values never land here.
 .env
@@ -28,12 +29,12 @@ ui/next-env.d.ts
 .cinqflow/
 installation-manifest*.json
 
-# ── ui ────────────────────────────────────────────────────────────────────────
-ui/node_modules/
-ui/.next/
-ui/test-results/
-ui/playwright-report/
-ui/next-env.d.ts
+# ── frontend ────────────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/test-results/
+frontend/playwright-report/
+frontend/next-env.d.ts
 
 # ── twin secrets ──────────────────────────────────────────────────────────────
 # Files, never inline values. See compose/secrets/README.md.
@@ -45,3 +46,11 @@ test-results/
 # Roster samples dropped here while exercising the deliver form; the platform
 # reads deliveries from the landing zone, never from the repo root.
 /_CINQDOWNSTATE_*
+
+# ── docker ───────────────────────────────────────────────────────────────────
+# The secret FILES are projected from .env by compose/bootstrap-env.sh. They
+# are the same passwords .env already holds, in the shape a container wants —
+# and .env is not committed, so neither are these.
+compose/secrets/pg_platform_password
+compose/secrets/pg_data_password
+.env.backup-*

@@ -1,0 +1,164 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DEV — rung 1, closed down. A shared environment, not a laptop.
+#
+# The same twin as local, with the three things that make it a SERVER rather
+# than a workstation:
+#
+#   1. NO BIND MOUNTS. Containers run the image, so what is deployed is what
+#      was built — the working tree of whoever last ran `up` cannot be part of
+#      the environment.
+#   2. NO RELOAD, and gunicorn with uvicorn workers instead of a single
+#      process, because more than one person is calling it.
+#   3. NO HOST PORTS except the two the app tier serves on. The databases, the
+#      object store and the identity provider are reachable ON THE COMPOSE
+#      NETWORK and nowhere else — the twin is not a set of open databases.
+#
+# The data plane is GENUINELY SEPARATE here, which local leaves optional:
+# `profiles/dev.yaml` declares a `data_plane`, so the medallion reader faces a
+# warehouse holding none of the platform's control tables. That is the
+# arrangement prod has, and dev is where it gets proven.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  backend:
+    image: cinqflow/backend:${CINQFLOW_IMAGE_TAG:-dev}
+    environment:
+      CINQFLOW_SECRET_PG_DSN: postgresql://${CINQFLOW_PG_PLATFORM_USER}:${CINQFLOW_PG_PLATFORM_PASSWORD}@postgres-platform:5432/${CINQFLOW_PG_PLATFORM_DB}
+      CINQFLOW_SECRET_DATA_PG_DSN: postgresql://${CINQFLOW_PG_DATA_USER}:${CINQFLOW_PG_DATA_PASSWORD}@postgres-data:5432/${CINQFLOW_PG_DATA_DB}
+      CINQFLOW_OTLP_ENDPOINT: http://otel-collector:4317
+    command:
+      - gunicorn
+      # The profile, named where it takes effect. See the note in the local overlay.
+      - cinqflow.api.local:build("profiles/dev.yaml")
+      - --worker-class=uvicorn.workers.UvicornWorker
+      - --workers=2
+      - --bind=0.0.0.0:8000
+      - --timeout=120
+      - --access-logfile=-
+    ports: ["${CINQFLOW_BACKEND_PORT:-8000}:8000"]
+    volumes:
+      - dev-landing:/app/.cinqflow
+    depends_on:
+      postgres-platform: {condition: service_healthy}
+      postgres-data: {condition: service_healthy}
+
+  frontend:
+    image: cinqflow/frontend:${CINQFLOW_IMAGE_TAG:-dev}
+    ports: ["${CINQFLOW_FRONTEND_PORT:-3000}:3000"]
+
+  postgres-platform:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${CINQFLOW_PG_PLATFORM_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_platform_password
+      POSTGRES_DB: ${CINQFLOW_PG_PLATFORM_DB}
+    secrets: [pg_platform_password]
+    # No `ports:`. Deliberate — see the header.
+    expose: ["5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CINQFLOW_PG_PLATFORM_USER} -d ${CINQFLOW_PG_PLATFORM_DB}"]
+      interval: 5s
+      retries: 20
+    volumes:
+      - dev-pg-platform:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  postgres-data:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${CINQFLOW_PG_DATA_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_data_password
+      POSTGRES_DB: ${CINQFLOW_PG_DATA_DB}
+    secrets: [pg_data_password]
+    expose: ["5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CINQFLOW_PG_DATA_USER} -d ${CINQFLOW_PG_DATA_DB}"]
+      interval: 5s
+      retries: 20
+    volumes:
+      - dev-pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    # Keycloak 26 has no `_FILE` variant for the bootstrap password — it reads
+    # `KC_BOOTSTRAP_ADMIN_PASSWORD` and nothing else, and silently refuses the
+    # username without it ("bootstrap-admin-username available only when
+    # bootstrap admin password is set"), which is a restart loop rather than an
+    # error anybody reads. The secret stays a FILE on disk; it is read into the
+    # variable in the container's own shell, one process before Keycloak, so it
+    # never appears in `docker inspect` or in this file.
+    # ENTRYPOINT, not command. The image's own entrypoint IS `kc.sh`, so a
+    # `command:` of `sh -c …` arrives as `kc.sh sh -c …` and Keycloak rejects
+    # `sh` as an unknown option — another restart loop that reads like a config
+    # error rather than a shell that never ran.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        export KC_BOOTSTRAP_ADMIN_PASSWORD="$$(cat /run/secrets/keycloak_password)" &&
+        exec /opt/keycloak/bin/kc.sh start-dev --http-port=8080
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+    secrets: [keycloak_password]
+    expose: ["8080"]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${CINQFLOW_MINIO_USER}
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
+    secrets: [minio_password]
+    expose: ["9000", "9001"]
+    volumes:
+      - dev-minio:/data
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.117.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./compose/otel-collector.yaml:/etc/otel/config.yaml:ro
+    expose: ["4317", "4318"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      # A shared environment gets a login. Anonymous access is a laptop
+      # convenience, and it is exactly the sort of convenience that survives
+      # into an environment somebody else can reach.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    secrets: [grafana_password]
+    ports: ["${CINQFLOW_GRAFANA_PORT:-3001}:3000"]
+    restart: unless-stopped
+
+  mock-verato:
+    image: mockserver/mockserver:5.15.0
+    environment:
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/verato.json
+    volumes:
+      - ./compose/mock-verato.json:/config/verato.json:ro
+    expose: ["1080"]
+    restart: unless-stopped
+
+secrets:
+  pg_platform_password:
+    file: ./compose/secrets/pg_platform_password
+  pg_data_password:
+    file: ./compose/secrets/pg_data_password
+  keycloak_password:
+    file: ./compose/secrets/keycloak_password
+  minio_password:
+    file: ./compose/secrets/minio_password
+  grafana_password:
+    file: ./compose/secrets/grafana_password
+
+volumes:
+  dev-pg-platform:
+  dev-pg-data:
+  dev-minio:
+  dev-landing:
