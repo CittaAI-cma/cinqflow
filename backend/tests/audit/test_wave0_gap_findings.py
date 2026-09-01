@@ -247,7 +247,8 @@ _CONTROL_TABLE_WRITERS_MUST_EXIST = (
 def test_every_declared_control_table_is_used_by_some_code(table: str) -> None:
     # The name may appear in declaration lists and tool descriptions; what
     # matters is the layer that executes SQL: adapters and workers.
-    sql_layers = (BACKEND / "src" / "cinqflow" / "adapters", BACKEND / "src" / "cinqflow" / "workers")
+    source = BACKEND / "src" / "cinqflow"
+    sql_layers = (source / "adapters", source / "workers")
     users = [
         path
         for layer in sql_layers

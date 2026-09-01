@@ -462,7 +462,43 @@ def test_clean_text_is_left_exactly_alone(scrubber: PhiScrubPort) -> None:
 # ── agent_runtime ────────────────────────────────────────────────────────────
 @pytest.fixture(params=adapters_for("agent_runtime"))
 def runtime(request: pytest.FixtureRequest, make: Callable[..., Any]) -> AgentRuntimePort:
-    return make(request.param)
+    """SKIPS rather than fails when a fitted adapter's library is not installed.
+
+    The langgraph adapter is REGISTERED in every image but its runtime ships in
+    requirements/agents.txt, which ADR-0018 deliberately keeps out of the
+    Wave-0/1 image — "a package that is not installed cannot be imported by
+    accident". So in CI this suite met a fitted adapter it could not energize
+    and reported four red tests, every run, for a dependency whose absence is
+    the intended state.
+
+    Skipping is the same discipline the `plane` fixture already uses for rung
+    0.5: an unavailable socket is REPORTED and skipped, never quietly passed
+    and never counted as a failure of the contract. The skip names the missing
+    package, so an image that was SUPPOSED to have langgraph shows four skips
+    where it expected four passes rather than hiding anything.
+    """
+    adapter = make(request.param)
+    try:
+        adapter.execute(_probe_graph(), {})
+    except AgentRuntimeError as unenergized:
+        if "not installed" in str(unenergized):
+            pytest.skip(f"adapter fitted but its runtime is absent — {unenergized}")
+        raise
+    return adapter
+
+
+def _probe_graph() -> GraphSpec:
+    """The smallest legal graph: one node that does nothing, and stops.
+
+    Only ever used to find out whether the adapter under test can run at all.
+    """
+    return GraphSpec(
+        name="probe",
+        nodes={"only": lambda _: {}},
+        edges=(),
+        entrypoint="only",
+        terminal="only",
+    )
 
 
 def _linear_graph() -> GraphSpec:

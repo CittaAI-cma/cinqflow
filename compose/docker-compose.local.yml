@@ -39,8 +39,13 @@ services:
       # can also be run straight on the laptop; inside the compose network the
       # same two databases answer to their service names. Same credentials,
       # same databases, one source of truth.
-      CINQFLOW_SECRET_PG_DSN: postgresql://${CINQFLOW_PG_PLATFORM_USER}:${CINQFLOW_PG_PLATFORM_PASSWORD}@postgres-platform:5432/${CINQFLOW_PG_PLATFORM_DB}
-      CINQFLOW_SECRET_DATA_PG_DSN: postgresql://${CINQFLOW_PG_DATA_USER}:${CINQFLOW_PG_DATA_PASSWORD}@postgres-data:5432/${CINQFLOW_PG_DATA_DB}
+      #
+      # libpq KEYWORD form, not a `postgresql://` URI. A URI would need the
+      # password percent-encoded, compose can interpolate but cannot encode,
+      # and the result is a DSN that decodes to a password the server never
+      # had — see the note in .env. This form needs no encoding at all.
+      CINQFLOW_SECRET_PG_DSN: "host=postgres-platform port=5432 user=${CINQFLOW_PG_PLATFORM_USER} password=${CINQFLOW_PG_PLATFORM_PASSWORD} dbname=${CINQFLOW_PG_PLATFORM_DB}"
+      CINQFLOW_SECRET_DATA_PG_DSN: "host=postgres-data port=5432 user=${CINQFLOW_PG_DATA_USER} password=${CINQFLOW_PG_DATA_PASSWORD} dbname=${CINQFLOW_PG_DATA_DB}"
     # NO PROFILE ARGUMENT, and that is correct rather than an omission:
     # `api/local.py`'s DEFAULT_PROFILE *is* `profiles/local.yaml`, so this
     # environment's profile is the module's default and naming it again would

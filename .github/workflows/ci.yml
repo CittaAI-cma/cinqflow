@@ -97,6 +97,18 @@ jobs:
           --health-timeout 5s --health-retries 10
     env:
       CINQFLOW_PROFILE: profiles/ci.yaml
+      # `profiles/ci.yaml` addresses the plane as `secret://pg-dsn`, and the
+      # `secrets` pin resolves that from this variable. It was never set, so
+      # every run of this job died at `cinqflow install` with "secret://pg-dsn
+      # is unresolved" — the service container above was healthy and nothing
+      # ever connected to it. The credentials are the service's own, declared
+      # ten lines up; there is no secret here to keep.
+      CINQFLOW_SECRET_PG_DSN: "host=localhost port=5432 user=cinqflow password=cinqflow dbname=cinqflow"
+      # The data plane is the SAME database at rung 0.5 — `profiles/ci.yaml`
+      # declares no `data_plane`, so this is what its fallback resolves to.
+      # Set explicitly anyway: a job that relies on a fallback silently starts
+      # testing something else the day the profile declares one.
+      CINQFLOW_SECRET_DATA_PG_DSN: "host=localhost port=5432 user=cinqflow password=cinqflow dbname=cinqflow"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

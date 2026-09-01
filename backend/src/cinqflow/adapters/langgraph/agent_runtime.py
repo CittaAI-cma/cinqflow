@@ -144,7 +144,14 @@ class LangGraphAgentRuntime:
         # whole-state-replaced-per-node shape `_wrap` already produces. The
         # mismatch is between the stub's declared bound and a genuinely
         # supported runtime path, not a bug in this call.
-        builder = StateGraph(dict)  # type: ignore[type-var]
+        # `unused-ignore` is NOT redundancy. langgraph ships in
+        # requirements/agents.txt, which ADR-0018 deliberately keeps out of the
+        # Wave-0/1 image — so in CI `StateGraph` is untyped `Any` and the
+        # `type-var` ignore has nothing to suppress, which `strict = true`
+        # reports as an unused ignore and fails the lint gate on. The second
+        # code makes the line correct in BOTH images rather than in whichever
+        # one the author happened to have installed.
+        builder = StateGraph(dict)  # type: ignore[type-var, unused-ignore]
 
         for name, fn in graph.nodes.items():
             builder.add_node(name, _wrap(name, fn, graph.terminal))

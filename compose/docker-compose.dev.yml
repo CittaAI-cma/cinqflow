@@ -23,8 +23,8 @@ services:
   backend:
     image: cinqflow/backend:${CINQFLOW_IMAGE_TAG:-dev}
     environment:
-      CINQFLOW_SECRET_PG_DSN: postgresql://${CINQFLOW_PG_PLATFORM_USER}:${CINQFLOW_PG_PLATFORM_PASSWORD}@postgres-platform:5432/${CINQFLOW_PG_PLATFORM_DB}
-      CINQFLOW_SECRET_DATA_PG_DSN: postgresql://${CINQFLOW_PG_DATA_USER}:${CINQFLOW_PG_DATA_PASSWORD}@postgres-data:5432/${CINQFLOW_PG_DATA_DB}
+      CINQFLOW_SECRET_PG_DSN: "host=postgres-platform port=5432 user=${CINQFLOW_PG_PLATFORM_USER} password=${CINQFLOW_PG_PLATFORM_PASSWORD} dbname=${CINQFLOW_PG_PLATFORM_DB}"
+      CINQFLOW_SECRET_DATA_PG_DSN: "host=postgres-data port=5432 user=${CINQFLOW_PG_DATA_USER} password=${CINQFLOW_PG_DATA_PASSWORD} dbname=${CINQFLOW_PG_DATA_DB}"
       CINQFLOW_OTLP_ENDPOINT: http://otel-collector:4317
     command:
       - gunicorn

@@ -46,7 +46,28 @@ def _member_row(our_id: int) -> dict[str, object]:
 
 @pytest.fixture
 def packs(plane: object) -> ReconciliationPacks:
-    return ReconciliationPacks(ods=PostgresOdsLoad(plane), metadata=PostgresMetadataDb(plane))
+    """SKIPS when the ODS model this pack reads has never been deployed here.
+
+    Same precondition as `test_ods_certification_gate_on_the_real_plane.py`,
+    and absent for the same reason: the deployed `silver_ods` model is created
+    by PUBLISHING a domain through the API, which is a runtime act that
+    `cinqflow install` does not perform. A freshly installed plane — which is
+    what CI has every run — raised `ObjectNotFoundError: ods_model:silver_ods`
+    from inside the pack instead of saying its precondition was missing.
+    """
+    from cinqflow.core.model.governed import ObjectType
+    from cinqflow.ports.metadata_db import ObjectNotFoundError
+
+    metadata = PostgresMetadataDb(plane)
+    try:
+        metadata.get(ObjectType.ODS_MODEL, "silver_ods")
+    except ObjectNotFoundError:
+        pytest.skip(
+            "no ODS model deployed on this plane — this pack reads live state that "
+            "publishing a domain creates, which `cinqflow install` does not. Publish "
+            "MEMBER_DOMAIN_V1 against this plane, or give this suite a fixture that does."
+        )
+    return ReconciliationPacks(ods=PostgresOdsLoad(plane), metadata=metadata)
 
 
 def test_a_real_missing_member_opens_a_real_variance(packs: ReconciliationPacks) -> None:

@@ -25,18 +25,30 @@ export default defineConfig({
   },
   webServer: [
     {
-      // Relative to `cwd` below (cinqflow/), NOT to this file. It was
-      // "../.venv/…", which resolves to the repo root and does not exist —
-      // invisible for as long as a server happened to already be running and
-      // `reuseExistingServer` skipped the spawn.
+      // THE INTERPRETER IS FOUND, NOT ASSUMED.
+      //
+      // This was a hardcoded `.venv/bin/python`, which is right on a laptop
+      // and does not exist in CI — CI installs the package into the runner's
+      // own Python and has no virtualenv at all. The symptom was
+      // `config.webServer was not able to start. Exit code: 127`: a shell
+      // saying "no such file", reported as a Playwright failure, on every CI
+      // run. Preferring the venv when there is one keeps the laptop behaviour
+      // (where bare `python` may be pyenv's global, without cinqflow in it)
+      // and falls back to PATH where there is not.
+      //
+      // `cwd` is the BACKEND now, not the repo root — that is where
+      // `.cinqflow/` and the package live since the tree was split.
+      //
       // Its OWN landing root. The suite delivers files, and the dev server's
       // default root is the zone a person is looking at in `.cinqflow/landing`
       // — a test run that dropped rows into the directory somebody is
       // demonstrating from is a test run that changes the demo.
-      command: ".venv/bin/python -m cinqflow.api.dev --port 8100 --landing-root .cinqflow/test-landing",
+      command:
+        "sh -c 'if [ -x ../.venv/bin/python ]; then PY=../.venv/bin/python; else PY=python; fi; " +
+        "exec \"$PY\" -m cinqflow.api.dev --port 8100 --landing-root .cinqflow/test-landing'",
       url: "http://127.0.0.1:8100/healthz",
       reuseExistingServer: !process.env.CI,
-      cwd: "..",
+      cwd: "../backend",
       env: { PYTHONPATH: "src" },
     },
     {
