@@ -1,8 +1,18 @@
 # The five laws, on every commit — so a violation is caught while it is still
 # cheap to fix rather than in review, where it becomes an argument.
+#
+# pre-commit runs every hook from the REPO ROOT, and the Python tree lives one
+# level down in `backend/` now. The three whole-tree hooks below therefore say
+# `cd backend` explicitly. Doing it any other way — a path prefix, a config
+# flag — has to be right in two places (the tool's config and the invocation),
+# and the failure mode when it is not is silence: a linter that finds nothing
+# because it was pointed at nothing reports success.
 repos:
   - repo: local
     hooks:
+      # These two take FILENAMES from pre-commit, already repo-root-relative,
+      # so they need no directory change. `[tool.ruff]` in backend/pyproject.toml
+      # is found by walking up from each file.
       - id: ruff-check
         name: ruff
         entry: .venv/bin/ruff check --fix
@@ -13,16 +23,22 @@ repos:
         entry: .venv/bin/ruff format
         language: system
         types: [python]
+
       - id: import-linter
         name: "Law 1 · import contracts"
-        entry: .venv/bin/lint-imports
+        entry: sh -c 'cd backend && ../.venv/bin/lint-imports'
         language: system
         pass_filenames: false
       - id: core-purity
         name: "Law 1 · no URL, path, region or credential in core/"
-        entry: .venv/bin/python -m conformance.lint_core_purity src/cinqflow/core
+        entry: sh -c 'cd backend && ../.venv/bin/python -m conformance.lint_core_purity src/cinqflow/core'
         language: system
         pass_filenames: false
+
+      # This one stays at the root ON PURPOSE. A credential can reach the repo
+      # through a compose file, a profile, a .env.example or the frontend just
+      # as easily as through backend/src — scoping it to one subtree would be
+      # scoping the search to where credentials are least likely to be.
       - id: detect-secrets
         name: "no credential reaches the repo"
         entry: .venv/bin/detect-secrets-hook --baseline .secrets.baseline

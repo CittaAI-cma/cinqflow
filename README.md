@@ -31,18 +31,52 @@ why it's shaped the way it is.
 They are not aspirations. Each one is a CI gate: `import-linter`,
 `conformance/lint_core_purity.py`, the contract suites, and the negative tests.
 
-## Run it
+## The repository
+
+```
+backend/     the Python platform — src, tests, conformance, profiles, requirements
+frontend/    the Next.js workspace
+compose/     the orchestration: one base, three overlays
+docs/        ADRs and the domain
+.env         EVERY environment variable in the project. The only one.
+Makefile     the entry point to all of it
+```
+
+## Run it with Docker
+
+One command per environment. `make help` lists the rest.
+
+```bash
+cp .env.example .env      # fill in what you have
+make up ENV=local         # http://localhost:3000 · http://localhost:8000/docs
+make install ENV=local    # creates the schemas
+```
+
+| `ENV=` | what it is | what it brings |
+|---|---|---|
+| `local` | rung 1, a laptop | everything, bind-mounted and reloading |
+| `dev` | rung 1, a shared box | everything, built, no host ports but the app tier |
+| `prod` | rung 3, the client's tenant | **the app tier only** — infrastructure is theirs |
+
+Two Postgres planes run in local and dev, and that separation is the point:
+`postgres-platform` holds the platform's own state (registry, control tables,
+queue, vectors) and `postgres-data` holds the client's bronze/silver/gold. The
+platform must be seatable in a warehouse it did not create, so the profile
+addresses the two separately — see [`compose/README.md`](compose/README.md).
+
+## Run it without Docker
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
+cd backend
 pip install -r requirements/dev.txt && pip install -e . --no-deps
 
 ./scripts/wave0-demo.sh            # the whole wave, proving itself
 python conformance/kit.py          # 21 pins + 3 platform laws
 cinqflow ask "why did batch 8842 lose rows?"
 
-cd ui && npm install && npm run dev # http://localhost:3000/signin
-cd ui && npm test                   # 69 Playwright assertions
+cd ../frontend && npm install && npm run dev  # http://localhost:3000/signin
+cd ../frontend && npm test                    # 69 Playwright assertions
 ```
 
 Nothing above needs a database, a container or a credential — that is rung 0.
@@ -50,7 +84,7 @@ For the real Postgres plane (rung 0.5, the default development socket):
 
 ```bash
 cp .env.example .env               # then fill in CINQFLOW_SECRET_PG_DSN
-cinqflow install --profile profiles/local.yaml
+cd backend && cinqflow install --profile profiles/local.yaml
 ```
 
 ## Getting a file in
@@ -84,7 +118,7 @@ on the next screen citable and what the schema-inference agent grounds on.
 ## Layout
 
 ```
-src/cinqflow/
+backend/src/cinqflow/
   core/          the logic. No I/O, no vendor, no environment difference.
     model/         vocabulary · governed objects · identity · profile · llm · phi
     citations/     THE ADDRESS SPACE — a citation parses to a UI route
@@ -104,11 +138,13 @@ src/cinqflow/
   intelligence/  the gateway, the tool executor, the agent, the eval gates
   api/           the BFF. Its OpenAPI document is the UI's contract.
   workers/ installer/ simulator/
-ui/              Next.js App Router — nine destinations, one drawer
-conformance/     the Law-1 lint and the pin-by-pin kit
-profiles/        mock · local · ci — every pin addressed, secrets by reference
-compose/         the rung-1 twin
-docs/adr/        decisions the implementation originated
+backend/conformance/   the Law-1 lint and the pin-by-pin kit
+backend/profiles/      mock · local · ci · dev · prod — every pin addressed,
+                       secrets by reference, and the data plane addressed apart
+                       from the platform's own
+frontend/              Next.js App Router — nine destinations, one drawer
+compose/               the orchestration — base + local/dev/prod overlays
+docs/adr/              decisions the implementation originated
 ```
 
 ## The three ideas worth knowing before reading the code

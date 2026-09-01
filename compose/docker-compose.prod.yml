@@ -1,0 +1,86 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PROD — rung 3. THE APP TIER ONLY.
+#
+# There is no database in this file, no object store, no identity provider and
+# no collector. That absence is the deliverable, not an omission: at rung 3 the
+# platform is a chip seated in the CLIENT's tenant, and a chip that ships its
+# own Postgres is not seated in anything.
+#
+#   Climbing to rung 3 changes ONLY profiles/*.yaml: Postgres becomes Azure
+#   Database for PostgreSQL, MinIO becomes ADLS Gen2, Keycloak becomes Entra.
+#   Same code path, same conformance kit, different endpoints.
+#   — docs/architecture/plates/05-socket-ladder.md
+#
+# So everything this tier connects to arrives as a `secret://` reference the
+# `secrets` pin resolves. At rung 3 that pin is Key Vault rather than dotenv —
+# the reference format does not change, which is what makes the swap small.
+#
+# WHAT MUST BE SET BEFORE THIS RUNS (all in .env, or injected by the deployer):
+#   CINQFLOW_SECRET_PG_DSN         the managed platform database
+#   CINQFLOW_SECRET_DATA_PG_DSN    the client's warehouse
+#   CINQFLOW_SECRET_LLM_*          the tenant's model endpoint and catalogue
+#   CINQFLOW_OIDC_DISCOVERY_URL    Entra
+#   CINQFLOW_STORAGE_ENDPOINT      ADLS Gen2
+#   CINQFLOW_OTLP_ENDPOINT         the client's collector
+#   CINQFLOW_IMAGE_TAG             an immutable tag. NEVER `latest`.
+#   CINQFLOW_API                   the PUBLIC API origin the browser calls
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  backend:
+    # Built elsewhere, by CI, once. A prod host that can build an image is a
+    # prod host where the artifact depends on what was checked out there.
+    build: !reset null
+    image: cinqflow/backend:${CINQFLOW_IMAGE_TAG:?an immutable image tag is required in prod}
+    environment:
+      # No in-network overrides. In prod these are the real managed endpoints,
+      # and .env (or the deployer's secret store) is where they come from —
+      # this file names no host.
+      CINQFLOW_OTLP_ENDPOINT: ${CINQFLOW_OTLP_ENDPOINT:?the client collector endpoint is required}
+    command:
+      - gunicorn
+      # The profile, named where it takes effect. See the note in the local overlay.
+      - cinqflow.api.local:build("profiles/prod.yaml")
+      - --worker-class=uvicorn.workers.UvicornWorker
+      - --workers=${CINQFLOW_BACKEND_WORKERS:-4}
+      - --bind=0.0.0.0:8000
+      - --timeout=120
+      - --graceful-timeout=30
+      - --access-logfile=-
+    # Bound to LOOPBACK. The edge — an ingress, an App Gateway, whatever the
+    # tenant runs — is what faces the internet. Publishing 0.0.0.0 here would
+    # put the BFF on the host's public interface beside it.
+    ports: ["127.0.0.1:${CINQFLOW_BACKEND_PORT:-8000}:8000"]
+    restart: always
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits: {cpus: "${CINQFLOW_BACKEND_CPUS:-2}", memory: "${CINQFLOW_BACKEND_MEMORY:-4g}"}
+    logging:
+      driver: json-file
+      options: {max-size: "50m", max-file: "5"}
+    # The landing zone is real storage in prod, not a container volume — the
+    # `storage` pin is ADLS Gen2 and nothing is written to this filesystem.
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+
+  frontend:
+    build: !reset null
+    image: cinqflow/frontend:${CINQFLOW_IMAGE_TAG:?an immutable image tag is required in prod}
+    environment:
+      CINQFLOW_API: ${CINQFLOW_API:?the public API origin the browser calls is required}
+    ports: ["127.0.0.1:${CINQFLOW_FRONTEND_PORT:-3000}:3000"]
+    restart: always
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits: {cpus: "${CINQFLOW_FRONTEND_CPUS:-1}", memory: "${CINQFLOW_FRONTEND_MEMORY:-1g}"}
+    logging:
+      driver: json-file
+      options: {max-size: "50m", max-file: "5"}
+    security_opt: ["no-new-privileges:true"]
+    # NOT read_only: the entrypoint rewrites the baked API placeholder in
+    # `.next` on the way up. See frontend/docker-entrypoint.sh.
+    depends_on:
+      backend: {condition: service_healthy}

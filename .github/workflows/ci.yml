@@ -19,12 +19,21 @@ jobs:
     # Gate: "Core-purity lint (zero vendor imports under core/)" — W0 — proves Law 1, mechanically.
     name: lint · Law 1 made mechanical
     runs-on: ubuntu-latest
+    # THE PYTHON TREE MOVED. `backend/` is where pyproject.toml, src/, tests/,
+    # conformance/ and requirements/ live since the repo grew a frontend beside
+    # them. A job-level default rather than a flag per step, so a step added
+    # later inherits it instead of silently running at the repo root and
+    # passing because it found nothing to check.
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: backend/requirements/*.txt
       - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
       - name: ruff
         run: ruff check . && ruff format --check .
@@ -35,18 +44,37 @@ jobs:
       - name: core-purity · URLs, paths, regions, credentials
         run: python -m conformance.lint_core_purity src/cinqflow/core
       - name: detect-secrets
+        # THE ROOT, not backend/ — the same exception .pre-commit-config.yaml
+        # makes, and for the same reason. `.secrets.baseline` lives at the repo
+        # root, and a credential can reach this repo through a compose file, a
+        # profile, .env.example or the frontend just as easily as through
+        # backend/src. Scoping the scan to one subtree would scope it to where
+        # credentials are least likely to be.
+        #
+        # `ruff check .` above is genuinely scoped to backend/ because ruff is
+        # configured by backend/pyproject.toml; this one must not be.
+        working-directory: .
         run: detect-secrets scan --baseline .secrets.baseline
 
   unit-contract:
     # Gate: "Full pyramid layers 1-2 on the mock socket (seconds)" — W0 — proves the core's logic on every commit.
     name: unit + contract · the mock socket
     runs-on: ubuntu-latest
+    # THE PYTHON TREE MOVED. `backend/` is where pyproject.toml, src/, tests/,
+    # conformance/ and requirements/ live since the repo grew a frontend beside
+    # them. A job-level default rather than a flag per step, so a step added
+    # later inherits it instead of silently running at the repo root and
+    # passing because it found nothing to check.
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: backend/requirements/*.txt
       - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
       - name: layers 1-2 — no services running, no credentials present
         # `acceptance` runs here too: the Wave-2 story suite is mock-driven
@@ -58,6 +86,14 @@ jobs:
     # Gate: "Golden pipelines + invariants on the twin (minutes)" — W0 — proves the whole platform end to end.
     name: pipeline · golden sets + invariants on the Postgres plane
     runs-on: ubuntu-latest
+    # THE PYTHON TREE MOVED. `backend/` is where pyproject.toml, src/, tests/,
+    # conformance/ and requirements/ live since the repo grew a frontend beside
+    # them. A job-level default rather than a flag per step, so a step added
+    # later inherits it instead of silently running at the repo root and
+    # passing because it found nothing to check.
+    defaults:
+      run:
+        working-directory: backend
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -71,12 +107,25 @@ jobs:
           --health-timeout 5s --health-retries 10
     env:
       CINQFLOW_PROFILE: profiles/ci.yaml
+      # `profiles/ci.yaml` addresses the plane as `secret://pg-dsn`, and the
+      # `secrets` pin resolves that from this variable. It was never set, so
+      # every run of this job died at `cinqflow install` with "secret://pg-dsn
+      # is unresolved" — the service container above was healthy and nothing
+      # ever connected to it. The credentials are the service's own, declared
+      # ten lines up; there is no secret here to keep.
+      CINQFLOW_SECRET_PG_DSN: "host=localhost port=5432 user=cinqflow password=cinqflow dbname=cinqflow"
+      # The data plane is the SAME database at rung 0.5 — `profiles/ci.yaml`
+      # declares no `data_plane`, so this is what its fallback resolves to.
+      # Set explicitly anyway: a job that relies on a fallback silently starts
+      # testing something else the day the profile declares one.
+      CINQFLOW_SECRET_DATA_PG_DSN: "host=localhost port=5432 user=cinqflow password=cinqflow dbname=cinqflow"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: backend/requirements/*.txt
       - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
       - name: provision the rung-0.5 plane
         run: cinqflow install --profile "$CINQFLOW_PROFILE"
@@ -91,12 +140,21 @@ jobs:
     # CERTIFICATION rather than a migration.
     name: conformance · certify the socket, pin by pin
     runs-on: ubuntu-latest
+    # THE PYTHON TREE MOVED. `backend/` is where pyproject.toml, src/, tests/,
+    # conformance/ and requirements/ live since the repo grew a frontend beside
+    # them. A job-level default rather than a flag per step, so a step added
+    # later inherits it instead of silently running at the repo root and
+    # passing because it found nothing to check.
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: backend/requirements/*.txt
       - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
       - name: 20 pins + the platform laws
         run: python conformance/kit.py
@@ -106,37 +164,46 @@ jobs:
     # demo cannot silently rot, and that the Read-Only denial holds in a browser.
     name: ui · typecheck, build, and the workspace end to end
     runs-on: ubuntu-latest
+    # THE PYTHON TREE MOVED. `backend/` is where pyproject.toml, src/, tests/,
+    # conformance/ and requirements/ live since the repo grew a frontend beside
+    # them. A job-level default rather than a flag per step, so a step added
+    # later inherits it instead of silently running at the repo root and
+    # passing because it found nothing to check.
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: backend/requirements/*.txt
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
       - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
       - run: npm ci
-        working-directory: ui
+        working-directory: frontend
       - name: the design system is tokens, not literals
         # A colour literal or a raw spacing value outside globals.css is a
         # value nobody can restyle. The rule existed as a comment before this
         # step existed; the previous stylesheet had twelve distinct spacing
         # values in 130 lines and nobody had done anything wrong.
         run: npm run lint:tokens
-        working-directory: ui
+        working-directory: frontend
       - name: the OpenAPI document is the UI's contract
         run: npx tsc --noEmit
-        working-directory: ui
+        working-directory: frontend
       - run: npx next build
-        working-directory: ui
+        working-directory: frontend
       - run: npx playwright install --with-deps chromium
-        working-directory: ui
+        working-directory: frontend
       - name: sign-in · denial · citations · lexicon · a11y · the design system
         run: npx playwright test
-        working-directory: ui
+        working-directory: frontend
         env:
           CI: "true"
 
@@ -159,12 +226,21 @@ jobs:
     # mounted; until then the skip is still the truthful outcome and says so.
     name: agent-evals · Lane 3, the only lane that may make a quality claim
     runs-on: ubuntu-latest
+    # THE PYTHON TREE MOVED. `backend/` is where pyproject.toml, src/, tests/,
+    # conformance/ and requirements/ live since the repo grew a frontend beside
+    # them. A job-level default rather than a flag per step, so a step added
+    # later inherits it instead of silently running at the repo root and
+    # passing because it found nothing to check.
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: backend/requirements/*.txt
       - run: pip install -r requirements/dev.txt && pip install -e . --no-deps
       - name: the corpus, where this runner has it
         id: corpus

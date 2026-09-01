@@ -1,0 +1,10 @@
+node_modules
+.next
+.next-test
+out
+test-results
+playwright-report
+next-env.d.ts
+tsconfig.tsbuildinfo
+Dockerfile
+.dockerignore

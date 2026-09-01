@@ -1,0 +1,888 @@
+"""The seeded demo plane, and the agent that runs on it. NO CREDENTIALS.
+
+Rung 0 — nothing runs but Python. This exists so the workspace, the CLI and the
+UI's end-to-end tests can all show the same Fidelis anchor without a database,
+a container or a key.
+
+It lives BELOW the API on purpose. The CLI needs the seeded plane and the agent;
+it does not need an HTTP server, and an installer reaching up into `api/` to get
+one would invert the layering the whole platform is built on.
+
+It is not a deployment. `cinqflow install --profile profiles/local.yaml` stands
+up the real rung-0.5 plane; this stands up a picture of one.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+
+from cinqflow.adapters.mock.agent_runtime import InProcAgentRuntime
+from cinqflow.adapters.mock.control_tables import MemStoreControlTables
+from cinqflow.adapters.mock.layers import MemLayerReader
+from cinqflow.adapters.mock.llm import ScriptedLlm
+from cinqflow.adapters.mock.metadata_db import MemMetadataDb
+from cinqflow.adapters.mock.observability import NoopObservability
+from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
+from cinqflow.adapters.mock.vector import ListVector
+from cinqflow.core import mapping as mapping_core
+from cinqflow.core.agents import ALL_TEMPLATES
+from cinqflow.core.agents.alert_enrichment.graph import AGENT as ALERT_ENRICHMENT_AGENT_NAME
+from cinqflow.core.agents.fingerprint_match.graph import AGENT as FINGERPRINT_MATCH_AGENT_NAME
+from cinqflow.core.agents.mapping_suggestion.graph import (
+    AGENT as MAPPING_SUGGESTION_AGENT_NAME,
+)
+from cinqflow.core.agents.mapping_suggestion.graph import (
+    CAPABILITY as MAPPING_SUGGESTION_CAPABILITY,
+)
+from cinqflow.core.agents.mapping_suggestion.graph import NO_CONFIDENT_TARGET
+from cinqflow.core.intelligence import Budget, Routing
+from cinqflow.core.layers import QuarantineReason, ReconLine
+from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState
+from cinqflow.core.model.identity import Principal, Scopes
+from cinqflow.core.model.vocabulary import (
+    ActorType,
+    BatchState,
+    ErrorCategory,
+    FileState,
+    Layer,
+    RiskClass,
+)
+from cinqflow.core.proposals import Correction, Proposal, approve
+from cinqflow.core.proposals import submit as submit_proposal
+from cinqflow.core.registry import contract as contract_registry
+from cinqflow.core.registry.contract import ContractColumn, DqRule, SchemaContract, Severity
+from cinqflow.core.registry.feed import FeedRecord
+from cinqflow.core.retrieval import platform_index
+from cinqflow.core.schema_spec import TypeName
+from cinqflow.intelligence.agents.alert_enrichment import AlertEnrichmentAgent
+from cinqflow.intelligence.agents.fingerprint_match import FingerprintMatchAgent
+from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
+from cinqflow.intelligence.agents.merge_evidence import MergeEvidenceAgent
+from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent
+from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
+from cinqflow.intelligence.agents.rule_authoring import RuleAuthoringAgent
+from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
+from cinqflow.intelligence.gateway import LlmGateway
+from cinqflow.intelligence.retrieval import RetrievalService
+from cinqflow.intelligence.tools import ToolContext
+from cinqflow.ports.control_tables import (
+    BatchControl,
+    ControlTablesPort,
+    DropLedgerEntry,
+    ErrorRecord,
+    InputFile,
+    QuarantineSummary,
+    Reconciliation,
+    StageStatus,
+)
+from cinqflow.ports.metadata_db import MetadataDbPort
+
+BUDGET = Budget(per_run_usd=Decimal("0.25"), per_agent_per_day_usd=Decimal("5.00"))
+
+#: CF-V1-E16-04. The dev server's knowledge plane — one store for the
+#: process, so a publish and the retrieval that follows it see the same
+#: chunks. Empty at import, which is what Wave 0 asserted and Wave 1 fills.
+DEMO_VECTOR = ListVector()
+
+FEED_ID = "fidelis-downstate-roster"
+BATCH_ID = "8842"
+
+#: W1-31 (CF-V1-E6-03) — a SEPARATE feed from `FEED_ID`, deliberately. That
+#: feed's absence of a mapping is itself the assertion in
+#: `wave1-intake.spec.ts` ("the mapping editor says there is no mapping
+#: rather than showing an empty one"), and giving it a published mapping here
+#: would turn that assertion false out from under it. The write-capable
+#: proposal-review screen needs its own real mapping-suggestion PROPOSAL to
+#: act on, so it gets its own feed to act on it against.
+MAPPING_REVIEW_FEED_ID = "meridian-member-roster"
+MAPPING_PROPOSAL_ID = "mapping-suggestion-meridian-member-roster-1"
+
+AUTHOR = Actor(subject="arun@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Arun Menon")
+REVIEWER = Actor(
+    subject="priya@cinqcare.test", actor_type=ActorType.HUMAN, display_name="Priya Nair"
+)
+MAPPING_SUGGESTION_ACTOR = Actor(
+    subject=MAPPING_SUGGESTION_AGENT_NAME,
+    actor_type=ActorType.AI,
+    display_name="Mapping suggestion",
+)
+
+#: `fingerprint_match_agent_for`'s tool-scope principal. Not duplicated from
+#: `workers.incidents.PLATFORM_SUBJECT` — `intelligence` sits BELOW `workers`
+#: in the layers contract, so this module may not import that one. Same
+#: literal subject, kept in step by convention rather than by import.
+PLATFORM_PRINCIPAL = Principal(
+    subject="platform@cinqflow", display_name="platform", scopes=Scopes(feeds=frozenset({"*"}))
+)
+
+
+def _published(obj: GovernedObject) -> GovernedObject:
+    """Through the real lifecycle, not by setting a field.
+
+    Seeding a Published object directly would bypass the two universal
+    negatives, and a demo that bypasses governance is a demo of something else.
+    """
+    reviewed, _ = obj.transition_to(LifecycleState.PENDING_REVIEW, actor=AUTHOR)
+    approved, _ = reviewed.transition_to(LifecycleState.APPROVED, actor=REVIEWER)
+    published, _ = approved.transition_to(LifecycleState.PUBLISHED, actor=REVIEWER)
+    return published
+
+
+def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
+    now = datetime.now(UTC)
+
+    store.save(
+        _published(
+            FeedRecord(
+                feed_id=FEED_ID,
+                domain="membership",
+                source_system="fidelis",
+                file_format="xlsx",
+                landing_path="landing/fidelis/roster",
+                # The leading underscore is not a typo. Incident #1.
+                file_pattern=r"^_CINQDOWNSTATE_Member_Roster_\d{8}\.xlsx$",
+                schedule_cron="0 6 1 * *",
+                sample_filename="_CINQDOWNSTATE_Member_Roster_20260801.xlsx",
+            ).as_governed(author=AUTHOR)
+        )
+    )
+    store.save(
+        _published(
+            contract_registry.contract_as_governed(
+                SchemaContract(
+                    feed_id=FEED_ID,
+                    version=1,
+                    columns=(
+                        ContractColumn(
+                            name="source_member_id",
+                            type=TypeName.STRING,
+                            nullable=False,
+                            is_phi=True,
+                        ),
+                        ContractColumn(name="date_of_birth", type=TypeName.DATE, is_phi=True),
+                        ContractColumn(name="plan_code", type=TypeName.STRING),
+                        ContractColumn(name="effective_date", type=TypeName.DATE),
+                    ),
+                    key_columns=("source_member_id",),
+                ),
+                author=AUTHOR,
+            )
+        )
+    )
+    store.save(
+        _published(
+            contract_registry.rules_as_governed(
+                FEED_ID,
+                (
+                    DqRule(
+                        rule_id="DQ-002",
+                        name="date_of_birth present",
+                        description="Every member must carry a date of birth.",
+                        severity=Severity.CRITICAL,
+                        columns=("date_of_birth",),
+                    ),
+                    DqRule(
+                        rule_id="DQ-014",
+                        name="plan_code known",
+                        description="plan_code should match the payer's published plan list.",
+                        severity=Severity.LOW,
+                        columns=("plan_code",),
+                    ),
+                ),
+                author=AUTHOR,
+            )
+        )
+    )
+    # CF-V0-E16-02. `core.agents.ALL_TEMPLATES` rather than a tuple assembled
+    # here: this list was hand-maintained, and it was WRONG — `rule-authoring
+    # .author` was never in it, so `RuleAuthoringAgent` would have raised
+    # `ObjectNotFoundError: prompt:rule-authoring.author` on the first call
+    # the moment anything wired it (which nothing did until now). One
+    # catalogue, read by this seeder and by `installer.prompts.seed_prompts`
+    # alike, is what stops a second call site drifting the same way.
+    for template in ALL_TEMPLATES:
+        store.save(_published(template.as_governed(author=AUTHOR)))
+
+    started = now - timedelta(hours=9)
+    control.open_batch(
+        BatchControl(
+            batch_id=BATCH_ID,
+            feed_id=FEED_ID,
+            feed_version=1,
+            business_date="2026-08-01",
+            state=BatchState.COMPLETED,
+            started_ts=started,
+            completed_ts=started + timedelta(minutes=4),
+        )
+    )
+    for layer, out in ((Layer.BRONZE, 22_000), (Layer.SILVER_RAW, 21_820)):
+        control.record_stage(
+            StageStatus(
+                batch_id=BATCH_ID,
+                stage=layer,
+                state=BatchState.COMPLETED,
+                started_ts=started,
+                completed_ts=started + timedelta(minutes=2),
+                records_in=22_000,
+                records_out=out,
+                quarantined=175 if layer is Layer.SILVER_RAW else 0,
+                attributed_drops=5 if layer is Layer.SILVER_RAW else 0,
+            )
+        )
+    control.record_reconciliation(
+        Reconciliation(
+            batch_id=BATCH_ID,
+            stage=Layer.SILVER_RAW,
+            records_in=22_000,
+            records_out=21_820,
+            quarantined=175,
+            attributed_drops=5,
+            drop_ledger=(
+                DropLedgerEntry(rule_id="DQ-002", reason="missing date_of_birth", record_count=175),
+                DropLedgerEntry(
+                    rule_id="STRUCTURE-001", reason="short row: 3 of 4 columns", record_count=5
+                ),
+            ),
+        )
+    )
+    control.record_quarantine(
+        QuarantineSummary(
+            batch_id=BATCH_ID,
+            stage=Layer.SILVER_RAW,
+            rule_id="DQ-002",
+            reason="missing date_of_birth",
+            column_names=("date_of_birth",),
+            record_count=175,
+        )
+    )
+    control.record_error(
+        ErrorRecord(
+            error_id_hash="c0ffee42",
+            batch_id=BATCH_ID,
+            stage=Layer.SILVER_RAW,
+            category=ErrorCategory.VALIDATION,
+            message="rows failed DQ-002 (date_of_birth present)",
+            occurred_ts=started + timedelta(minutes=3),
+            rule_id="DQ-002",
+        )
+    )
+    control.register_input_file(
+        InputFile(
+            batch_id=BATCH_ID,
+            feed_id=FEED_ID,
+            key="landing/fidelis/roster/processed/_CINQDOWNSTATE_Member_Roster_20260801.xlsx",
+            filename="_CINQDOWNSTATE_Member_Roster_20260801.xlsx",
+            size_bytes=4_120_448,
+            fingerprint="a41f9c2e",
+            state=FileState.PROCESSED,
+            arrived_ts=started,
+            record_count=22_000,
+        )
+    )
+    _seed_mapping_review(store, now=now)
+    _seed_agent_acceptance_history(store, now=now)
+
+
+def _seed_mapping_review(store: MetadataDbPort, *, now: datetime) -> None:
+    """W1-31 (CF-V1-E6-03) — a real, pending mapping-suggestion PROPOSAL, so
+    the first write-capable proposal-review screen has something genuine to
+    act on: edit a line's target, accept a loss, submit, approve, publish.
+
+    Built the same way `tests/pipeline/test_proposals_on_the_real_plane.py`
+    builds its fixtures — a `Proposal` constructed directly and carried to
+    PENDING_REVIEW through `proposals.submit`, never through the agent's own
+    `propose()` — because `mapping_suggestion_factory` is wired to no LLM pin
+    on the dev socket (rung 0's own "nothing runs but Python"), the same
+    absence `phi_detection_factory` and `rule_authoring_factory` already have
+    here. That gap is a demo-wiring question for a later slab, not this one.
+
+    `MAPPING_REVIEW_FEED_ID` already carries a PUBLISHED v1 (below), so the
+    proposal can pose a real CF-V1-E6-04 question: it repeats v1's two settled
+    columns verbatim, proposes a fresh (if middling-confidence) target for the
+    one v1 left unmapped, and — the point of the exercise — proposes DROPPING
+    the source for a field v1 populates. A reviewer keeping that drop is
+    exactly the silent-row-loss scenario `accepts_loss` exists to make
+    someone name out loud, not click past.
+    """
+    store.save(
+        _published(
+            mapping_core.mapping_as_governed(
+                mapping_core.FeedMapping(
+                    feed_id=MAPPING_REVIEW_FEED_ID,
+                    version=1,
+                    lines=(
+                        mapping_core.MappingLine(
+                            target_entity="members",
+                            target_field="source_member_id",
+                            source_columns=("member_id",),
+                            confidence=1.0,
+                            notes="Direct match on name and shape.",
+                        ),
+                        mapping_core.MappingLine(
+                            target_entity="members",
+                            target_field="date_of_birth",
+                            source_columns=("dob",),
+                            confidence=1.0,
+                            notes="Direct match on name and shape.",
+                        ),
+                        mapping_core.MappingLine(
+                            target_entity="members",
+                            target_field="effective_date",
+                            source_columns=("eff_dt",),
+                            confidence=1.0,
+                            notes="Direct match on name and shape.",
+                        ),
+                        mapping_core.MappingLine(
+                            target_entity="members",
+                            target_field="line_of_business",
+                            unmapped_reason=(
+                                "No payer-supplied plan taxonomy at initial onboarding."
+                            ),
+                        ),
+                    ),
+                ),
+                author=AUTHOR,
+            )
+        )
+    )
+    records = [
+        {
+            "source_column": "member_id",
+            "target_entity": "members",
+            "target_field": "source_member_id",
+            "unmapped": False,
+            "unmapped_reason": "",
+            "glossary_id": None,
+            "confidence": 1.0,
+            "settled_by": "published_mapping",
+            "rationale": "Matches this feed's own currently published mapping.",
+            "like_feed_id": None,
+        },
+        {
+            "source_column": "dob",
+            "target_entity": "members",
+            "target_field": "date_of_birth",
+            "unmapped": False,
+            "unmapped_reason": "",
+            "glossary_id": None,
+            "confidence": 1.0,
+            "settled_by": "published_mapping",
+            "rationale": "Matches this feed's own currently published mapping.",
+            "like_feed_id": None,
+        },
+        {
+            "source_column": "eff_dt",
+            "target_entity": "members",
+            "target_field": "effective_date",
+            "unmapped": True,
+            "unmapped_reason": NO_CONFIDENT_TARGET,
+            "glossary_id": None,
+            "confidence": 0.0,
+            "settled_by": "inference",
+            "rationale": (
+                "The refreshed sample's eff_dt values no longer parse as dates — three of "
+                "five rows read 'TBD'."
+            ),
+            "like_feed_id": None,
+        },
+        {
+            "source_column": "plan_cd",
+            "target_entity": "members",
+            "target_field": "line_of_business",
+            "unmapped": False,
+            "unmapped_reason": "",
+            "glossary_id": None,
+            "confidence": 0.82,
+            "settled_by": "inference",
+            "rationale": (
+                "plan_cd's three-letter values (HMO, PPO, EPO) match the shape "
+                "line_of_business takes on every other approved mapping."
+            ),
+            "like_feed_id": None,
+        },
+    ]
+    store.record_proposal(
+        submit_proposal(
+            Proposal(
+                proposal_id=MAPPING_PROPOSAL_ID,
+                agent=MAPPING_SUGGESTION_AGENT_NAME,
+                capability=MAPPING_SUGGESTION_CAPABILITY,
+                risk_class=RiskClass.R2,
+                run_id="seed-mapping-suggestion-1",
+                feed_id=MAPPING_REVIEW_FEED_ID,
+                payload={"records": records},
+                created_by=MAPPING_SUGGESTION_ACTOR,
+                created_ts=now - timedelta(hours=2),
+                # The weakest column, not the mean — `eff_dt`'s proposed drop
+                # is the one line a reviewer must actually look at.
+                confidence=0.0,
+            ),
+            now=now - timedelta(hours=2),
+        )
+    )
+
+
+def _seed_agent_acceptance_history(store: MetadataDbPort, *, now: datetime) -> None:
+    """W1-35 (F6) · CF-V1-E6-02 — a handful of DECIDED mapping-suggestion
+    proposals, spanning a few ISO weeks, so `/ai/acceptance` has a real trend
+    to render rather than the empty series everything above this line would
+    otherwise leave the health metric with.
+
+    APPROVED, never carried on to `apply()`: `weekly_acceptance` reads only
+    `Proposal.agent`, `.created_ts` and its measured `Acceptance`, all of
+    which an APPROVED proposal already carries — and stopping there means
+    this history never writes a second MAPPING version behind
+    `MAPPING_REVIEW_FEED_ID`'s own v1, which `_seed_mapping_review`'s still-
+    PENDING proposal is the one demo proposal that gets to do.
+
+    None of the four falls in `now`'s OWN ISO week — the oldest is four weeks
+    back, the newest one week back. `_seed_mapping_review`'s own proposal for
+    this same agent sits at `now - 2 hours`, always in `now`'s week, and once
+    something approves it (as `mapping-proposal-review.spec.ts` does) that
+    week's bucket carries a second, unrelated proposal on top of whatever
+    this function wrote there. Stopping a full week short of `now` keeps this
+    history's four numbers exactly what they were seeded as, no matter what
+    else this shared demo plane does with the current week's bucket.
+
+    The counts climb week over week on purpose — a flat 100% from the first
+    week would look like a placeholder that never had anything to correct.
+    """
+    weekly_history = (
+        (now - timedelta(weeks=4), 6, 3),
+        (now - timedelta(weeks=3), 8, 2),
+        (now - timedelta(weeks=2), 10, 1),
+        (now - timedelta(weeks=1), 5, 0),
+    )
+    for index, (created_ts, total, corrected) in enumerate(weekly_history):
+        payload = {
+            "key": "source_column",
+            "records": [{"source_column": f"acceptance_history_col{i}"} for i in range(total)],
+        }
+        corrections = tuple(
+            Correction(
+                field_path=f"acceptance_history_col{i}",
+                proposed="agent-said",
+                accepted="human-said",
+            )
+            for i in range(corrected)
+        )
+        proposal = Proposal(
+            proposal_id=f"mapping-suggestion-acceptance-history-{index}",
+            agent=MAPPING_SUGGESTION_AGENT_NAME,
+            capability=MAPPING_SUGGESTION_CAPABILITY,
+            risk_class=RiskClass.R2,
+            run_id=f"seed-mapping-acceptance-history-{index}",
+            feed_id=MAPPING_REVIEW_FEED_ID,
+            payload=payload,
+            created_by=MAPPING_SUGGESTION_ACTOR,
+            created_ts=created_ts,
+        )
+        decided = approve(
+            submit_proposal(proposal, now=created_ts),
+            approver=REVIEWER,
+            corrections=corrections,
+            now=created_ts,
+        )
+        store.record_proposal(decided)
+
+
+def plane() -> tuple[MemMetadataDb, MemStoreControlTables]:
+    store = MemMetadataDb()
+    control = MemStoreControlTables()
+    seed(store, control)
+    return store, control
+
+
+def demo_gateway(metadata: MetadataDbPort) -> LlmGateway:
+    """ONE scripted gateway shape, not six copies of it.
+
+    Every demo agent below used to inline the same six lines, which is how
+    `PatternPhiScrub` and `NoopObservability` came to be six independent
+    decisions instead of one. The real deployment answers this same question
+    from the profile (`intelligence.plane.IntelligencePlane`); this is rung
+    0's answer, and rung 0's answer is "no credential exists here".
+    """
+    return LlmGateway(
+        llm=ScriptedLlm(responder=scripted),
+        phi_scrub=PatternPhiScrub(),
+        metadata_db=metadata,
+        observability=NoopObservability(),
+        budget=BUDGET,
+        routing=Routing(small="mock-small", large="mock-large"),
+    )
+
+
+def agent_for(
+    principal: Principal, control: ControlTablesPort, metadata: MetadataDbPort
+) -> PipelineInsightAgent:
+    """One agent per caller. A shared agent would be a shared scope."""
+    return PipelineInsightAgent(
+        llm=demo_gateway(metadata),
+        tools=ToolContext(principal=principal, control=control, metadata=metadata),
+        runtime=InProcAgentRuntime(),
+    )
+
+
+def fingerprint_match_agent_for(
+    control: ControlTablesPort, metadata: MetadataDbPort
+) -> FingerprintMatchAgent:
+    """W2-38's real wiring, built the SAME way `agent_for` builds
+    `PipelineInsightAgent` — one `LlmGateway` over the one scripted stand-in,
+    never a second parallel way of assembling one.
+
+    ONE AGENT, not one per caller, unlike `agent_for`: `IncidentWorker` calls
+    this off a batch failure, which has no principal in hand — a batch
+    failing is the platform's own signal, not a request a person made.
+    `PLATFORM_PRINCIPAL` is the scope this agent's certified tool calls run
+    under; `caller` on `propose()` itself is `workers.incidents`'s own
+    `PLATFORM_ACTOR`, named at the call site, not here.
+    """
+    return FingerprintMatchAgent(
+        llm=demo_gateway(metadata),
+        tools=ToolContext(
+            principal=PLATFORM_PRINCIPAL,
+            control=control,
+            metadata=metadata,
+            agent=FINGERPRINT_MATCH_AGENT_NAME,
+        ),
+        runtime=InProcAgentRuntime(),
+    )
+
+
+def mapping_suggestion_agent_for(metadata: MetadataDbPort) -> MappingSuggestionAgent:
+    """W1-33's real wiring — the SAME `LlmGateway` shape `fingerprint_match_
+    agent_for` builds above, never a second parallel way of assembling one.
+
+    Unlike that agent (and `agent_for`'s `PipelineInsightAgent`),
+    `MappingSuggestionAgent` carries no `ToolContext`: `propose`'s own module
+    docstring says it plainly — "the only object it constructs is a
+    `Proposal`" — there is no certified tool for it to call.
+
+    ONE AGENT per caller of THIS function, matching `fingerprint_match_
+    agent_for` rather than `agent_for`: `workers.drift.propose_mapping_for_
+    unmapped_columns`, the trigger this feeds, has no principal in hand
+    either — an UNMAPPED_COLUMN finding is the platform's own signal off a
+    batch that already ran, not a request a person made.
+    """
+    return MappingSuggestionAgent(
+        llm=demo_gateway(metadata),
+        metadata=metadata,
+        retrieval=demo_retrieval(metadata),
+    )
+
+
+def demo_retrieval(metadata: MetadataDbPort) -> RetrievalService:
+    """CF-V1-E16-05 on the mock socket — real service, real fusion, no key.
+
+    The lexical half is the generated platform glossary, which is genuine
+    grounding; the semantic half runs over `DEMO_VECTOR`, so a runbook
+    published on this server IS retrievable from the next suggestion. The
+    embedding call goes through the scripted gateway, which is why the
+    dev server needs no credential to demonstrate hybrid retrieval end to
+    end.
+    """
+    return RetrievalService(
+        index=platform_index(),
+        vector=DEMO_VECTOR,
+        llm=demo_gateway(metadata),
+        phi_scrub=PatternPhiScrub(),
+    )
+
+
+def schema_inference_for(metadata: MetadataDbPort) -> SchemaInferenceAgent:
+    """CF-V1-E5-02 on the dev server, with the same scripted stand-in.
+
+    Worth wiring even against a mock: the DETERMINISTIC half is real, so a
+    demo file whose columns the glossary names produces a genuine proposal
+    with no model involved at all — which is the story's own argument,
+    demonstrable without a credential.
+    """
+    return SchemaInferenceAgent(
+        llm=demo_gateway(metadata),
+        metadata=metadata,
+        retrieval=demo_retrieval(metadata),
+    )
+
+
+def phi_detection_for(metadata: MetadataDbPort) -> PhiDetectionAgent:
+    """CF-V1-E5-03 on the dev server — the FIRST server ever to fit it.
+
+    `POST /api/feeds/{id}/detect-phi` has answered 503 on every deployment
+    since the route was written, because no `build()` passed a
+    `phi_detection_factory`. That is worth wiring against the scripted
+    stand-in for the same reason `schema_inference_for` is: the DETECTION
+    half is deterministic — `core.phi.classify` reads patterns and the
+    glossary, and the model is only ever asked to NAME what the platform
+    already found — so a demo file produces a genuine classification, a
+    genuine masking policy and a genuine 'possible PHI — free text' flag
+    with no credential involved.
+    """
+    return PhiDetectionAgent(llm=demo_gateway(metadata), scrub=PatternPhiScrub(), metadata=metadata)
+
+
+def rule_authoring_for(metadata: MetadataDbPort) -> RuleAuthoringAgent:
+    """CF-V1-E7-01 / CF-V1-E7-04 on the dev server — likewise never fitted.
+
+    The scripted model returns no rule, which is exactly the LOW-CONFIDENCE
+    path E7-04 exists for: the sentence is preserved verbatim, the rule is
+    routed to technical review, and NOTHING runs anywhere. A demo of the
+    guardrail is a more honest demo than a demo of the happy path would be
+    against a stand-in that cannot author.
+    """
+    return RuleAuthoringAgent(
+        llm=demo_gateway(metadata), metadata=metadata, retrieval=demo_retrieval(metadata)
+    )
+
+
+def merge_evidence_agent_for(metadata: MetadataDbPort) -> MergeEvidenceAgent:
+    """CF-V3-E9-03 on the dev server, with the same scripted stand-in.
+
+    Worth wiring even against a mock: `gather` (the deterministic half) is
+    real, so a steward reviewing a merge sees the true plan and the true
+    comparison even before any real model endpoint exists — the mock only
+    ever leaves `narrative` empty, never invents one.
+    """
+    return MergeEvidenceAgent(llm=demo_gateway(metadata))
+
+
+def scripted(prompt: str, task_class: Any) -> str:
+    """A deterministic stand-in so the dev server needs no credential.
+
+    It answers ONLY from the citations present in the grounding — it cannot
+    invent one, because it copies them. That is the honest shape for a mock:
+    shape-valid and content-free, never plausible-sounding.
+    """
+    if "Classify the question" in prompt:
+        question = prompt.rsplit("# input", 1)[-1].lower()
+        if any(word in question for word in ("retry", "pause", "rerun", "reprocess")):
+            return json.dumps({"intent": "declined", "declined_capability": "write_action"})
+        if "select " in question or " sql" in question:
+            return json.dumps({"intent": "declined", "declined_capability": "free_form_sql"})
+        if any(word in question for word in ("member", "date of birth", "dob", "ssn")):
+            return json.dumps({"intent": "declined", "declined_capability": "member_level_data"})
+        if "batch" in question or "row" in question or "lose" in question:
+            return json.dumps({"intent": "explain_run", "batch_id": BATCH_ID})
+        if "plan" in question:
+            return json.dumps({"intent": "explain_plan", "feed_id": FEED_ID})
+        if "feed" in question or FEED_ID in question:
+            return json.dumps({"intent": "explain_feed", "feed_id": FEED_ID})
+        return json.dumps({"intent": "define_term", "term": question.strip()[:60]})
+
+    if "Choose which of the available certified tools" in prompt:
+        available = re.search(r"available tools: (.+)", prompt)
+        listed = available.group(1) if available else ""
+        tools = [name.strip() for name in listed.split(",") if name.strip()]
+        return json.dumps({"calls": [{"tool": tool} for tool in tools[:3]]})
+
+    # `fingerprint_match_agent_for`'s two prompts. Matched on each template's
+    # own IDENTITY text (`core.agents.fingerprint_match.prompts`), which
+    # `core.prompts.assemble` always includes verbatim — not on `task_class`,
+    # which this agent shares with no story-specific meaning of its own.
+    if "incident narrator" in prompt:
+        # Content-free, same discipline as the citations branch below: no
+        # near-miss sentence is invented, only ever quoted from `retrieve`'s
+        # own findings — and this mock quotes nothing, so it says nothing.
+        return json.dumps({"narrative": "", "citations": []})
+
+    if "Merge Evidence agent" in prompt:
+        # Same honesty as the incident-narrator branch above: this mock
+        # cannot safely quote a value it was never shown a scrubbed form of,
+        # so it says nothing rather than invent a plausible-sounding sentence
+        # about which fields matched.
+        return json.dumps({"narrative": "", "grounded_fields": []})
+
+    if "recovery-guide drafting assistant" in prompt:
+        # `remedy` is left unset on purpose: a mock that guessed a real
+        # `OpsAction` would be indistinguishable from a model that meant it.
+        # `confidence` is a NUMBER, unlike the citations branch's `"medium"`
+        # below — `_build_guide` does `float(raw["confidence"])`, and this is
+        # the one branch that value must survive.
+        return json.dumps(
+            {
+                "title": "Novel failure — see the evidence bundle",
+                "steps": [
+                    "Read the incident's evidence bundle.",
+                    "This is Lane 1's scripted model — no diagnosis is offered.",
+                ],
+                "confidence": 0.0,
+                "rationale": "Shape-valid, content-free — the same honesty every mock owes here.",
+            }
+        )
+
+    citations = sorted(
+        set(
+            re.findall(
+                r"\b(?:feed|plan|contract|batch|recon|error|file|rule|term):"
+                r"[A-Za-z0-9][\w.@#-]*",
+                prompt,
+            )
+        )
+    )
+    if not citations:
+        return json.dumps({"claims": [], "confidence": "low", "unanswered": ["no grounding"]})
+    return json.dumps(
+        {
+            "claims": [
+                {
+                    "text": "This is the mock adapter answering — the facts below come from "
+                    "the certified tools, and only their citations are quoted.",
+                    "citation_ids": citations[:1],
+                },
+                *(
+                    {"text": f"Grounded in {citation}.", "citation_ids": [citation]}
+                    for citation in citations[1:4]
+                ),
+            ],
+            "confidence": "medium",
+            "unanswered": [
+                "answer quality is not claimed here — Lane 1 proves machinery, not quality"
+            ],
+        }
+    )
+
+
+# ── the medallion layers on the dev socket (W3-01) ───────────────────────────
+#: Six rows, and they are deliberately awkward rather than tidy.
+#:
+#: A seed of six clean members would make the layer screen look like a working
+#: platform and demonstrate nothing. These carry the cases the screen exists to
+#: show: a null first name that DQ-002 excludes, a `19360201`-shaped date the
+#: profiler refuses to type, a null gender, and one row present in Bronze that
+#: never reaches Silver Raw — so the 6-into-4 drop on screen is a real drop
+#: with a named rule behind it, not a rounding artefact.
+#:
+#: Every value is invented. There is no PHI here, and the reader masks it
+#: anyway — see `adapters/mock/layers.py` for why that is the point.
+_SEED_ROWS: dict[str, list[dict[str, Any]]] = {
+    "bronze.members_raw": [
+        {
+            "bronze_id": f"0000000{n}-0000-4000-8000-00000000000{n}",
+            "feed_id": FEED_ID,
+            "row_number": n,
+            "raw_row": raw,
+            "source_system": "FIDELIS",
+            "ingestion_ts": "2026-06-01T06:00:00+00:00",
+            "batch_id": BATCH_ID,
+            "record_hash": f"{n:032x}",
+            "created_ts": "2026-06-01T06:00:00+00:00",
+        }
+        for n, raw in enumerate(
+            (
+                {"MemberID": "M0001", "First_Name": "Ada", "Last_Name": "Byron", "DOB": "19360201"},
+                {"MemberID": "M0002", "First_Name": "Rey", "Last_Name": "Nunez", "DOB": "19510714"},
+                {"MemberID": "M0003", "First_Name": "", "Last_Name": "Okafor", "DOB": "19480223"},
+                {"MemberID": "M0004", "First_Name": "Jun", "Last_Name": "Park", "DOB": "17530101"},
+                {"MemberID": "M0005", "First_Name": "Ines", "Last_Name": "Roca", "DOB": "19620930"},
+                {"MemberID": "M0006", "First_Name": "Tam", "Last_Name": "Vo", "DOB": "19771105"},
+            ),
+            start=1,
+        )
+    ],
+    "silver_raw.members": [
+        {
+            "member_row_id": f"1000000{n}-0000-4000-8000-00000000000{n}",
+            "feed_id": FEED_ID,
+            "source_member_id": member,
+            "first_name": first,
+            "last_name": last,
+            "date_of_birth": dob,
+            "gender": gender,
+            "line_of_business": lob,
+            "effective_date": "2026-06-01",
+            "end_date": None,
+            "is_active": True,
+            "source_system": "FIDELIS",
+            "ingestion_ts": "2026-06-01T06:00:00+00:00",
+            "batch_id": BATCH_ID,
+            "record_hash": f"{n:032x}",
+            "created_ts": "2026-06-01T06:00:00+00:00",
+        }
+        for n, (member, first, last, dob, gender, lob) in enumerate(
+            (
+                ("M0001", "Ada", "Byron", "1936-02-01", "F", "MEDICARE"),
+                ("M0002", "Rey", "Nunez", "1951-07-14", "M", "MEDICAID"),
+                ("M0005", "Ines", "Roca", "1962-09-30", None, "MEDICAID"),
+                ("M0006", "Tam", "Vo", "1977-11-05", "F", "MEDICARE"),
+            ),
+            start=1,
+        )
+    ],
+    # Landing holds the arrival EVENT, not the file — the file is on disk in
+    # the real landing zone this dev server already fits.
+    "landing_ctl.landing_event": [],
+}
+
+_SEED_QUARANTINE: tuple[QuarantineReason, ...] = (
+    QuarantineReason(
+        rule_id="DQ-002",
+        reason="Member First Name Not Null",
+        stage="silver_raw",
+        row_count=1,
+    ),
+    QuarantineReason(
+        rule_id="CAST-date_of_birth",
+        reason=(
+            "date_of_birth: '17530101' is outside the plausible range 1900-2100 — legacy type "
+            "debt, attributed rather than loaded"
+        ),
+        stage="silver_raw",
+        row_count=1,
+    ),
+)
+
+_SEED_RECON: tuple[ReconLine, ...] = (
+    ReconLine(
+        batch_id=BATCH_ID,
+        feed_id=FEED_ID,
+        stage="silver_raw",
+        records_in=6,
+        records_out=4,
+        quarantined=1,
+        attributed_drops=1,
+        balanced=True,
+        recorded_ts="2026-06-01T06:02:00+00:00",
+    ),
+)
+
+
+def alert_enrichment_agent_for(
+    control: ControlTablesPort, metadata: MetadataDbPort
+) -> AlertEnrichmentAgent:
+    """CF-V2-E12-05's real wiring — the SAME `LlmGateway` shape `fingerprint_
+    match_agent_for` builds above, never a second parallel way of assembling
+    one.
+
+    ONE AGENT, not one per caller, matching `fingerprint_match_agent_for`
+    rather than `agent_for`: the caller is a GET route reading the current
+    SLA breach set (`workers.sla.current_alerts`), which has no principal in
+    hand either — the alert exists whether or not anybody is looking at it
+    right now.
+    """
+    return AlertEnrichmentAgent(
+        llm=demo_gateway(metadata),
+        tools=ToolContext(
+            principal=PLATFORM_PRINCIPAL,
+            control=control,
+            metadata=metadata,
+            agent=ALERT_ENRICHMENT_AGENT_NAME,
+        ),
+        runtime=InProcAgentRuntime(),
+    )
+
+
+def layer_reader_for() -> MemLayerReader:
+    """The dev socket's medallion plane.
+
+    `silver_ods` is NOT in `absent`, and it does not need to be: the contract
+    declares no tables for it, so it renders as the provisioned-empty layer it
+    actually is. Listing it would be inventing an absence.
+    """
+    return MemLayerReader(
+        rows=_SEED_ROWS,
+        quarantine=_SEED_QUARANTINE,
+        recon=_SEED_RECON,
+    )
