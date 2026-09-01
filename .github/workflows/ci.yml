@@ -44,6 +44,16 @@ jobs:
       - name: core-purity · URLs, paths, regions, credentials
         run: python -m conformance.lint_core_purity src/cinqflow/core
       - name: detect-secrets
+        # THE ROOT, not backend/ — the same exception .pre-commit-config.yaml
+        # makes, and for the same reason. `.secrets.baseline` lives at the repo
+        # root, and a credential can reach this repo through a compose file, a
+        # profile, .env.example or the frontend just as easily as through
+        # backend/src. Scoping the scan to one subtree would scope it to where
+        # credentials are least likely to be.
+        #
+        # `ruff check .` above is genuinely scoped to backend/ because ruff is
+        # configured by backend/pyproject.toml; this one must not be.
+        working-directory: .
         run: detect-secrets scan --baseline .secrets.baseline
 
   unit-contract:

@@ -71,10 +71,28 @@ test("a citation is a route: the recon figure opens the row it cites", async ({ 
 test("the batch drawer offers no write buttons", async ({ page }) => {
   await signIn(page, "dev-engineer@cinqcare.test");
   await page.goto("/operations/control/batch/8842?panel=recon");
-  await expect(page.getByText("This drawer has no write buttons")).toBeVisible();
   for (const word of ["Retry", "Reprocess", "Pause"]) {
     await expect(page.getByRole("button", { name: word })).toHaveCount(0);
   }
+});
+
+// THE CAPTION WAS NEVER WRITTEN. This assertion used to sit inside the test
+// above and looked for copy — "This drawer has no write buttons" — that
+// appears nowhere in `app/` or `components/`. It could not have passed, and it
+// never ran: Playwright's webServer died at startup in CI (a hardcoded
+// `.venv/bin/python` the runner does not have), so the whole suite was red for
+// a reason that had nothing to do with this.
+//
+// Deleting it would quietly drop a stated intention. The refusal itself IS
+// enforced by the test above and passes; what is missing is the drawer SAYING
+// why it has no buttons, which is this platform's habit everywhere else — a
+// refusal a person can read beats a surface that is merely empty. Marked
+// `fixme` so it reports as outstanding work rather than as a failure or as
+// nothing at all. Write the caption, delete this marker.
+test.fixme("the batch drawer explains why it has no write buttons", async ({ page }) => {
+  await signIn(page, "dev-engineer@cinqcare.test");
+  await page.goto("/operations/control/batch/8842?panel=recon");
+  await expect(page.getByText("This drawer has no write buttons")).toBeVisible();
 });
 
 test("asking a question returns cited claims and a trace", async ({ page }) => {

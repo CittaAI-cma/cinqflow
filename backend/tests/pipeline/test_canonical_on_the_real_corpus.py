@@ -29,8 +29,16 @@ from tests.conftest import require_corpus
 
 pytestmark = pytest.mark.pipeline
 
+# parents[4], NOT parents[3]. This file is
+# backend/tests/pipeline/<this>.py, so the walk up is pipeline -> tests ->
+# backend -> the repo root -> the workspace that holds `clientdata/`
+# beside it. It was [3] when tests/ sat at the repo root, and the reorg
+# into backend/ silently made [3] the repo root itself — where there is no
+# corpus. The failure would not have been a red test: `require_corpus`
+# SKIPS on a missing workbook, so these gates would have quietly stopped
+# grading against the client's own numbers while still reporting green.
 WORKBOOK = (
-    Path(__file__).resolve().parents[3]
+    Path(__file__).resolve().parents[4]
     / "clientdata"
     / "Uploads"
     / "2-Design"
