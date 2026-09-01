@@ -333,6 +333,62 @@ def test_a_deployment_with_no_landing_zone_says_so(metadata: MemMetadataDb) -> N
     assert "landing zone" in response.json()["detail"]
 
 
+# ── CF-V3-E5-05 · complex formats, over the wire ─────────────────────────────
+
+_EOB_KEY = "enrollments/fidelis_downstate/eob/incoming/2026-08-01/eob.ndjson"
+_EOB_NDJSON = (
+    b'{"resourceType":"ExplanationOfBenefit","id":"A100","status":"active",'
+    b'"item":[{"sequence":1,"adjudication":[{"category":"eligible"},'
+    b'{"category":"paid"}]}]}\n'
+)
+_FIXED_WIDTH_KEY = "enrollments/fidelis_downstate/cclf1/incoming/2026-08-01/cclf1.txt"
+
+
+def test_an_ndjson_sample_returns_a_structure_tree_and_flattening_proposals(
+    client: TestClient,
+) -> None:
+    storage: LocalFsStorage = client.app.state.storage  # type: ignore[attr-defined]
+    storage.place(_EOB_KEY, _EOB_NDJSON)
+
+    response = client.post(
+        f"/api/feeds/{FEED}/profile",
+        json={"file_key": _EOB_KEY, "file_format": "ndjson"},
+        headers=_as(client, BA),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["readable"] is True
+    paths = {p["path"]: p for p in body["structure_paths"]}
+    assert paths["status"]["fill_rate"] == 1.0
+    assert paths["item"]["is_array"] is True
+    proposed = {p["source_path"] for p in body["flatten_proposals"]}
+    assert proposed == {"item", "item.adjudication"}
+
+
+def test_a_fixed_width_cclf1_sample_returns_the_layout_and_the_real_ambiguity(
+    client: TestClient,
+) -> None:
+    storage: LocalFsStorage = client.app.state.storage  # type: ignore[attr-defined]
+    line = ("A" * 292 + "\n").encode()
+    storage.place(_FIXED_WIDTH_KEY, line * 3)
+
+    response = client.post(
+        f"/api/feeds/{FEED}/profile",
+        json={"file_key": _FIXED_WIDTH_KEY, "file_format": "fixed_width"},
+        headers=_as(client, BA),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["readable"] is True
+    assert body["fixed_width_layout"]["source"] == "statistical"
+    assert body["fixed_width_layout"]["columns"]
+    ambiguous = [f for f in body["findings"] if f["quirk"] == "ambiguous_fixed_width_boundary"]
+    assert ambiguous
+    assert any("CCLF1" in f["detail"] for f in ambiguous)
+
+
 # ── the store's own contract ─────────────────────────────────────────────────
 
 

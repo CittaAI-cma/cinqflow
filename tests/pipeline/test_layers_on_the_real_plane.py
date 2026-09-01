@@ -38,20 +38,38 @@ def reader(plane: Connection) -> PostgresLayerReader:
 
 
 # ── census ───────────────────────────────────────────────────────────────────
-def test_every_layer_answers_including_the_three_that_are_not_built(
+def test_every_layer_answers_and_each_status_means_what_it_says(
     reader: PostgresLayerReader,
 ) -> None:
-    """`census` must not raise for an unbuilt layer. Raising would make the
-    three unbuilt positions unrenderable, which is exactly how they would end
-    up quietly dropped from the spine."""
+    """`census` must not raise for a layer that holds nothing. Raising would
+    make those positions unrenderable, which is exactly how they would end up
+    quietly dropped from the spine.
+
+    Asserted per STATUS rather than per layer name, because which layer sits in
+    which status changes as waves land — `identity` moved from NOT_BUILT to
+    PROVISIONED_EMPTY the moment its schema was declared. A test naming the
+    layers would have to be edited on every such move; a test naming the
+    statuses keeps asserting the thing that must stay true.
+    """
     for spec in spine():
         census = reader.census(spec)
         assert census.spec is spec
         if spec.status is LayerStatus.BUILT:
+            # Tables, and a real count — possibly 0 if nothing has loaded.
             assert census.tables, spec.layer
-        else:
+            assert census.row_count is not None, spec.layer
+        elif spec.status is LayerStatus.NOT_BUILT:
+            # No schema at all, so nothing to describe and no count to give.
+            assert spec.schema is None, spec.layer
             assert census.tables == (), spec.layer
             assert census.row_count is None, spec.layer
+        else:
+            # PROVISIONED_EMPTY: the schema is real and every table in it is
+            # empty. `identity` has five tables here and `silver_ods` has none,
+            # and both are correct — what the status promises is that nothing
+            # has loaded, never that nothing was provisioned.
+            assert spec.schema is not None, spec.layer
+            assert all(t.row_count == 0 for t in census.tables), spec.layer
 
 
 def test_the_built_layers_declared_tables_are_all_on_the_plane(

@@ -428,11 +428,15 @@ def test_an_empty_file_is_a_refusal_not_a_zero_row_profile() -> None:
 
 
 def test_an_unsupported_format_says_what_the_platform_reads_today() -> None:
-    profile = profile_bytes(b"{}", file_format="fhir_ndjson")
+    """`fhir_ndjson`/`fixed_width` used to be exactly this refusal — CF-V3-
+    E5-05 built readers for both (see `test_complex_format_profiling.py`
+    and this file's own `ndjson`/`fixed_width` sections below). A format
+    nobody has built a reader for yet still refuses the same honest way."""
+    profile = profile_bytes(b"{}", file_format="hl7_v2_segments")
     assert profile.readable is False
     assert profile.refusal is not None
     assert profile.refusal.reason is RefusalReason.NO_PARSER
-    assert "later waves" in profile.refusal.explanation
+    assert "NDJSON" in profile.refusal.explanation
 
 
 def test_nothing_raises_on_any_of_the_hostile_inputs() -> None:
@@ -523,3 +527,100 @@ def test_a_bare_zero_and_a_leading_zero_decimal_are_still_numbers() -> None:
     profile = profile_bytes(b"n,m\n0,0.50\n5,-0.75\n", file_format="csv")
     assert profile.column("n").narrowest_type is TypeName.INT64  # type: ignore[union-attr]
     assert profile.column("m").narrowest_type is TypeName.DECIMAL  # type: ignore[union-attr]
+
+
+# ── CF-V3-E5-05 · nested NDJSON / FHIR / HL7-derived JSON ────────────────────
+
+_EOB_NDJSON = (
+    b'{"resourceType":"ExplanationOfBenefit","id":"A100","status":"active",'
+    b'"item":[{"sequence":1,"adjudication":[{"category":"eligible"},'
+    b'{"category":"paid"},{"category":"copay"}]}]}\n'
+    b'{"resourceType":"ExplanationOfBenefit","id":"A200","status":"active",'
+    b'"item":[{"sequence":1,"adjudication":[{"category":"eligible"},'
+    b'{"category":"paid"}]},{"sequence":2,"adjudication":[{"category":"eligible"},'
+    b'{"category":"paid"},{"category":"copay"},{"category":"deductible"}]}]}\n'
+)
+
+
+def test_ndjson_is_readable_and_reports_a_structure_tree_with_fill_rates() -> None:
+    profile = profile_bytes(_EOB_NDJSON, file_format="ndjson")
+    assert profile.readable
+    assert profile.structure.data_rows == 2
+    paths = {p.path: p for p in profile.structure_paths}
+    assert paths["status"].documents_with_path == 2
+    assert paths["status"].fill_rate == 1.0
+    assert paths["item"].is_array
+    assert paths["item"].array_length_min == 1
+    assert paths["item"].array_length_max == 2
+
+
+def test_ndjson_proposes_flattening_for_every_repeating_group_and_applies_none() -> None:
+    profile = profile_bytes(_EOB_NDJSON, file_format="ndjson")
+    proposed = {p.source_path for p in profile.flatten_proposals}
+    assert proposed == {"item", "item.adjudication"}
+
+
+def test_a_malformed_ndjson_line_is_reported_and_the_rest_still_profiles() -> None:
+    mixed = _EOB_NDJSON + b"not json at all\n"
+    profile = profile_bytes(mixed, file_format="ndjson")
+    assert profile.readable
+    assert profile.structure.data_rows == 2  # the bad line contributed no document
+    (finding,) = [f for f in profile.findings if f.quirk is Quirk.MALFORMED_JSON_LINE]
+    assert finding.blocks_ingestion
+    assert finding.occurrences == 1
+
+
+def test_hl7_derived_json_uses_the_same_tree_reader_as_fhir_ndjson() -> None:
+    """The story names FHIR NDJSON and HL7-derived JSON as two formats
+    needing the same start — they are, deliberately, the same dispatch
+    case: neither the tree-walk nor its proposals know or care whose
+    resource shape they are counting."""
+    adt = b'{"eventType":"A01","facility":"BronxRhio"}\n{"eventType":"A03"}\n'
+    profile = profile_bytes(adt, file_format="hl7_json")
+    assert profile.readable
+    paths = {p.path: p for p in profile.structure_paths}
+    assert paths["eventType"].fill_rate == 1.0
+    assert paths["facility"].fill_rate == 0.5
+
+
+# ── CF-V3-E5-05 · fixed-width boundary detection ─────────────────────────────
+
+
+def test_fixed_width_is_readable_and_reports_a_statistical_layout() -> None:
+    sample = b"AAA 1X END\nBBB 2Y END\nCCC 3Z END\n"
+    profile = profile_bytes(sample, file_format="fixed_width")
+    assert profile.readable
+    assert profile.structure.data_rows == 3
+    assert profile.fixed_width_layout is not None
+    ranges = [(c.start, c.end) for c in profile.fixed_width_layout.columns]
+    assert ranges == [(1, 3), (5, 6), (8, 10)]
+
+
+def test_a_cclf1_shaped_sample_reports_the_real_ambiguity_against_cclf1() -> None:
+    """The exact exception CF-V3-E5-05 names: real CCLF1 fields with
+    nothing between them read as one column from whitespace alone, and
+    the CCLF1 reference layout says otherwise — both readings must reach
+    the BA. A genuine CCLF1 extract has no natural gaps ANYWHERE (its own
+    layout is fully contiguous, position 1 to 292), so a 292-character,
+    fully-populated sample line is the realistic case, not a contrived
+    one — and it must name the real fields either side of the boundary,
+    `CLM_BILL_FAC_TYPE_CD`/`CLM_BILL_CLSFCTN_CD`, among the ones it
+    could not tell apart."""
+    line = ("A" * 292 + "\n").encode()
+    profile = profile_bytes(line * 3, file_format="fixed_width")
+    assert profile.readable
+    ambiguities = [f for f in profile.findings if f.quirk is Quirk.AMBIGUOUS_FIXED_WIDTH_BOUNDARY]
+    assert ambiguities
+    assert any(
+        "CLM_BILL_FAC_TYPE_CD" in f.detail and "CLM_BILL_CLSFCTN_CD" in f.detail
+        for f in ambiguities
+    )
+    assert any("CCLF1" in f.detail for f in ambiguities)
+
+
+def test_a_ragged_fixed_width_sample_is_reported_not_silently_trimmed() -> None:
+    sample = b"AAA 1X END\nBBB 2Y EN\nCCC 3Z END\n"
+    profile = profile_bytes(sample, file_format="fixed_width")
+    ragged = [f for f in profile.findings if f.quirk is Quirk.RAGGED_ROW]
+    assert ragged
+    assert ragged[0].occurrences == 1

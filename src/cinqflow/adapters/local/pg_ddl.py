@@ -31,12 +31,20 @@ _TYPES: dict[TypeName, str] = {
 
 
 class PostgresDdlRenderer:
-    """Spec in, `CREATE` statements out. Deterministic and idempotent."""
+    """Spec in, `CREATE` statements out. Deterministic and idempotent.
+
+    Every identifier is double-quoted — a no-op for the platform's own
+    snake_case names (Postgres already lowercases an unquoted `batch_id` to
+    exactly `batch_id`), and what keeps a harvested model's own casing
+    (`OurId`, `DateOfBirth`, CF-V3-E10-01's Member domain) from silently
+    folding to `ourid`/`dateofbirth` — a real mismatch against the client's
+    own SQL Server naming the first deploy against a live database found.
+    """
 
     def render_schema(self, schema: Schema) -> tuple[str, ...]:
         statements: list[str] = [
-            f"CREATE SCHEMA IF NOT EXISTS {schema.name};",
-            f"COMMENT ON SCHEMA {schema.name} IS {_literal(schema.description)};",
+            f"CREATE SCHEMA IF NOT EXISTS {_ident(schema.name)};",
+            f"COMMENT ON SCHEMA {_ident(schema.name)} IS {_literal(schema.description)};",
         ]
         for table in schema.tables:
             statements.extend(self.render_table(schema, table))
@@ -45,30 +53,28 @@ class PostgresDdlRenderer:
         return tuple(statements)
 
     def render_table(self, schema: Schema, table: Table) -> tuple[str, ...]:
+        qualified = _qualified(schema.name, table.name)
         columns = [self._column(c) for c in table.columns]
-        columns.append(f"PRIMARY KEY ({', '.join(table.primary_key)})")
+        columns.append(f"PRIMARY KEY ({_ident_list(table.primary_key)})")
         for unique in table.unique:
-            columns.append(f"UNIQUE ({', '.join(unique)})")
+            columns.append(f"UNIQUE ({_ident_list(unique)})")
         for position, check in enumerate(table.check_constraints):
-            columns.append(f"CONSTRAINT {table.name}_ck{position} CHECK ({check})")
+            columns.append(f"CONSTRAINT {_ident(f'{table.name}_ck{position}')} CHECK ({check})")
 
         body = ",\n    ".join(columns)
-        statements = [f"CREATE TABLE IF NOT EXISTS {schema.name}.{table.name} (\n    {body}\n);"]
+        statements = [f"CREATE TABLE IF NOT EXISTS {qualified} (\n    {body}\n);"]
         if table.comment:
-            statements.append(
-                f"COMMENT ON TABLE {schema.name}.{table.name} IS {_literal(table.comment)};"
-            )
+            statements.append(f"COMMENT ON TABLE {qualified} IS {_literal(table.comment)};")
         for column in table.columns:
             if column.comment:
                 statements.append(
-                    f"COMMENT ON COLUMN {schema.name}.{table.name}.{column.name} IS "
+                    f"COMMENT ON COLUMN {qualified}.{_ident(column.name)} IS "
                     f"{_literal(column.comment)};"
                 )
         for index_columns in table.indexes:
-            name = f"ix_{table.name}_{'_'.join(index_columns)}"
+            name = _ident(f"ix_{table.name}_{'_'.join(index_columns)}")
             statements.append(
-                f"CREATE INDEX IF NOT EXISTS {name} ON {schema.name}.{table.name} "
-                f"({', '.join(index_columns)});"
+                f"CREATE INDEX IF NOT EXISTS {name} ON {qualified} ({_ident_list(index_columns)});"
             )
         return tuple(statements)
 
@@ -95,12 +101,13 @@ class PostgresDdlRenderer:
         )
         statements = [function]
         for table in schema.tables:
-            qualified = f"{schema.name}.{table.name}"
+            qualified = _qualified(schema.name, table.name)
+            trigger_name = _ident(f"trg_{table.name}_append_only")
             statements.extend(
                 [
                     f"REVOKE UPDATE, DELETE, TRUNCATE ON {qualified} FROM PUBLIC;",
-                    f"DROP TRIGGER IF EXISTS trg_{table.name}_append_only ON {qualified};",
-                    f"CREATE TRIGGER trg_{table.name}_append_only\n"
+                    f"DROP TRIGGER IF EXISTS {trigger_name} ON {qualified};",
+                    f"CREATE TRIGGER {trigger_name}\n"
                     f"    BEFORE UPDATE OR DELETE ON {qualified}\n"
                     "    FOR EACH ROW EXECUTE FUNCTION cinqflow_reject_mutation();",
                 ]
@@ -113,7 +120,7 @@ class PostgresDdlRenderer:
         else:
             sql_type = _TYPES[column.type]
         null = "" if column.nullable else " NOT NULL"
-        return f"{column.name} {sql_type}{null}"
+        return f"{_ident(column.name)} {sql_type}{null}"
 
     def expected_signature(self, table: Table) -> str:
         """What conformance expects to introspect back.
@@ -129,3 +136,19 @@ def _literal(text: str) -> str:
     for the descriptions in the spec, which are ours and contain no bytes."""
     escaped = text.replace("'", "''")
     return f"'{escaped}'"
+
+
+def _ident(name: str) -> str:
+    """A double-quoted identifier. Double quotes doubled, the identifier
+    equivalent of `_literal` — every name in the spec is ours, but quoting
+    correctly costs nothing and a name that ever needed it would otherwise
+    produce SQL nobody could read the error from."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _ident_list(names: tuple[str, ...]) -> str:
+    return ", ".join(_ident(name) for name in names)
+
+
+def _qualified(schema_name: str, table_name: str) -> str:
+    return f"{_ident(schema_name)}.{_ident(table_name)}"

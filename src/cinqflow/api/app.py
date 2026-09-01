@@ -45,6 +45,7 @@ from cinqflow.api.schemas import (
     ArrivalRowOut,
     AskIn,
     AskOut,
+    AssignIdentityExceptionIn,
     AttentionItemOut,
     AuditOut,
     AuthorRulesIn,
@@ -72,6 +73,7 @@ from cinqflow.api.schemas import (
     CorrectionOut,
     CorrectVarianceIn,
     CounterOut,
+    CoverageSnapshotOut,
     DateFormatOut,
     DeliveryOut,
     DependencyPictureOut,
@@ -81,7 +83,9 @@ from cinqflow.api.schemas import (
     DocumentOut,
     DocumentPageOut,
     DropExplanationOut,
+    DuplicateCollapseOut,
     EnrichedAlertOut,
+    EvidenceCardOut,
     EvidencePackOut,
     ExampleOut,
     ExplainVarianceIn,
@@ -92,12 +96,17 @@ from cinqflow.api.schemas import (
     FileProfileOut,
     FileStructureOut,
     FindingOut,
+    FixedWidthColumnOut,
+    FixedWidthLayoutOut,
+    FlattenProposalOut,
     FreshnessOut,
     GapOut,
     GlossaryTermOut,
     GovernedOut,
     GuideMatchOut,
     HomeSlotOut,
+    IdentityExceptionOccurrenceOut,
+    IdentityExceptionOut,
     ImpactPacketOut,
     IncidentOut,
     IncidentRowOut,
@@ -118,11 +127,24 @@ from cinqflow.api.schemas import (
     MappingLineModel,
     MappingOut,
     MaskingPolicyOut,
+    MergeCandidateIn,
+    MergeExecuteIn,
+    MergeExecuteOut,
+    MergePlanOut,
     NarrativeOut,
     NavigationOut,
     ObstacleOut,
+    OdsChangelogOut,
+    OdsColumnOut,
+    OdsConsumerOut,
+    OdsContractPageOut,
+    OdsDeprecationOut,
+    OdsFieldChangeOut,
+    OdsModelSummaryOut,
+    OdsVersionOut,
     OperationsModel,
     OwnerModel,
+    ParityCheckOut,
     PauseFeedIn,
     PhiColumnOut,
     PhiRecallOut,
@@ -137,6 +159,7 @@ from cinqflow.api.schemas import (
     ProposedMappingOut,
     ProposedRuleOut,
     QuarantineReasonOut,
+    QueueHealthOut,
     ReadinessOut,
     ReclassifyIn,
     ReconLineOut,
@@ -147,6 +170,7 @@ from cinqflow.api.schemas import (
     ReleaseDecisionOut,
     ReliabilityComponentOut,
     ReliabilityOut,
+    ResolveIdentityExceptionIn,
     ResolveIncidentIn,
     ResumeFeedIn,
     ReviewQueueOut,
@@ -158,10 +182,12 @@ from cinqflow.api.schemas import (
     RulePreviewOut,
     RulePreviewPackOut,
     RunbookOut,
+    SatelliteRepointOut,
     SimilarFeedOut,
     SourceIn,
     SourceOut,
     StageViewOut,
+    StructurePathOut,
     SuspensionEventOut,
     SuspensionOut,
     TechnicalReviewOut,
@@ -198,6 +224,29 @@ from cinqflow.core.agents.rule_authoring import graph as rule_authoring_graph
 from cinqflow.core.agents.rule_authoring.graph import AGENT as RULE_AUTHORING_AGENT
 from cinqflow.core.citations import CitationId, CitationKind
 from cinqflow.core.citations import parse as parse_citation
+from cinqflow.core.identity.exceptions import (
+    ExceptionEventAction,
+    ExceptionState,
+    IdentityException,
+    IdentityExceptionError,
+    IdentityExceptionEvent,
+    health_by_source,
+)
+from cinqflow.core.identity.exceptions import assign as assign_exception
+from cinqflow.core.identity.exceptions import resolve as resolve_exception
+from cinqflow.core.identity.merge import (
+    DemographicComparison,
+    DuplicateCollapse,
+    FieldComparison,
+    MergeError,
+    MergePlan,
+    SatelliteRepoint,
+    SatelliteRow,
+    UnapprovedMergeExecutionError,
+    execute_merge,
+    plan_merge,
+)
+from cinqflow.core.identity.telemetry import CoverageRegression, detect_regressions
 from cinqflow.core.impact import ImpactPacket, ImpactUnknownError, Touched, build_packet
 from cinqflow.core.intelligence import Budget
 from cinqflow.core.landing import LandingOutcome
@@ -229,7 +278,7 @@ from cinqflow.core.persona import home_for
 from cinqflow.core.phi import Basis, ColumnClassification, PhiDowngradeRefusedError, reclassify
 from cinqflow.core.profiling import ColumnProfile, FileProfile, Finding
 from cinqflow.core.proposals import Proposal, ProposalState
-from cinqflow.core.registry import canonical, suspension
+from cinqflow.core.registry import canonical, ods_batch_certification, ods_contract, suspension
 from cinqflow.core.registry import clone as registry_clone
 from cinqflow.core.registry import contract as contract_registry
 from cinqflow.core.registry import feed as feed_registry
@@ -239,15 +288,17 @@ from cinqflow.core.registry import source as source_registry
 from cinqflow.core.registry.contract import SchemaContract
 from cinqflow.core.registry.execution_plane import ExecutionPlaneRegister
 from cinqflow.core.registry.glossary import Glossary, GlossaryTerm
+from cinqflow.core.registry.ods_model import ChangeKind, FieldChange, OdsModel, diff, from_governed
 from cinqflow.core.registry.wave0 import wave_0_register
 from cinqflow.core.rules import policy as rule_policy
 from cinqflow.core.rules import preview as rule_preview
 from cinqflow.core.rules import review as rule_review
-from cinqflow.core.schema_spec import TypeName
+from cinqflow.core.schema_spec import Column, TypeName
 from cinqflow.core.security import Action, may
 from cinqflow.core.tools import CATALOGUE, ToolError
 from cinqflow.intelligence.agents.alert_enrichment import AlertEnrichmentAgent
 from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
+from cinqflow.intelligence.agents.merge_evidence import MergeEvidenceAgent
 from cinqflow.intelligence.agents.phi_detection import PhiDetectionAgent, RecallGateFailedError
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
 from cinqflow.intelligence.agents.rule_authoring import RuleAuthoringAgent
@@ -278,9 +329,11 @@ from cinqflow.ports.metadata_db import (
     MetadataDbPort,
     ObjectNotFoundError,
 )
+from cinqflow.ports.notification import Alert, NotificationPort, Severity
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.delivery import DeliveryOutcome, DeliveryWorker
 from cinqflow.workers.drift import propose_reprocess_for_newly_mapped_columns
+from cinqflow.workers.identity import IDENTITY_EXCEPTION_SLA
 from cinqflow.workers.incidents import priors_for, recovery_guides
 from cinqflow.workers.knowledge import KnowledgeIngestWorker
 from cinqflow.workers.ops import OpsVerifier
@@ -325,6 +378,10 @@ MappingSuggestionFactory = Callable[[MetadataDbPort], MappingSuggestionAgent]
 #: Same reasoning, same lifetime. CF-V1-E7-01.
 RuleAuthoringFactory = Callable[[MetadataDbPort], RuleAuthoringAgent]
 
+#: Same reasoning, same lifetime. CF-V3-E9-03 — R4, so this agent never
+#: writes anything the factory's own store argument could be used to save.
+MergeEvidenceFactory = Callable[[MetadataDbPort], MergeEvidenceAgent]
+
 #: CF-V1-W1-26 · CF-V1-E16-07. Same reasoning, same lifetime as the agent
 #: factories above — built per request off whichever metadata pin serves it —
 #: even though `KnowledgeIngestWorker` is a pipeline stage (Archetype B), not
@@ -337,6 +394,15 @@ RuleAuthoringFactory = Callable[[MetadataDbPort], RuleAuthoringAgent]
 #: happen, the same "everything else works with no model" shape `ask`
 #: degrades to.
 KnowledgeIngestFactory = Callable[[MetadataDbPort], KnowledgeIngestWorker]
+
+#: CF-V3-E10-01. Built once per app, closing over whichever real Postgres
+#: connection this rung holds (`api/local.py`) — `None` on the mock socket
+#: (`api/dev.py`), where there is no live `silver_ods` schema to provision at
+#: all. The same "everything else still works with no pin fitted" shape as
+#: every other optional factory here: publishing an ODS model always moves
+#: the governed object; only the real DDL is skipped, with a warning, when
+#: this is `None`.
+OdsModelProvisioner = Callable[[OdsModel], tuple[str, ...]]
 
 
 @unique
@@ -445,7 +511,10 @@ def create_app(
     phi_detection_factory: PhiDetectionFactory | None = None,
     mapping_suggestion_factory: MappingSuggestionFactory | None = None,
     rule_authoring_factory: RuleAuthoringFactory | None = None,
+    merge_evidence_factory: MergeEvidenceFactory | None = None,
     knowledge_ingest_factory: KnowledgeIngestFactory | None = None,
+    ods_model_provisioner: OdsModelProvisioner | None = None,
+    notify: NotificationPort | None = None,
     alert_enrichment_agent: AlertEnrichmentAgent | None = None,
     layer_reader: LayerReader | None = None,
     budget: Budget | None = None,
@@ -508,9 +577,17 @@ def create_app(
     app.state.phi_detection_factory = phi_detection_factory
     app.state.mapping_suggestion_factory = mapping_suggestion_factory
     app.state.rule_authoring_factory = rule_authoring_factory
+    app.state.merge_evidence_factory = merge_evidence_factory
     # CF-V1-W1-26. See `KnowledgeIngestFactory`'s own comment for why `None`
     # is a valid, honest deployment shape rather than a misconfiguration.
     app.state.knowledge_ingest_factory = knowledge_ingest_factory
+    # CF-V3-E10-01. See `OdsModelProvisioner`'s own comment: `None` on the
+    # mock socket, a real closure over the live connection on rung 0.5.
+    app.state.ods_model_provisioner = ods_model_provisioner
+    # CF-V3-E10-03. `None` degrades the same way every other optional
+    # factory here does: the governance act still lands durably, a
+    # deployment with nothing to notify through simply notifies nobody.
+    app.state.notify = notify
     # CF-V2-E12-05. Built ONCE, not per caller — the same shape
     # `fingerprint_match_agent_for` builds `IncidentWorker` its agent in:
     # enrichment has no principal in hand any more than a batch failure does,
@@ -676,7 +753,7 @@ def create_app(
                 ),
             )
         except (registry_clone.CloneError, ValueError) as refused:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(refused)) from None
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(refused)) from None
 
         try:
             metadata.get(ObjectType.FEED, body.new_feed_id)
@@ -886,7 +963,7 @@ def create_app(
                 resumes_after=body.resumes_after,
             )
         except suspension.SuspensionError as refused:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(refused)) from None
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(refused)) from None
 
         metadata.record_suspension(event)
         audit.record(
@@ -1189,6 +1266,167 @@ def create_app(
                 "belongs in one of those.",
             )
         return _canonical_entity_out(found, with_fields=True)
+
+    # ── the ODS model contract browser · CF-V3-E10-02 ────────────────────────
+    #
+    # NOT `/api/canonical` above: that browser projects whatever is deployed
+    # plus the glossary — this one reads the GOVERNED, versioned truth E10-01
+    # deploys (`core.registry.ods_model`), and only ever the version a
+    # downstream team may actually build against — never a proposal still in
+    # review. "Present a proposed model change as current before its
+    # release" is the don't every route here is built to make impossible.
+
+    @app.get(f"{API_PREFIX}/ods-model", response_model=OdsModelSummaryOut, tags=["registry"])
+    def ods_model_summary(
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> OdsModelSummaryOut:
+        history = metadata.history(ObjectType.ODS_MODEL, "silver_ods")
+        published = ods_contract.latest_published(history)
+        if published is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                "no published ODS model yet — nothing has cleared review.",
+            )
+        model = from_governed(published)
+        return OdsModelSummaryOut(
+            version=model.version,
+            published_by=published.approved_by.subject if published.approved_by else "",
+            published_ts=published.approved_ts or published.created_ts,
+            entities=[entity.name for entity in model.entities],
+        )
+
+    @app.get(
+        f"{API_PREFIX}/ods-model/versions",
+        response_model=list[OdsVersionOut],
+        tags=["registry"],
+    )
+    def ods_model_versions(
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> list[OdsVersionOut]:
+        """Every version, newest first — Draft, In Review, Approved,
+        Published and Retired alike, each labelled by its real state so a
+        proposal never reads as live."""
+        history = metadata.history(ObjectType.ODS_MODEL, "silver_ods")
+        if not history:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no ODS model has been drafted yet.")
+        current = ods_contract.latest_published(history)
+        return [
+            OdsVersionOut(
+                version=obj.version,
+                lifecycle_state=obj.lifecycle_state.value,
+                created_by_subject=obj.created_by.subject,
+                created_by_name=obj.created_by.display_name,
+                created_ts=obj.created_ts,
+                approved_by_subject=obj.approved_by.subject if obj.approved_by else None,
+                approved_ts=obj.approved_ts,
+                is_current=current is not None and obj.version == current.version,
+            )
+            for obj in reversed(history)
+        ]
+
+    @app.get(
+        f"{API_PREFIX}/ods-model/versions/diff",
+        response_model=OdsChangelogOut,
+        tags=["registry"],
+    )
+    def ods_model_changelog(
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        from_version: int | None = None,
+        to_version: int | None = None,
+    ) -> OdsChangelogOut:
+        """ "Show 'what changed and why' between any two model versions in
+        terms a consumer understands." The "why" is the reviewer's and
+        approver's own recorded rationale for the TARGET version
+        (`AuditEntry.detail` — the same comment E10-01's worker already
+        requires and records, never a field invented for this view).
+
+        Defaults to the previous version against the latest, mirroring the
+        generic `/api/objects/{type}/{id}/diff` convention (CF-V1-E3-04):
+        that is the comparison asked for nine times in ten.
+        """
+        history = metadata.history(ObjectType.ODS_MODEL, "silver_ods")
+        if len(history) < 2 and (from_version is None or to_version is None):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"silver_ods has only {len(history)} version — there is nothing to compare it "
+                "with yet.",
+            )
+        by_version = {obj.version: obj for obj in history}
+        left = by_version.get(from_version if from_version is not None else history[-2].version)
+        right = by_version.get(to_version if to_version is not None else history[-1].version)
+        if left is None or right is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+
+        changes = diff(from_governed(left), from_governed(right))
+        rationale = "; ".join(
+            entry.detail
+            for entry in reversed(metadata.read_audit(object_id="silver_ods"))
+            if entry.version == right.version
+            and entry.detail
+            and entry.action in ("transition:pending_review", "transition:approved")
+        )
+        return OdsChangelogOut(
+            from_version=changes.from_version,
+            to_version=changes.to_version,
+            rationale=rationale,
+            added=[_ods_field_change_out(c) for c in changes.added],
+            removed=[_ods_field_change_out(c) for c in changes.removed],
+            retyped=[
+                _ods_field_change_out(c) for c in changes.changes if c.kind is ChangeKind.RETYPED
+            ],
+        )
+
+    @app.get(
+        f"{API_PREFIX}/ods-model/{{entity}}",
+        response_model=OdsContractPageOut,
+        tags=["registry"],
+    )
+    def ods_model_contract_page(
+        entity: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> OdsContractPageOut:
+        """The stable page E10-02 asks for: "every entity a stable contract
+        page downstream teams can link to." Keyed by entity name alone, so
+        the link a downstream team bookmarks today still resolves after the
+        model moves to v4.
+
+        Pending removals are computed against the mapping registry HERE, at
+        read time — "lineage lists the consumers on the proposal
+        automatically" — never left for the author to remember to mention.
+        """
+        history = metadata.history(ObjectType.ODS_MODEL, "silver_ods")
+        published = ods_contract.latest_published(history)
+        if published is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no published ODS model yet.")
+        model = from_governed(published)
+        try:
+            model.entity(entity)
+        except KeyError:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"the published ODS model has no entity {entity!r}.",
+            ) from None
+
+        mappings = metadata.list(ObjectType.MAPPING)
+        pending = ods_contract.pending_version(history)
+        notices: tuple[ods_contract.DeprecationNotice, ...] = ()
+        if pending is not None:
+            notices = ods_contract.deprecations_in(diff(model, from_governed(pending)), mappings)
+        page = ods_contract.contract_page(model, entity, mappings, pending_deprecations=notices)
+        return OdsContractPageOut(
+            entity=page.entity,
+            model_version=page.model_version,
+            columns=[_ods_column_out(c) for c in page.columns],
+            consumers={
+                column: [_ods_consumer_out(c) for c in consumers]
+                for column, consumers in page.consumers.items()
+            },
+            pending_deprecations=[_ods_deprecation_out(n) for n in page.pending_deprecations],
+        )
 
     # ── the mapping studio · CF-V1-E6-03 ─────────────────────────────────────
     #
@@ -2008,6 +2246,403 @@ def create_app(
             ) from None
         rows = _sample_rows(metadata, request.app.state.storage, feed_id, body.profile_id)
         return _preview_pack_out(feed_id, rules, rows, _contract_of(metadata, feed_id))
+
+    # ── CF-V3-E9-03 · merge/split evidence card — R4, human-always ───────────
+
+    @app.post(
+        f"{API_PREFIX}/identity/merge-preview",
+        response_model=EvidenceCardOut,
+        tags=["identity-resolution"],
+    )
+    def preview_merge(
+        body: MergeCandidateIn,
+        request: Request,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> EvidenceCardOut:
+        """The deterministic preview, plus an AI-narrated evidence card.
+
+        `plan_merge`/`compare_demographics` run regardless of whether an LLM
+        pin is fitted — a steward reviewing a merge always sees the complete,
+        correct preview; only the narrative sentence is missing when no model
+        is configured. VIEW, not APPROVE: reviewing a candidate is reading.
+        """
+        try:
+            comparison = DemographicComparison(
+                fields={k: FieldComparison(v) for k, v in body.demographic_comparison.items()}
+            )
+        except ValueError as bad:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(bad)) from None
+
+        try:
+            plan = plan_merge(
+                merged_away_member_id=body.merged_away_member_id,
+                survivor_member_id=body.survivor_member_id,
+                merged_away_rows=tuple(
+                    SatelliteRow(
+                        entity=r.entity,
+                        record_id=r.record_id,
+                        owner_member_id=r.owner_member_id,
+                        content_key=r.content_key,
+                    )
+                    for r in body.merged_away_rows
+                ),
+                survivor_rows=tuple(
+                    SatelliteRow(
+                        entity=r.entity,
+                        record_id=r.record_id,
+                        owner_member_id=r.owner_member_id,
+                        content_key=r.content_key,
+                    )
+                    for r in body.survivor_rows
+                ),
+            )
+        except MergeError as bad:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(bad)) from None
+
+        agent_factory = request.app.state.merge_evidence_factory
+        if agent_factory is None:
+            card = EvidenceCardOut(
+                demographic_comparison=body.demographic_comparison,
+                plan=_merge_plan_out(plan),
+                narrative="",
+                grounded_fields=[],
+                model_called=False,
+            )
+        else:
+            evidence = agent_factory(metadata).prepare(
+                plan=plan, comparison=comparison, caller=principal.as_actor()
+            )
+            card = EvidenceCardOut(
+                demographic_comparison=body.demographic_comparison,
+                plan=_merge_plan_out(plan),
+                narrative=evidence.narrative,
+                grounded_fields=list(evidence.grounded_fields),
+                model_called=evidence.model_called,
+            )
+        return card
+
+    @app.post(
+        f"{API_PREFIX}/identity/merge-preview/execute",
+        response_model=MergeExecuteOut,
+        tags=["identity-resolution"],
+    )
+    def execute_merge_preview(
+        body: MergeExecuteIn,
+        principal: Annotated[Principal, Depends(require(Action.APPROVE))],
+        audit: Audit,
+    ) -> MergeExecuteOut:
+        """R4: APPROVE, and only APPROVE — the same permission a publish
+        requires, held by the data steward and nobody else (plate 14). This
+        route authorizes; it performs no write. The actual repointing is a
+        worker's I/O, driven by the `AuthorizedMerge` this returns.
+        """
+        plan = MergePlan(
+            merged_away_member_id=body.plan.merged_away_member_id,
+            survivor_member_id=body.plan.survivor_member_id,
+            repoints=tuple(
+                SatelliteRepoint(
+                    entity=r.entity,
+                    record_id=r.record_id,
+                    from_member_id=r.from_member_id,
+                    to_member_id=r.to_member_id,
+                )
+                for r in body.plan.repoints
+            ),
+            collapses=tuple(
+                DuplicateCollapse(
+                    entity=c.entity,
+                    kept_record_id=c.kept_record_id,
+                    collapsed_record_id=c.collapsed_record_id,
+                )
+                for c in body.plan.collapses
+            ),
+        )
+        if plan.fingerprint != body.plan.fingerprint:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "the plan sent for execution does not match its own fingerprint — reload the "
+                "preview and try again.",
+            )
+        try:
+            authorized = execute_merge(plan, steward_approval_id=body.steward_approval_id)
+        except UnapprovedMergeExecutionError as refused:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(refused)) from None
+
+        audit.record(
+            object_type=ObjectType.RUNBOOK,
+            object_id=f"merge:{plan.merged_away_member_id}->{plan.survivor_member_id}",
+            action="approve_merge",
+            actor=principal.as_actor(),
+            detail=f"approval={authorized.steward_approval_id} fingerprint={plan.fingerprint}",
+        )
+        return MergeExecuteOut(
+            plan=body.plan,
+            steward_approval_id=authorized.steward_approval_id,
+            authorized_ts=datetime.now(UTC),
+        )
+
+    # ── CF-V3-E9-02 · the identity exception queue ───────────────────────
+
+    # A bounded scan, not a paged one — a queue small enough to fit a
+    # steward's morning review is small enough to fold in one call. A real
+    # high-volume deployment paginating this is a contained follow-up to
+    # the read path noted in `PostgresMetadataDb`, not a redesign here.
+    identity_exception_queue_span = 500
+
+    def _identity_exception_out(exc: IdentityException) -> IdentityExceptionOut:
+        return IdentityExceptionOut(
+            key=exc.key,
+            source_system=exc.source_system,
+            source_member_id=exc.source_member_id,
+            state=exc.state.value,
+            assigned_to=exc.assigned_to,
+            opened_ts=exc.opened_ts,
+            latest_ts=exc.latest_ts,
+            occurrence_count=exc.occurrence_count,
+            occurrences=[
+                IdentityExceptionOccurrenceOut(
+                    batch_id=o.batch_id,
+                    outcome=o.outcome.value,
+                    occurred_ts=o.occurred_ts,
+                    detail=o.detail,
+                )
+                for o in exc.occurrences
+            ],
+        )
+
+    @app.get(
+        f"{API_PREFIX}/identity/exceptions",
+        response_model=list[IdentityExceptionOut],
+        tags=["identity-resolution"],
+    )
+    def list_identity_exceptions_route(
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        source_system: str | None = None,
+        state: str | None = None,
+    ) -> list[IdentityExceptionOut]:
+        """CF-V3-E9-02 — the queue, oldest-opened first: the longest-standing
+        problem is the one a steward should see first, not the newest."""
+        wanted_state: ExceptionState | None = None
+        if state is not None:
+            try:
+                wanted_state = ExceptionState(state)
+            except ValueError:
+                states = ", ".join(s.value for s in ExceptionState)
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"{state!r} is not an exception state. This surface offers {states}.",
+                ) from None
+        rows = metadata.list_identity_exceptions(
+            source_system=source_system,
+            state=wanted_state,
+            limit=identity_exception_queue_span,
+        )
+        return [_identity_exception_out(exc) for exc in rows]
+
+    @app.get(
+        f"{API_PREFIX}/identity/exceptions/health",
+        response_model=list[QueueHealthOut],
+        tags=["identity-resolution"],
+    )
+    def identity_exception_queue_health(
+        metadata: Store, _: Annotated[Principal, Depends(require(Action.VIEW))]
+    ) -> list[QueueHealthOut]:
+        """ "Show queue health (volume, aging, resolution rate) per source, so
+        a payer sending bad demographics becomes visible." — CF-V3-E9-02.
+        Declared BEFORE `/{key}` — a literal path segment must never be
+        swallowed by a path parameter that would otherwise match first.
+        """
+        rows = metadata.list_identity_exceptions(limit=identity_exception_queue_span)
+        health = health_by_source(rows, sla=IDENTITY_EXCEPTION_SLA, now=datetime.now(UTC))
+        return [
+            QueueHealthOut(
+                source_system=h.source_system,
+                open_count=h.open_count,
+                breached_count=h.breached_count,
+                resolved_count=h.resolved_count,
+            )
+            for h in health
+        ]
+
+    @app.get(
+        f"{API_PREFIX}/identity/exceptions/{{key}}",
+        response_model=IdentityExceptionOut,
+        tags=["identity-resolution"],
+    )
+    def get_identity_exception_route(
+        key: str, metadata: Store, _: Annotated[Principal, Depends(require(Action.VIEW))]
+    ) -> IdentityExceptionOut:
+        try:
+            exc = metadata.get_identity_exception(key)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        return _identity_exception_out(exc)
+
+    @app.post(
+        f"{API_PREFIX}/identity/exceptions/{{key}}/assign",
+        response_model=IdentityExceptionOut,
+        tags=["identity-resolution"],
+    )
+    def assign_identity_exception_route(
+        key: str,
+        body: AssignIdentityExceptionIn,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.ASSIGN))],
+    ) -> IdentityExceptionOut:
+        try:
+            current = metadata.get_identity_exception(key)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        try:
+            moved = assign_exception(current, to=body.assigned_to)
+        except IdentityExceptionError as refused:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(refused)) from None
+        # The domain ledger IS this action's audit trail — actor, timestamp
+        # and action on every row, the same reason `ops.incident_event`
+        # needs no second record of its own decisions. A generic AuditEntry
+        # would also require an ObjectType and a version this queue has
+        # neither of: an identity exception spans every feed a source
+        # touches and is never itself a governed, versioned object.
+        metadata.record_identity_exception_event(
+            IdentityExceptionEvent(
+                event_id=str(uuid4()),
+                exception_key=key,
+                action=ExceptionEventAction.ASSIGNED,
+                source_system=current.source_system,
+                source_member_id=current.source_member_id,
+                occurred_ts=datetime.now(UTC),
+                actor_subject=principal.subject,
+                detail=body.assigned_to,
+            )
+        )
+        return _identity_exception_out(moved)
+
+    @app.post(
+        f"{API_PREFIX}/identity/exceptions/{{key}}/resolve",
+        response_model=IdentityExceptionOut,
+        tags=["identity-resolution"],
+    )
+    def resolve_identity_exception_route(
+        key: str,
+        body: ResolveIdentityExceptionIn,
+        metadata: Store,
+        principal: Annotated[Principal, Depends(require(Action.ACKNOWLEDGE))],
+    ) -> IdentityExceptionOut:
+        """ "This queue prepares decisions; the next story governs making
+        them" is a fact about which core function exists, not a check this
+        route performs — `resolve()` itself has no refusal path."""
+        try:
+            current = metadata.get_identity_exception(key)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        moved = resolve_exception(current)
+        metadata.record_identity_exception_event(
+            IdentityExceptionEvent(
+                event_id=str(uuid4()),
+                exception_key=key,
+                action=ExceptionEventAction.RESOLVED,
+                source_system=current.source_system,
+                source_member_id=current.source_member_id,
+                occurred_ts=datetime.now(UTC),
+                actor_subject=principal.subject,
+                detail=body.note,
+            )
+        )
+        return _identity_exception_out(moved)
+
+    # ── CF-V3-E9-04 · daily identity accounting and coverage telemetry ────
+
+    @app.get(
+        f"{API_PREFIX}/identity/telemetry/sources",
+        response_model=list[str],
+        tags=["identity-resolution"],
+    )
+    def identity_telemetry_sources(
+        metadata: Store, _: Annotated[Principal, Depends(require(Action.VIEW))]
+    ) -> list[str]:
+        """Every `source_system` a registered feed names — the scorecard's
+        own row list, read from the feed registry rather than a second place
+        sources are declared. A source with no feed registered yet has
+        nothing to show a coverage history for regardless."""
+        sources = {
+            str(feed.body.get("source_system", "")) for feed in metadata.list(ObjectType.FEED)
+        }
+        return sorted(sources - {""})
+
+    @app.get(
+        f"{API_PREFIX}/identity/telemetry/coverage/{{source_system}}",
+        response_model=list[CoverageSnapshotOut],
+        tags=["identity-resolution"],
+    )
+    def coverage_history_route(
+        source_system: str,
+        control: Control,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        days: int = 30,
+    ) -> list[CoverageSnapshotOut]:
+        """Newest first. `is_regression`/`drop_points` compare each day
+        against the one immediately before it IN THIS SAME LIST — "given a
+        source's match rate drops 4 points overnight" is answerable from one
+        response, never a second round-trip to fetch yesterday.
+        """
+        history = control.coverage_history(source_system, days=days)
+        # Newest first, so `history[i + 1]` is the recorded day immediately
+        # before `history[i]` — `detect_regressions` compares exactly one
+        # day against exactly one baseline, so each pair is checked on its
+        # own rather than folding the whole history into one dict lookup.
+        regressions: dict[str, CoverageRegression] = {}
+        for i in range(len(history) - 1):
+            found = detect_regressions((history[i],), (history[i + 1],))
+            if found:
+                regressions[history[i].business_date] = found[0]
+        return [
+            CoverageSnapshotOut(
+                source_system=s.source_system,
+                business_date=s.business_date,
+                total=s.total,
+                with_link_id=s.with_link_id,
+                with_our_id=s.with_our_id,
+                with_both=s.with_both,
+                link_id_coverage_pct=s.link_id_coverage_pct,
+                our_id_coverage_pct=s.our_id_coverage_pct,
+                both_coverage_pct=s.both_coverage_pct,
+                is_regression=s.business_date in regressions,
+                drop_points=(
+                    regressions[s.business_date].drop_points
+                    if s.business_date in regressions
+                    else None
+                ),
+            )
+            for s in history
+        ]
+
+    @app.get(
+        f"{API_PREFIX}/identity/telemetry/parity/{{source_system}}",
+        response_model=list[ParityCheckOut],
+        tags=["identity-resolution"],
+    )
+    def parity_history_route(
+        source_system: str,
+        control: Control,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+        days: int = 30,
+    ) -> list[ParityCheckOut]:
+        """ "Automate the parity check ... into a standing daily scorecard."
+        Newest first — the same ordering `coverage_history_route` uses."""
+        history = control.parity_check_history(source_system, days=days)
+        return [
+            ParityCheckOut(
+                source_system=p.source_system,
+                business_date=p.business_date,
+                checked=p.checked,
+                matched=p.matched,
+                mismatched=p.mismatched,
+                match_rate_pct=p.match_rate_pct,
+            )
+            for p in history
+        ]
 
     # ── CF-V1-E7-03 · a tested sentence becomes executable policy ────────
 
@@ -2965,6 +3600,18 @@ def create_app(
         if object_type is ObjectType.MAPPING:
             warning = _reprocess_candidates_after_mapping_publish(
                 metadata, control, profile, object_id, principal, audit
+            )
+            if warning is not None:
+                result = result.model_copy(update={"warnings": [*result.warnings, warning]})
+        if object_type is ObjectType.ODS_MODEL:
+            warning = _provision_ods_model_after_publish(
+                metadata, object_id, principal, app.state.ods_model_provisioner, audit
+            )
+            if warning is not None:
+                result = result.model_copy(update={"warnings": [*result.warnings, warning]})
+        if object_type is ObjectType.ODS_BATCH_CERTIFICATION:
+            warning = _notify_consumers_after_ods_batch_certification_publish(
+                metadata, object_id, principal, app.state.notify, audit
             )
             if warning is not None:
                 result = result.model_copy(update={"warnings": [*result.warnings, warning]})
@@ -4234,7 +4881,7 @@ def create_app(
         try:
             return _rows_out(invoke(context, tool_name, dict(request.query_params)))
         except ToolError as bad:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(bad)) from None
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(bad)) from None
 
     # ── the intelligence plane ───────────────────────────────────────────────
 
@@ -4488,9 +5135,9 @@ def _record_from(body: FeedIn) -> feed_registry.FeedRecord:
         # A pattern that does not match a real filename is refused BEFORE save,
         # with the side-by-side diff — incident #1 was a leading underscore
         # nobody could see in a regex.
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(mismatch)) from None
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(mismatch)) from None
     except feed_registry.FeedValidationError as invalid:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(invalid)) from None
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(invalid)) from None
 
 
 def _operations_body(body: FeedIn) -> dict[str, Any]:
@@ -4507,7 +5154,7 @@ def _operations_body(body: FeedIn) -> dict[str, Any]:
     try:
         return operations_registry.FeedOperations.from_body(body.operations.model_dump()).as_body()
     except (operations_registry.OperationsValidationError, ValueError) as invalid:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(invalid)) from None
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(invalid)) from None
 
 
 def _readiness_out(obj: GovernedObject) -> ReadinessOut:
@@ -4600,7 +5247,7 @@ def _source_from(body: SourceIn) -> source_registry.SourceRecord:
             notes=body.notes,
         )
     except (source_registry.SourceValidationError, ValueError) as invalid:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(invalid)) from None
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(invalid)) from None
 
 
 def _packet_for(metadata: MetadataDbPort, target: GovernedObject) -> ImpactPacket:
@@ -5229,6 +5876,108 @@ def _embed_published_document(
     return None
 
 
+def _provision_ods_model_after_publish(
+    metadata: MetadataDbPort,
+    object_id: str,
+    principal: Principal,
+    provisioner: OdsModelProvisioner | None,
+    audit: AuditLog,
+) -> str | None:
+    """CF-V3-E10-01 — publishing an ODS model is what makes its tables real.
+
+    The SAME AFTER-THE-TRANSITION shape `_embed_published_runbook` documents
+    at length: called once `_governance_act` has already persisted Published
+    (the discrepancy gate already refused, inside `core.registry.ods_model.
+    refuse_undecided`, anything this route would otherwise be asked to
+    provision with an open question), degrading to a WARNING rather than a
+    500 on failure — the governed object is durably Published either way,
+    and a 500 here would be a lie about what the lifecycle engine already
+    committed. `provisioner=None` degrades silently: on the mock socket
+    there is no live `silver_ods` schema to provision at all, and the
+    generic governance API still moves the object exactly as it would with
+    one fitted.
+
+    CAUGHT BROADLY, DELIBERATELY. Unlike `EmbeddingFailedError`, a failed
+    `CREATE TABLE` has no CINQFLOW-level type of its own — it is whatever the
+    Postgres driver raises. Inventing a wrapper exception for one call site
+    is more machinery than a first deploy needs; the statements themselves
+    are idempotent (`IF NOT EXISTS`), so the safe recovery from a failure
+    here is simply to provision again, which a retry of this exact route (or
+    the installer script directly) already does correctly.
+    """
+    if provisioner is None:
+        return None
+    published = metadata.get(ObjectType.ODS_MODEL, object_id)
+    model = from_governed(published)
+    try:
+        provisioner(model)
+    except Exception as failure:  # broad on purpose — see docstring, no narrower type exists
+        detail = f"provision-on-publish failed: {failure}"
+        audit.record(
+            object_type=ObjectType.ODS_MODEL,
+            object_id=object_id,
+            version=published.version,
+            action="provision_failed:publish",
+            actor=principal.as_actor(),
+            detail=detail,
+        )
+        return detail
+    return None
+
+
+def _notify_consumers_after_ods_batch_certification_publish(
+    metadata: MetadataDbPort,
+    object_id: str,
+    principal: Principal,
+    notify: NotificationPort | None,
+    audit: AuditLog,
+) -> str | None:
+    """CF-V3-E10-03 — "notify registered consumers on publication, per the
+    registry's dependency declarations." The SAME after-the-transition
+    shape `_provision_ods_model_after_publish` uses: called once the
+    Steward's approval has already made the object durably Published, so a
+    delivery failure here is a WARNING, never a reason to make the caller
+    believe the certification did not happen. `notify=None` degrades
+    silently, same reasoning as `provisioner=None`.
+
+    Fires HERE, not at draft time — "not after the break" cuts both ways:
+    a consumer told about data still awaiting a Steward's sign-off is told
+    about data that might yet be rejected.
+    """
+    if notify is None:
+        return None
+    published = metadata.get(ObjectType.ODS_BATCH_CERTIFICATION, object_id)
+    try:
+        record = ods_batch_certification.from_governed(published)
+        model = from_governed(metadata.get(ObjectType.ODS_MODEL, "silver_ods"))
+        entity = model.entity("Members")
+        mappings = metadata.list(ObjectType.MAPPING)
+        consumers = ods_contract.all_consumers_of(
+            entity.name, tuple(c.name for c in entity.columns), mappings
+        )
+        names = sorted({name for consumer in consumers for name in consumer.business_consumers})
+        if names:
+            notify.alert(
+                Alert(
+                    severity=Severity.INFO,
+                    summary=f"{entity.name} published for batch {record.batch_id}",
+                    detail=f"Registered consumers: {', '.join(names)}",
+                )
+            )
+    except Exception as failure:  # broad on purpose — see docstring, no narrower type exists
+        detail = f"consumer-notification-on-publish failed: {failure}"
+        audit.record(
+            object_type=ObjectType.ODS_BATCH_CERTIFICATION,
+            object_id=object_id,
+            version=published.version,
+            action="notify_failed:publish",
+            actor=principal.as_actor(),
+            detail=detail,
+        )
+        return detail
+    return None
+
+
 def _prior_published_version(
     metadata: MetadataDbPort, object_type: ObjectType, object_id: str, *, before: int
 ) -> GovernedObject | None:
@@ -5588,6 +6337,40 @@ def _canonical_entity_out(
     )
 
 
+def _ods_column_out(column: Column) -> OdsColumnOut:
+    return OdsColumnOut(
+        name=column.name,
+        type=column.type.value,
+        nullable=column.nullable,
+        is_phi=column.is_phi,
+        comment=column.comment,
+    )
+
+
+def _ods_consumer_out(consumer: ods_contract.Consumer) -> OdsConsumerOut:
+    return OdsConsumerOut(
+        mapping_id=consumer.mapping_id, business_consumers=list(consumer.business_consumers)
+    )
+
+
+def _ods_field_change_out(change: FieldChange) -> OdsFieldChangeOut:
+    return OdsFieldChangeOut(
+        entity=change.entity,
+        column=change.column,
+        kind=change.kind.value,
+        was=change.was,
+        now=change.now,
+    )
+
+
+def _ods_deprecation_out(notice: ods_contract.DeprecationNotice) -> OdsDeprecationOut:
+    return OdsDeprecationOut(
+        change=_ods_field_change_out(notice.change),
+        consumers=[_ods_consumer_out(c) for c in notice.consumers],
+        is_breaking=notice.is_breaking,
+    )
+
+
 def _suspension_out(state: suspension.Suspension) -> SuspensionOut:
     now = datetime.now(UTC)
     return SuspensionOut(
@@ -5769,6 +6552,42 @@ def _profile_out(record: FileProfileRecord, principal: Principal) -> FileProfile
         profiled_ts=record.profiled_ts,
         citation_id=str(profile.citation),
         route=profile.citation.route,
+        structure_paths=[
+            StructurePathOut(
+                path=p.path,
+                documents_with_path=p.documents_with_path,
+                documents_total=p.documents_total,
+                fill_rate=p.fill_rate,
+                is_array=p.is_array,
+                array_length_min=p.array_length_min,
+                array_length_max=p.array_length_max,
+                array_length_avg=p.array_length_avg,
+            )
+            for p in profile.structure_paths
+        ],
+        flatten_proposals=[
+            FlattenProposalOut(
+                source_path=p.source_path,
+                proposed_entity=p.proposed_entity,
+                element_count_min=p.element_count_min,
+                element_count_max=p.element_count_max,
+                description=p.description,
+            )
+            for p in profile.flatten_proposals
+        ],
+        fixed_width_layout=(
+            None
+            if profile.fixed_width_layout is None
+            else FixedWidthLayoutOut(
+                source=profile.fixed_width_layout.source,
+                columns=[
+                    FixedWidthColumnOut(
+                        start=c.start, end=c.end, name=c.name, confidence=c.confidence
+                    )
+                    for c in profile.fixed_width_layout.columns
+                ],
+            )
+        ),
     )
 
 
@@ -5989,6 +6808,32 @@ def _masking_policy_out(proposal: Proposal) -> MaskingPolicyOut:
         pending_steward=[
             str(r.get("source_name")) for r in records if r.get("needs_steward_review")
         ],
+    )
+
+
+def _merge_plan_out(plan: MergePlan) -> MergePlanOut:
+    return MergePlanOut(
+        merged_away_member_id=plan.merged_away_member_id,
+        survivor_member_id=plan.survivor_member_id,
+        marked_merged=plan.marked_merged,
+        repoints=[
+            SatelliteRepointOut(
+                entity=r.entity,
+                record_id=r.record_id,
+                from_member_id=r.from_member_id,
+                to_member_id=r.to_member_id,
+            )
+            for r in plan.repoints
+        ],
+        collapses=[
+            DuplicateCollapseOut(
+                entity=c.entity,
+                kept_record_id=c.kept_record_id,
+                collapsed_record_id=c.collapsed_record_id,
+            )
+            for c in plan.collapses
+        ],
+        fingerprint=plan.fingerprint,
     )
 
 

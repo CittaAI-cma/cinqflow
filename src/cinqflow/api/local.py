@@ -47,13 +47,16 @@ from cinqflow.adapters.local.pg_layers import PostgresLayerReader
 from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
 from cinqflow.adapters.local.pg_sql_query import PostgresSqlQuery
 from cinqflow.adapters.mock.authn import StaticAuthn
+from cinqflow.adapters.mock.notification import ConsoleNotification
 from cinqflow.api import create_app
 from cinqflow.installer import profile as profile_module
 from cinqflow.installer.connectors import connectors_from
+from cinqflow.installer.ods_model import provision_ods_model
 from cinqflow.intelligence.demo import (
     BUDGET,
     agent_for,
     alert_enrichment_agent_for,
+    merge_evidence_agent_for,
     schema_inference_for,
 )
 
@@ -111,6 +114,19 @@ def build(profile_path: str = DEFAULT_PROFILE, landing_root: str | None = None) 
         layer_reader=layer_reader,
         agent_factory=agent_for,
         schema_inference_factory=schema_inference_for,
+        merge_evidence_factory=merge_evidence_agent_for,
+        # CF-V3-E10-01. Closes over the SAME connection every other Postgres
+        # pin here shares — publishing an ODS model through the generic
+        # governance API provisions its real `silver_ods` tables for real.
+        ods_model_provisioner=lambda model: provision_ods_model(connection, model),
+        # CF-V3-E10-03. No webhook URL is configured for this rung — the
+        # SAME "scripted intelligence, real data plane" posture this
+        # module's own docstring already names for the agents below:
+        # wiring a real Slack/webhook target is a separate integration
+        # pass, not a silent half-wire alongside a governance gate. Prints
+        # to stdout (`echo=True`) so a developer running this server sees
+        # a batch's publish notify for real, not merely "not configured".
+        notify=ConsoleNotification(echo=True),
         alert_enrichment_agent=alert_enrichment_agent_for(control, metadata),
         budget=BUDGET,
         profile=profile,

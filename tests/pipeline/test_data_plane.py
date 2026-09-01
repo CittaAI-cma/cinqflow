@@ -113,9 +113,16 @@ def test_bronze_accepts_inserts__it_is_append_only_not_read_only(
     plane: Connection,
 ) -> None:
     """The distinction matters: append-only preserves history, read-only would
-    make ingestion impossible."""
-    _insert_bronze_row(plane)
-    (count,) = plane.fetch_one("SELECT count(*) FROM bronze.members_raw") or (0,)
+    make ingestion impossible.
+
+    Scoped to this call's own batch. A bare `count(*)` would assert that the
+    ENTIRE table holds one row, which is a claim about the plane's history
+    rather than about whether the insert was accepted.
+    """
+    batch_id = _insert_bronze_row(plane)
+    (count,) = plane.fetch_one(
+        "SELECT count(*) FROM bronze.members_raw WHERE batch_id = %s", (batch_id,)
+    ) or (0,)
     assert count == 1
 
 
@@ -160,7 +167,7 @@ def test_a_drop_ledger_category_of_other_or_unknown_is_refused(
 
 def test_a_named_drop_reason_is_accepted(plane: Connection) -> None:
     """DQ-002 is a reason. It names the rule, and the rule names the column."""
-    _insert_recon(
+    batch_id = _insert_recon(
         plane,
         records_in=100,
         records_out=90,
@@ -169,7 +176,10 @@ def test_a_named_drop_reason_is_accepted(plane: Connection) -> None:
         drop_rule_id="DQ-002",
         drop_reason="Member First Name Not Null",
     )
-    row = plane.fetch_one("SELECT drop_rule_id FROM control.batch_reconciliation")
+    row = plane.fetch_one(
+        "SELECT drop_rule_id FROM control.batch_reconciliation WHERE batch_id = %s",
+        (batch_id,),
+    )
     assert row is not None and row[0] == "DQ-002"
 
 
@@ -234,13 +244,25 @@ def test_an_error_category_outside_the_fixed_set_is_refused(plane: Connection) -
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-def _insert_bronze_row(plane: Connection) -> None:
+def _insert_bronze_row(plane: Connection) -> str:
+    """Insert one Bronze row under a batch id UNIQUE TO THIS CALL, and return it.
+
+    The batch id used to be the literal '8842', which made every assertion
+    about this row an assertion about the whole table. That held only while the
+    plane was empty — and this plane is the real one, so the moment it carried
+    the client's actual roster (568,867 Bronze rows) a correct test began
+    failing on a count it never meant to measure. Bronze is append-only at the
+    database layer, so "just clear it first" is not available: the fix is for
+    the test to say WHICH rows it is talking about.
+    """
+    batch_id = f"test-{uuid.uuid4().hex[:12]}"
     plane.execute(
         "INSERT INTO bronze.members_raw (bronze_id, feed_id, row_number, raw_row, "
         "source_system, ingestion_ts, batch_id, record_hash, created_ts) "
-        "VALUES (%s, 'fidelis-downstate-roster', 1, '{}', 'fidelis', now(), '8842', 'h', now())",
-        (str(uuid.uuid4()),),
+        "VALUES (%s, 'fidelis-downstate-roster', 1, '{}', 'fidelis', now(), %s, 'h', now())",
+        (str(uuid.uuid4()), batch_id),
     )
+    return batch_id
 
 
 def _insert_recon(
@@ -252,11 +274,21 @@ def _insert_recon(
     drops: int,
     drop_rule_id: str | None = None,
     drop_reason: str | None = None,
-) -> None:
+) -> str:
+    """Insert one reconciliation row under a batch id UNIQUE TO THIS CALL.
+
+    Same reason as `_insert_bronze_row`: the batch id used to be the literal
+    '8842', so a caller reading the row back with an unqualified `SELECT` was
+    reading an arbitrary row of the whole table. That is correct on an empty
+    plane and wrong on this one, which carries the client's real reconciliation
+    history — 559 rows and counting.
+    """
+    batch_id = f"test-{uuid.uuid4().hex[:12]}"
     plane.execute(
         "INSERT INTO control.batch_reconciliation (recon_id, batch_id, stage_name, "
         "records_in, records_out, quarantined, attributed_drops, drop_rule_id, drop_reason, "
         "balanced, reconciled_ts) "
-        "VALUES (gen_random_uuid(), '8842', 'silver_raw', %s, %s, %s, %s, %s, %s, true, now())",
-        (records_in, records_out, quarantined, drops, drop_rule_id, drop_reason),
+        "VALUES (gen_random_uuid(), %s, 'silver_raw', %s, %s, %s, %s, %s, %s, true, now())",
+        (batch_id, records_in, records_out, quarantined, drops, drop_rule_id, drop_reason),
     )
+    return batch_id

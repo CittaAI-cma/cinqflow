@@ -52,6 +52,20 @@ class ObjectType(StrEnum):
     #: source; this object earns that gate through the SAME steward-approval
     #: route glossary terms and runbooks already travel — no side door.
     KNOWLEDGE_DOCUMENT = "knowledge_document"
+    #: CF-V3-E10-01. The canonical Silver ODS model — member, claims and ADT
+    #: domains — deployed as versioned, managed truth instead of a contested
+    #: spreadsheet. `core.registry.ods_model.render()` turns the PUBLISHED
+    #: version into the same Schema/Table/Column vocabulary every other
+    #: data-layer table is declared in, so it travels the SAME lifecycle
+    #: (Draft -> Approved -> Published) rather than a private status field.
+    ODS_MODEL = "ods_model"
+    #: CF-V3-E10-03. G5 — one batch's Silver ODS publication decision.
+    #: `object_id` is the `batch_id`, not a config's own name: this is the
+    #: FIRST governed object keyed to something the platform runs rather
+    #: than something a person authored, and it travels the SAME lifecycle
+    #: (`core.registry.batch_certification.as_governed`) rather than a new
+    #: engine, for the reason ADR-0006 gives for every object before it.
+    ODS_BATCH_CERTIFICATION = "ods_batch_certification"
 
 
 @unique

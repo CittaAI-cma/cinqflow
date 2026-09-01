@@ -21,31 +21,24 @@ There is no autonomy path for this pin, ever.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
-from decimal import Decimal
-from enum import StrEnum, unique
 from typing import Protocol, runtime_checkable
 
+# MatchOutcome and CrosswalkEntry live in core/identity, not here: Wave 3's
+# G4 accounting (core.identity.IdentityDisposition) needs to reason about
+# them, and core may never import a port (Law 1's layering, the other
+# direction — ports may depend on core, core may not depend on ports). A pin
+# still NAMES its verbs and errors here; the data shapes that cross it are
+# core's, the same way schema_spec.TypeName is core's and every adapter
+# imports it, never the reverse.
+from cinqflow.core.identity import CrosswalkEntry, MatchOutcome
 
-@unique
-class MatchOutcome(StrEnum):
-    RESOLVED = "resolved"
-    UNRESOLVED = "unresolved"  # waits, visibly. Never loads.
-    FAILED = "failed"
-
-
-@dataclass(frozen=True)
-class CrosswalkEntry:
-    """bridge_member_source_to_verato — source identifiers retained beside
-    every surrogate key, so a row can always be traced to the file it came from."""
-
-    source_system: str
-    source_member_id: str
-    internal_member_id: str
-    verato_person_id: str | None
-    batch_id: str
-    match_confidence_score: Decimal | None = None
-    outcome: MatchOutcome = MatchOutcome.UNRESOLVED
+__all__ = [
+    "CrosswalkEntry",
+    "IdentityError",
+    "IdentityPort",
+    "MatchOutcome",
+    "UnapprovedMergeError",
+]
 
 
 class IdentityError(RuntimeError):

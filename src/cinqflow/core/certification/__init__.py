@@ -70,6 +70,14 @@ class CheckKind(StrEnum):
     SCHEMA_CONTRACT = "schema_contract"
     SLA_WINDOW = "sla_window"
     DROP_LEDGER = "drop_ledger"
+    #: CF-V3-E10-03 — G5. Not added to `MANDATORY`: that set governs every
+    #: batch on the platform, most of which never touch Silver ODS at all.
+    #: `certify()`'s own rule already makes ANY completed-and-failed check
+    #: block certification (`Certification.failed`, checked regardless of
+    #: mandatory membership) — so the ODS certification gate simply
+    #: includes this check in what it passes to `certify()`, and the
+    #: existing policy does the rest with no change to it.
+    RELATIONSHIP_INTEGRITY = "relationship_integrity"
 
 
 #: Checks whose failure can never be waived. Balance and the drop ledger are

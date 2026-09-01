@@ -906,3 +906,112 @@ export interface EnrichedAlert {
   refusals: string[];
   cost_usd: string;
 }
+
+// ── merge/split evidence card · R4, human-always · CF-V3-E9-03 ──────────────
+
+export interface SatelliteRepoint {
+  entity: string;
+  record_id: string;
+  from_member_id: string;
+  to_member_id: string;
+}
+
+export interface DuplicateCollapse {
+  entity: string;
+  kept_record_id: string;
+  collapsed_record_id: string;
+}
+
+/** The deterministic preview. `fingerprint` is what `/execute` checks the
+ *  approved plan against — a stale form resubmitted after the candidate data
+ *  changed is refused rather than silently executed against new facts. */
+export interface MergePlan {
+  merged_away_member_id: string;
+  survivor_member_id: string;
+  marked_merged: string;
+  repoints: SatelliteRepoint[];
+  collapses: DuplicateCollapse[];
+  fingerprint: string;
+}
+
+/** `narrative`/`grounded_fields` are empty together when no model answered —
+ *  never rendered as if a narrative failed to load; the plan below is
+ *  complete either way. */
+export interface EvidenceCard {
+  demographic_comparison: Record<string, "match" | "differs" | "similar">;
+  plan: MergePlan;
+  narrative: string;
+  grounded_fields: string[];
+  model_called: boolean;
+}
+
+export interface MergeExecuteResult {
+  plan: MergePlan;
+  steward_approval_id: string;
+  authorized_ts: string;
+}
+
+// ── identity exception queue · CF-V3-E9-02 ───────────────────────────────────
+
+/** One batch's contribution — never merged away, so a steward can see that
+ *  the same person has failed three times, not just that they have. */
+export interface IdentityExceptionOccurrence {
+  batch_id: string;
+  outcome: "resolved" | "unresolved" | "failed";
+  occurred_ts: string;
+  detail: string;
+}
+
+/** Current state of one person's identity problem, folded from the ledger.
+ *  `key` is what every other route on this queue addresses it by. */
+export interface IdentityException {
+  key: string;
+  source_system: string;
+  source_member_id: string;
+  state: "open" | "assigned" | "escalated" | "resolved";
+  assigned_to: string | null;
+  opened_ts: string;
+  latest_ts: string;
+  occurrence_count: number;
+  occurrences: IdentityExceptionOccurrence[];
+}
+
+/** Per source, never rolled up — "a payer sending bad demographics becomes
+ *  visible" only if the number stays split. */
+export interface QueueHealth {
+  source_system: string;
+  open_count: number;
+  breached_count: number;
+  resolved_count: number;
+}
+
+// ── daily identity accounting and coverage telemetry · CF-V3-E9-04 ──────────
+
+/** One source, one day. `total` always rides beside the percentages it is a
+ *  share of — coverage without its denominator is a documented don't.
+ *  `is_regression`/`drop_points` already compare this row against the one
+ *  immediately before it in the same response. */
+export interface CoverageSnapshot {
+  source_system: string;
+  business_date: string;
+  total: number;
+  with_link_id: number;
+  with_our_id: number;
+  with_both: number;
+  link_id_coverage_pct: string;
+  our_id_coverage_pct: string;
+  both_coverage_pct: string;
+  is_regression: boolean;
+  drop_points: string | null;
+}
+
+/** The automated form of "validate LinkID matches between lake and legacy" —
+ *  one row per day this source's scorecard ran. */
+export interface ParityCheck {
+  source_system: string;
+  business_date: string;
+  checked: number;
+  matched: number;
+  mismatched: number;
+  match_rate_pct: string;
+}

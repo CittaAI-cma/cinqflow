@@ -6,6 +6,12 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
+from cinqflow.core.identity.exceptions import (
+    ExceptionState,
+    IdentityException,
+    IdentityExceptionEvent,
+    fold,
+)
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
@@ -40,6 +46,7 @@ class MemMetadataDb:
         self._action_events: list[ActionRecordRow] = []
         self._incident_events: list[IncidentEvent] = []
         self._variance_events: list[tuple[Variance, str, object]] = []
+        self._identity_exception_events: list[IdentityExceptionEvent] = []
 
     def save(self, obj: GovernedObject) -> GovernedObject:
         versions = self._objects.setdefault((obj.object_type, obj.object_id), [])
@@ -317,3 +324,40 @@ class MemMetadataDb:
             newest_variance[variance.variance_id] = variance
         current = [newest_variance[v] for v in reversed(order)]
         return tuple(current[:limit])
+
+    # ── identity_exception / identity_exception_event · CF-V3-E9-01/E9-02 ────
+    def record_identity_exception_event(
+        self, event: IdentityExceptionEvent
+    ) -> IdentityExceptionEvent:
+        """Append-only. Unlike every other ledger here, there is nothing to
+        fold ON WRITE — `fold()` runs at read time, from every event this key
+        has ever had, which is what lets `occurrences` keep growing without a
+        stored value anywhere disagreeing with the ledger that grew it."""
+        self._identity_exception_events.append(event)
+        return event
+
+    def get_identity_exception(self, exception_key: str) -> IdentityException:
+        events = [e for e in self._identity_exception_events if e.exception_key == exception_key]
+        if not events:
+            raise ObjectNotFoundError(f"identity exception {exception_key} has no events")
+        return fold(events)
+
+    def list_identity_exceptions(
+        self,
+        *,
+        source_system: str | None = None,
+        state: ExceptionState | None = None,
+        limit: int = 50,
+    ) -> Sequence[IdentityException]:
+        by_key: dict[str, list[IdentityExceptionEvent]] = {}
+        for event in self._identity_exception_events:
+            by_key.setdefault(event.exception_key, []).append(event)
+        current_exceptions = [fold(events) for events in by_key.values()]
+        current_exceptions = [
+            exc
+            for exc in current_exceptions
+            if (source_system is None or exc.source_system == source_system)
+            and (state is None or exc.state is state)
+        ]
+        current_exceptions.sort(key=lambda exc: exc.opened_ts)
+        return tuple(current_exceptions[:limit])

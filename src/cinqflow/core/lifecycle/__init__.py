@@ -77,11 +77,21 @@ APPROVAL_ROUTING: dict[ObjectType, Route] = {
     ObjectType.CONTRACT: _ENGINEERED,
     ObjectType.PROMPT: _ENGINEERED,
     ObjectType.EXECUTION_PLANE_CONTRACT: _ENGINEERED,
+    #: Same route as CONTRACT: a schema-shaped, platform-wide object whose
+    #: DEPLOYMENT is a platform-engineering act. The steward's part is
+    #: upstream of this — deciding each workbook discrepancy before the
+    #: model is even submitted — not a second gate on the same act.
+    ObjectType.ODS_MODEL: _ENGINEERED,
     ObjectType.MAPPING: _STEWARDED,
     ObjectType.DQ_RULE: _STEWARDED,
     ObjectType.GLOSSARY_TERM: _STEWARDED,
     ObjectType.RUNBOOK: _STEWARDED,
     ObjectType.KNOWLEDGE_DOCUMENT: _STEWARDED,
+    #: CF-V3-E10-03's own persona: "As a Data Steward, I want Silver ODS
+    #: publication per batch to pass a final gate." The steward who
+    #: reviews a mapping's dedup precedence is the same one who signs off
+    #: on the batch that ran it — no second, engineering-flavoured lane.
+    ObjectType.ODS_BATCH_CERTIFICATION: _STEWARDED,
     ObjectType.RELEASE: Route(
         reviewers=frozenset({Role.PLATFORM_ENGINEER, Role.BUSINESS_APPROVER}),
         publishers=frozenset({Role.PLATFORM_ENGINEER, Role.BUSINESS_APPROVER}),

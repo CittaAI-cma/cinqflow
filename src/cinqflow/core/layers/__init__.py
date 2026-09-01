@@ -148,12 +148,21 @@ SPINE: tuple[LayerSpec, ...] = (
             "unresolved plus failed, and an unresolved record never loads — it waits, visibly."
         ),
         entry_gate=Gate.G3,
-        status=LayerStatus.NOT_BUILT,
-        schema=None,
+        # PROVISIONED_EMPTY, not NOT_BUILT, as of the identity schema landing in
+        # `schema_spec`. The distinction is the whole reason LayerStatus has
+        # three members: the plane now HAS `identity` with its five tables —
+        # the crosswalk, both Verato logs and the exception queue — and every
+        # one of them is empty because G3 has not been built. Reporting "no
+        # schema on the plane" while five tables sit there would be the screen
+        # lying about the thing it exists to show.
+        status=LayerStatus.PROVISIONED_EMPTY,
+        schema="identity",
         wave=3,
         absence_reason=(
-            "Gate G3 and identity resolution are Wave 3 (CF-V3-E9-*, CF-V3-E10-*). No schema is "
-            "provisioned, because provisioning one would make the spine look finished."
+            "Provisioned EMPTY: the crosswalk, both Verato logs and the exception queue exist "
+            "and hold nothing, because gate G3 and identity resolution are Wave 3 "
+            "(CF-V3-E9-*, CF-V3-E10-*). Until G3 runs, no source id has been resolved to a "
+            "person, so there is nothing to write."
         ),
     ),
     LayerSpec(

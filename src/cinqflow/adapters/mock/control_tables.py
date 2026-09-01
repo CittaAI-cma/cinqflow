@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date, datetime
 
+from cinqflow.core.identity import CrosswalkEntry
+from cinqflow.core.identity.telemetry import CoverageSnapshot, ParityCheckSummary
 from cinqflow.core.model.vocabulary import BatchState, ErrorCategory
 from cinqflow.ports import port
 from cinqflow.ports.control_tables import (
@@ -14,6 +16,8 @@ from cinqflow.ports.control_tables import (
     ControlTableError,
     ErrorRecord,
     FeedSlaConfig,
+    IdentityRequestLogEntry,
+    IdentityResponseLogEntry,
     InputFile,
     QuarantineSummary,
     Reconciliation,
@@ -50,6 +54,13 @@ class MemStoreControlTables:
         self._sla_configs: dict[tuple[str, int], FeedSlaConfig] = {}
         self._cycles: dict[tuple[str, date], SlaCycle] = {}
         self._alerts: dict[str, SlaAlert] = {}
+        self._identity_requests: list[IdentityRequestLogEntry] = []
+        self._identity_responses: list[IdentityResponseLogEntry] = []
+        # keyed by (source_system, source_member_id, batch_id) — the schema's
+        # own unique constraint, and the worker's idempotency check.
+        self._crosswalk: dict[tuple[str, str, str], CrosswalkEntry] = {}
+        self._coverage: dict[tuple[str, str], CoverageSnapshot] = {}
+        self._parity: dict[tuple[str, str], ParityCheckSummary] = {}
 
     # ── writes ───────────────────────────────────────────────────────────────
     def open_batch(self, batch: BatchControl) -> None:
@@ -59,6 +70,10 @@ class MemStoreControlTables:
     def update_batch_state(self, batch_id: str, state: BatchState) -> None:
         batch = self.get_batch(batch_id)
         self._batches[batch_id] = replace(batch, state=state)
+
+    def record_model_version(self, batch_id: str, model_version: str) -> None:
+        batch = self.get_batch(batch_id)
+        self._batches[batch_id] = replace(batch, model_version=model_version)
 
     def record_stage(self, status: StageStatus) -> None:
         stages = self._stages.setdefault(status.batch_id, [])
@@ -92,6 +107,42 @@ class MemStoreControlTables:
 
     def record_rule_result(self, result: RuleResult) -> None:
         self._rule_results.append(result)
+
+    # ── the identity stage · CF-V3-E9-01 ──────────────────────────────────────
+    def record_identity_request(self, entry: IdentityRequestLogEntry) -> None:
+        self._identity_requests.append(entry)
+
+    def record_identity_response(self, entry: IdentityResponseLogEntry) -> None:
+        self._identity_responses.append(entry)
+
+    def record_crosswalk(self, entry: CrosswalkEntry) -> None:
+        key = (entry.source_system, entry.source_member_id, entry.batch_id)
+        self._crosswalk[key] = entry
+
+    def get_crosswalk(
+        self, *, source_system: str, source_member_id: str, batch_id: str
+    ) -> CrosswalkEntry | None:
+        return self._crosswalk.get((source_system, source_member_id, batch_id))
+
+    def list_crosswalk(self, batch_id: str) -> Sequence[CrosswalkEntry]:
+        return tuple(e for e in self._crosswalk.values() if e.batch_id == batch_id)
+
+    # ── coverage and parity telemetry · CF-V3-E9-04 ───────────────────────────
+    def record_coverage_snapshot(self, snapshot: CoverageSnapshot) -> None:
+        self._coverage[(snapshot.source_system, snapshot.business_date)] = snapshot
+
+    def coverage_history(self, source_system: str, *, days: int = 90) -> Sequence[CoverageSnapshot]:
+        found = [s for s in self._coverage.values() if s.source_system == source_system]
+        return tuple(sorted(found, key=lambda s: s.business_date, reverse=True)[:days])
+
+    def record_parity_check(self, summary: ParityCheckSummary) -> None:
+        self._parity[(summary.source_system, summary.business_date)] = summary
+
+    def parity_check_history(
+        self, source_system: str, *, days: int = 90
+    ) -> Sequence[ParityCheckSummary]:
+        found = [p for p in self._parity.values() if p.source_system == source_system]
+        return tuple(sorted(found, key=lambda p: p.business_date, reverse=True)[:days])
 
     # ── the SLA clock ────────────────────────────────────────────────────────
     def upsert_feed_sla_config(self, config: FeedSlaConfig) -> None:

@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json as _json
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
@@ -60,6 +61,18 @@ from io import StringIO
 from typing import Any, Self
 
 from cinqflow.core.citations import CitationId, CitationKind
+from cinqflow.core.complex_format_profiling import (
+    KNOWN_FIXED_WIDTH_LAYOUTS,
+    FixedWidthColumn,
+    FixedWidthLayout,
+    FlattenProposal,
+    StructurePath,
+    ambiguous_boundaries,
+    detect_fixed_width_boundaries,
+    layout_from_reference,
+    profile_structure,
+    propose_flattening,
+)
 from cinqflow.core.parsers import cell_to_text
 from cinqflow.core.patterns import BY_ID, PATTERNS, Pattern
 from cinqflow.core.schema_spec import TypeName
@@ -72,7 +85,10 @@ from cinqflow.core.schema_spec import TypeName
 #: computed by 1.0.0 therefore has a different id from the same file profiled
 #: now — which is correct and is the reason the version is IN the fingerprint:
 #: the older row is not wrong, it is evidence about less.
-PROFILER_VERSION = "1.1.0"
+#: 1.2.0 · CF-V3-E5-05 added `structure_paths`, `flatten_proposals` and
+#: `fixed_width_layout`, and two dispatch cases (`ndjson`, `fixed_width`)
+#: that previously returned a `NO_PARSER` refusal.
+PROFILER_VERSION = "1.2.0"
 
 #: "A 50MB sample profiles in minutes with progress" — the story's bound, as a
 #: default rather than a hope.
@@ -125,6 +141,15 @@ class Quirk(StrEnum):
     WHITESPACE_PADDING = "whitespace_padding"
     NULL_LIKE_TOKEN = "null_like_token"  # noqa: S105 - a quirk name, not a credential
     DUPLICATE_ROW = "duplicate_row"
+    #: CF-V3-E5-05. One NDJSON line that did not parse as JSON — reported and
+    #: skipped, never a crash: the same "tolerant reader" discipline the
+    #: delimited profiler already holds for a ragged row.
+    MALFORMED_JSON_LINE = "malformed_json_line"
+    #: CF-V3-E5-05's own exception: a statistically-detected column that a
+    #: named reference layout (`CCLF1`) would instead split further, because
+    #: the fields either side of the boundary are always populated and leave
+    #: no gap for whitespace scanning to find.
+    AMBIGUOUS_FIXED_WIDTH_BOUNDARY = "ambiguous_fixed_width_boundary"
 
 
 @dataclass(frozen=True)
@@ -554,6 +579,12 @@ class FileProfile:
     key_search: KeySearch = field(default_factory=KeySearch)
     duplicates: DuplicateRows = field(default_factory=DuplicateRows)
     values_redacted: bool = False
+    #: CF-V3-E5-05 · nested formats only (`ndjson`). Empty for every other
+    #: format — a flat CSV has no paths to count.
+    structure_paths: tuple[StructurePath, ...] = ()
+    flatten_proposals: tuple[FlattenProposal, ...] = ()
+    #: CF-V3-E5-05 · `fixed_width` only. `None` for every other format.
+    fixed_width_layout: FixedWidthLayout | None = None
 
     # ── identity ─────────────────────────────────────────────────────────────
     @property
@@ -621,6 +652,15 @@ class FileProfile:
             f"|{','.join(k.excluded_columns)}"
         )
         lines.append(f"duprows={self.duplicates.duplicate_groups}:{self.duplicates.duplicate_rows}")
+        for path in self.structure_paths:
+            lines.append(
+                f"path={path.path}|docs={path.documents_with_path}:{path.documents_total}"
+                f"|array={path.is_array}:{path.array_length_min}:{path.array_length_max}"
+                f":{path.array_length_total}:{path.array_occurrences}"
+            )
+        if self.fixed_width_layout is not None:
+            for fw_column in self.fixed_width_layout.columns:
+                lines.append(f"fwcol={fw_column.start}-{fw_column.end}:{fw_column.name or ''}")
         return tuple(lines)
 
     @property
@@ -808,6 +848,45 @@ class FileProfile:
                 "duplicate_rows": self.duplicates.duplicate_rows,
                 "first_lines": list(self.duplicates.first_lines),
             },
+            "structure_paths": [
+                {
+                    "path": p.path,
+                    "documents_with_path": p.documents_with_path,
+                    "documents_total": p.documents_total,
+                    "is_array": p.is_array,
+                    "array_length_min": p.array_length_min,
+                    "array_length_max": p.array_length_max,
+                    "array_length_total": p.array_length_total,
+                    "array_occurrences": p.array_occurrences,
+                }
+                for p in self.structure_paths
+            ],
+            "flatten_proposals": [
+                {
+                    "source_path": p.source_path,
+                    "proposed_entity": p.proposed_entity,
+                    "element_count_min": p.element_count_min,
+                    "element_count_max": p.element_count_max,
+                    "description": p.description,
+                }
+                for p in self.flatten_proposals
+            ],
+            "fixed_width_layout": (
+                None
+                if self.fixed_width_layout is None
+                else {
+                    "source": self.fixed_width_layout.source,
+                    "columns": [
+                        {
+                            "start": c.start,
+                            "end": c.end,
+                            "name": c.name,
+                            "confidence": c.confidence,
+                        }
+                        for c in self.fixed_width_layout.columns
+                    ],
+                }
+            ),
         }
 
     @classmethod
@@ -946,6 +1025,45 @@ class FileProfile:
                 duplicate_groups=int(raw.get("duplicates", {}).get("duplicate_groups", 0)),
                 duplicate_rows=int(raw.get("duplicates", {}).get("duplicate_rows", 0)),
                 first_lines=tuple(raw.get("duplicates", {}).get("first_lines", ())),
+            ),
+            structure_paths=tuple(
+                StructurePath(
+                    path=p["path"],
+                    documents_with_path=int(p["documents_with_path"]),
+                    documents_total=int(p["documents_total"]),
+                    is_array=bool(p.get("is_array", False)),
+                    array_length_min=p.get("array_length_min"),
+                    array_length_max=p.get("array_length_max"),
+                    array_length_total=int(p.get("array_length_total", 0)),
+                    array_occurrences=int(p.get("array_occurrences", 0)),
+                )
+                for p in raw.get("structure_paths", ())
+            ),
+            flatten_proposals=tuple(
+                FlattenProposal(
+                    source_path=p["source_path"],
+                    proposed_entity=p["proposed_entity"],
+                    element_count_min=int(p["element_count_min"]),
+                    element_count_max=int(p["element_count_max"]),
+                    description=p["description"],
+                )
+                for p in raw.get("flatten_proposals", ())
+            ),
+            fixed_width_layout=(
+                None
+                if not raw.get("fixed_width_layout")
+                else FixedWidthLayout(
+                    source=raw["fixed_width_layout"].get("source", "statistical"),
+                    columns=tuple(
+                        FixedWidthColumn(
+                            start=int(c["start"]),
+                            end=int(c["end"]),
+                            name=c.get("name"),
+                            confidence=float(c.get("confidence", 1.0)),
+                        )
+                        for c in raw["fixed_width_layout"].get("columns", ())
+                    ),
+                )
             ),
         )
 
@@ -1370,6 +1488,26 @@ def profile_bytes(
                 progress=progress,
                 progress_every=progress_every,
             )
+        case "ndjson" | "fhir_ndjson" | "hl7_json":
+            return _profile_ndjson(
+                window,
+                file_format=file_format.lower(),
+                source_key=source_key,
+                source_fingerprint=source_fingerprint,
+                declared_encoding=encoding,
+                bytes_total=bytes_total,
+                truncated=truncated,
+            )
+        case "fixed_width" | "fixed-width":
+            return _profile_fixed_width(
+                window,
+                file_format=file_format.lower(),
+                source_key=source_key,
+                source_fingerprint=source_fingerprint,
+                declared_encoding=encoding,
+                bytes_total=bytes_total,
+                truncated=truncated,
+            )
         case _:
             return _refused(
                 source_key,
@@ -1380,12 +1518,13 @@ def profile_bytes(
                     reason=RefusalReason.NO_PARSER,
                     explanation=(
                         f"The platform has no reader for {file_format!r} files yet. It reads "
-                        "delimited files (csv, tsv, pipe-separated) and spreadsheets today; "
-                        "FHIR NDJSON, HL7-derived JSON and fixed-width arrive in later waves."
+                        "delimited files (csv, tsv, pipe-separated), spreadsheets, NDJSON "
+                        "(including FHIR and HL7-derived JSON) and fixed-width files today."
                     ),
                     ask_the_payer=(
-                        "Ask whether the extract can be delivered as a delimited file or a "
-                        "spreadsheet, and raise the format with the platform team if not."
+                        "Ask whether the extract can be delivered as a delimited file, a "
+                        "spreadsheet, NDJSON or a fixed-width file, and raise the format with "
+                        "the platform team if not."
                     ),
                 ),
             )
@@ -1411,6 +1550,199 @@ def _refused(
             declared_encoding=encoding,
             bytes_total=bytes_total,
         ),
+    )
+
+
+# ── CF-V3-E5-05 · nested NDJSON / FHIR / HL7-derived JSON ───────────────────
+
+
+def _profile_ndjson(
+    window: bytes,
+    *,
+    file_format: str,
+    source_key: str,
+    source_fingerprint: str,
+    declared_encoding: str,
+    bytes_total: int,
+    truncated: bool,
+) -> FileProfile:
+    """One JSON document per line, tree-counted — never flattened here.
+
+    Tolerant, exactly like the delimited reader: a line that will not parse
+    is reported and skipped, not a crash and not a guess at what it meant.
+    """
+    text, encoding, refusal = _decode(window, declared_encoding)
+    if refusal is not None:
+        return _refused(
+            source_key,
+            source_fingerprint,
+            file_format,
+            declared_encoding,
+            refusal,
+            bytes_total=bytes_total,
+        )
+    bom, _ = _detect_bom(window)
+    line_ending, mixed = _detect_line_ending(text)
+
+    documents: list[dict[str, Any]] = []
+    malformed_lines: list[int] = []
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        try:
+            parsed = _json.loads(stripped)
+        except ValueError:
+            malformed_lines.append(line_number)
+            continue
+        if isinstance(parsed, dict):
+            documents.append(parsed)
+        else:
+            malformed_lines.append(line_number)
+
+    findings: list[Finding] = []
+    if mixed:
+        findings.append(
+            Finding(
+                quirk=Quirk.MIXED_LINE_ENDINGS,
+                detail="This file mixes \\r\\n and \\n line endings.",
+            )
+        )
+    if malformed_lines:
+        findings.append(
+            Finding(
+                quirk=Quirk.MALFORMED_JSON_LINE,
+                detail=(
+                    f"{len(malformed_lines)} line(s) did not parse as a JSON object and were "
+                    "skipped — a strict reader would refuse this file."
+                ),
+                occurrences=len(malformed_lines),
+                first_lines=tuple(malformed_lines[:FIRST_LINES]),
+                blocks_ingestion=True,
+            )
+        )
+
+    structure_paths = profile_structure(documents)
+    top_level_fields = sum(1 for path in structure_paths if "." not in path.path)
+
+    return FileProfile(
+        source_key=source_key,
+        source_fingerprint=source_fingerprint,
+        structure=FileStructure(
+            file_format=file_format,
+            encoding=encoding,
+            declared_encoding=declared_encoding,
+            byte_order_mark=bom,
+            line_ending=line_ending,
+            column_count=top_level_fields,
+            data_rows=len(documents),
+            bytes_total=bytes_total,
+            bytes_read=len(window),
+            sampled=truncated,
+        ),
+        findings=tuple(findings),
+        structure_paths=structure_paths,
+        flatten_proposals=propose_flattening(structure_paths),
+    )
+
+
+# ── CF-V3-E5-05 · fixed-width boundary detection ─────────────────────────────
+
+
+def _profile_fixed_width(
+    window: bytes,
+    *,
+    file_format: str,
+    source_key: str,
+    source_fingerprint: str,
+    declared_encoding: str,
+    bytes_total: int,
+    truncated: bool,
+) -> FileProfile:
+    """Statistical boundaries, plus every ambiguity a known reference layout
+    (`CCLF1`) reveals — never one answer chosen silently."""
+    text, encoding, refusal = _decode(window, declared_encoding)
+    if refusal is not None:
+        return _refused(
+            source_key,
+            source_fingerprint,
+            file_format,
+            declared_encoding,
+            refusal,
+            bytes_total=bytes_total,
+        )
+    bom, _ = _detect_bom(window)
+    line_ending, mixed = _detect_line_ending(text)
+    lines = [line for line in text.splitlines() if line]
+
+    findings: list[Finding] = []
+    if mixed:
+        findings.append(
+            Finding(
+                quirk=Quirk.MIXED_LINE_ENDINGS,
+                detail="This file mixes \\r\\n and \\n line endings.",
+            )
+        )
+
+    lengths = Counter(len(line) for line in lines)
+    if len(lengths) > 1:
+        most_common_length, _ = lengths.most_common(1)[0]
+        ragged = [
+            number for number, line in enumerate(lines, start=1) if len(line) != most_common_length
+        ]
+        findings.append(
+            Finding(
+                quirk=Quirk.RAGGED_ROW,
+                detail=(
+                    f"{len(ragged)} of {len(lines)} line(s) are not the sample's most common "
+                    f"length ({most_common_length} characters) — boundaries are detected "
+                    "against the common length only."
+                ),
+                occurrences=len(ragged),
+                first_lines=tuple(ragged[:FIRST_LINES]),
+            )
+        )
+
+    layout = detect_fixed_width_boundaries(lines)
+
+    for reference_name, reference_fields in KNOWN_FIXED_WIDTH_LAYOUTS.items():
+        reference = layout_from_reference(reference_name, reference_fields)
+        if reference.line_width != layout.line_width:
+            continue  # a layout for a different-width file proves nothing here
+        for ambiguity in ambiguous_boundaries(layout, reference):
+            names = ", ".join(
+                f"{c.name} ({c.start}-{c.end})" for c in ambiguity.reference_columns if c.name
+            )
+            findings.append(
+                Finding(
+                    quirk=Quirk.AMBIGUOUS_FIXED_WIDTH_BOUNDARY,
+                    detail=(
+                        f"Positions {ambiguity.statistical.start}-{ambiguity.statistical.end} "
+                        "read as one column from this sample's whitespace alone, but the "
+                        f"{reference_name} reference layout names "
+                        f"{len(ambiguity.reference_columns)} separate fields there: {names}. "
+                        "Both readings are shown — the profiler does not choose."
+                    ),
+                )
+            )
+
+    return FileProfile(
+        source_key=source_key,
+        source_fingerprint=source_fingerprint,
+        structure=FileStructure(
+            file_format=file_format,
+            encoding=encoding,
+            declared_encoding=declared_encoding,
+            byte_order_mark=bom,
+            line_ending=line_ending,
+            column_count=len(layout.columns),
+            data_rows=len(lines),
+            bytes_total=bytes_total,
+            bytes_read=len(window),
+            sampled=truncated,
+        ),
+        findings=tuple(findings),
+        fixed_width_layout=layout,
     )
 
 

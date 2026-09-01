@@ -41,7 +41,12 @@ pins:
       default:      { adapter: upload }
       fidelis-sftp: { adapter: folder-drop, drop_root: ".cinqflow/drop/fidelis-sftp" }
   control_tables: { adapter: pg-control, schema: control }
-  catalog:        { adapter: none }
+  # W3-01 fitted a REAL adapter to this pin: `pg-information-schema` answers
+  # schemas/lineage/grants from information_schema, joined to the schema
+  # contract's own `is_phi` flag. It was `none` because nothing was fitted; a
+  # name with nothing behind it fails conformance, and leaving it `none` now
+  # would leave the medallion layer browser without its census on this plane.
+  catalog:        { adapter: pg-information-schema }
   sql_query:      { adapter: pg-readonly }    # W1 (CF-V1-E7-02) — NOT on any agent whitelist
   identity:       { adapter: mock, scenarios: goldensets/reference/verato-scenarios.yaml }
   legacy_readonly: { adapter: none }          # Wave 5 only; removed at cutover

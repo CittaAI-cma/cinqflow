@@ -26,6 +26,7 @@ from cinqflow.intelligence.demo import (
     alert_enrichment_agent_for,
     fingerprint_match_agent_for,
     layer_reader_for,
+    merge_evidence_agent_for,
     plane,
     schema_inference_for,
 )
@@ -94,6 +95,10 @@ def build(landing_root: str | None = None) -> Any:
         layer_reader=layer_reader_for(),
         agent_factory=agent_for,
         schema_inference_factory=schema_inference_for,
+        # CF-V3-E9-03. Same reasoning as schema_inference_for above: `gather`
+        # is real, so `POST /api/identity/merge-preview` returns a true plan
+        # and comparison on every dev-server start, narrative aside.
+        merge_evidence_factory=merge_evidence_agent_for,
         # CF-V2-E12-05. Built once, off the same scripted stand-in every other
         # demo agent uses — `GET /api/operations/alerts` has a real path to
         # exercise on every dev-server start, with no credential involved.

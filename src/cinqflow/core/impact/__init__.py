@@ -71,6 +71,13 @@ REFERENCES: dict[ObjectType, tuple[ReferenceSpec, ...]] = {
     #: shape RUNBOOK's own optional `feed_id` already has, and the reference
     #: resolver already treats a missing key as no edge, not an Unknown.
     ObjectType.KNOWLEDGE_DOCUMENT: (ReferenceSpec("feed_id", ObjectType.FEED),),
+    #: The canonical ODS model is platform-wide, not feed-scoped — it is the
+    #: thing a future MAPPING or CONTRACT will reference, never the reverse.
+    ObjectType.ODS_MODEL: (),
+    #: CF-V3-E10-03. The one certification decision per batch references
+    #: the feed that batch belongs to — the same edge RUNBOOK/CONTRACT
+    #: already declare for their own `feed_id`.
+    ObjectType.ODS_BATCH_CERTIFICATION: (ReferenceSpec("feed_id", ObjectType.FEED),),
 }
 
 #: Body key naming the downstream business consumers a change would reach —

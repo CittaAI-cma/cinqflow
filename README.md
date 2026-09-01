@@ -11,6 +11,12 @@ what it just did.
 **Wave 0 is built.** Silver ODS sits behind gate G4 (identity resolution) and is
 Wave 3; its schema is provisioned and empty.
 
+New to the codebase? Read [`docs/DOMAIN.md`](docs/DOMAIN.md) first — the
+business domain (VBC contracts, feeds, claims lineage, identity resolution,
+DQ/PHI rules), the governance and AI-agent decisions, and what's actually
+built versus designed. This README covers running the code; DOMAIN.md covers
+why it's shaped the way it is.
+
 ## Five rules govern every change
 
 1. **`core/` imports no vendor SDK, URL, path or credential** — and performs no

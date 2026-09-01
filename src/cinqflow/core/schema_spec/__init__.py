@@ -1062,6 +1062,170 @@ OPS_SCHEMA = Schema(
 )
 
 
+IDENTITY_SCHEMA = Schema(
+    name="identity",
+    description=(
+        "CF-V3-E9-01/E9-02 — the crosswalk, its full request/response audit trail, and the "
+        "exception queue. The pin (`ports/identity.py`) and its R4 merge refusal shipped in "
+        "Wave 0; this is where the identity STAGE becomes a real, queryable plane object."
+    ),
+    tables=(
+        Table(
+            name="bridge_member_source_to_verato",
+            comment=(
+                "One row per (source_system, source_member_id, batch_id) submission. Source "
+                "identifiers retained beside every resolved LinkId — plate 10's crosswalk, "
+                "verbatim."
+            ),
+            columns=(
+                Column("crosswalk_id", TypeName.UUID, nullable=False),
+                Column("source_system", TypeName.STRING, nullable=False, is_phi=True),
+                Column("source_member_id", TypeName.STRING, nullable=False, is_phi=True),
+                Column("internal_member_id", TypeName.STRING, nullable=False),
+                # None until RESOLVED — an unresolved or failed submission has
+                # no Verato identity to carry.
+                Column("verato_person_id", TypeName.STRING),
+                Column("outcome", TypeName.STRING, nullable=False),
+                Column("match_confidence_score", TypeName.DECIMAL, precision=5, scale=4),
+                Column("batch_id", TypeName.STRING, nullable=False),
+                Column("effective_date", TypeName.DATE, nullable=False),
+                Column("end_date", TypeName.DATE),
+                Column("created_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("crosswalk_id",),
+            unique=(("source_system", "source_member_id", "batch_id"),),
+            indexes=(("source_member_id",), ("verato_person_id",), ("batch_id",)),
+            check_constraints=("outcome IN ('resolved', 'unresolved', 'failed')",),
+        ),
+        Table(
+            name="verato_request_log",
+            comment="The exact request sent, hashed — never reconstructed from the crosswalk row.",
+            columns=(
+                Column("request_id", TypeName.UUID, nullable=False),
+                Column("batch_id", TypeName.STRING, nullable=False),
+                Column("source_system", TypeName.STRING, nullable=False, is_phi=True),
+                Column("source_member_id", TypeName.STRING, nullable=False, is_phi=True),
+                Column("payload", TypeName.JSON, nullable=False, is_phi=True),
+                Column("payload_hash", TypeName.STRING, nullable=False),
+                Column("sent_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("request_id",),
+            indexes=(("batch_id",),),
+            append_only=True,
+        ),
+        Table(
+            name="verato_response_log",
+            comment="The exact response received, hashed, linked to the request that caused it.",
+            columns=(
+                Column("response_id", TypeName.UUID, nullable=False),
+                Column("request_id", TypeName.UUID, nullable=False),
+                Column("batch_id", TypeName.STRING, nullable=False),
+                Column("payload", TypeName.JSON, nullable=False, is_phi=True),
+                Column("payload_hash", TypeName.STRING, nullable=False),
+                Column("outcome", TypeName.STRING, nullable=False),
+                Column("received_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("response_id",),
+            indexes=(("request_id",), ("batch_id",)),
+            check_constraints=("outcome IN ('resolved', 'unresolved', 'failed')",),
+            append_only=True,
+        ),
+        Table(
+            name="identity_exception",
+            comment=(
+                "Current state of ONE PERSON's identity problem, deduplicated across every "
+                "batch that hit it — CF-V3-E9-02. The current state is the newest fold of "
+                "identity_exception_event, same idiom as ops.feed_suspension."
+            ),
+            columns=(
+                # source_system:source_member_id — the dedupe key. A person,
+                # never a batch, is what this table has one row per.
+                Column("exception_key", TypeName.STRING, nullable=False),
+                Column("source_system", TypeName.STRING, nullable=False, is_phi=True),
+                Column("source_member_id", TypeName.STRING, nullable=False, is_phi=True),
+                Column("state", TypeName.STRING, nullable=False),
+                Column("assigned_to", TypeName.STRING),
+                Column("opened_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("updated_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("exception_key",),
+            indexes=(("state",), ("assigned_to",)),
+            check_constraints=("state IN ('open', 'assigned', 'escalated', 'resolved')",),
+        ),
+        Table(
+            name="identity_exception_event",
+            comment=(
+                "APPEND-ONLY: one row per occurrence or state transition — the ledger "
+                "identity_exception's current row is folded from. A resolved exception whose "
+                "events are gone would make 'how many times did this fail' unanswerable."
+            ),
+            columns=(
+                Column("event_id", TypeName.UUID, nullable=False),
+                Column("exception_key", TypeName.STRING, nullable=False),
+                Column("action", TypeName.STRING, nullable=False),
+                # batch_id/outcome populated for an 'occurrence' event; NULL
+                # for a pure state transition (assigned/escalated/resolved).
+                Column("batch_id", TypeName.STRING),
+                Column("outcome", TypeName.STRING),
+                Column("actor_subject", TypeName.STRING),
+                Column("detail", TypeName.STRING),
+                Column("occurred_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("event_id",),
+            indexes=(("exception_key", "occurred_ts"),),
+            check_constraints=("action IN ('occurrence', 'assigned', 'escalated', 'resolved')",),
+            append_only=True,
+        ),
+        Table(
+            name="identity_coverage_snapshot",
+            comment=(
+                "CF-V3-E9-04 — one row per (source_system, business_date): what share of that "
+                "day's crosswalk entries carry Verato's LinkId, the legacy OurId, or both. The "
+                "trend line the cutover-readiness view reads. Upserted, never duplicated — the "
+                "same day recomputed twice corrects the row rather than doubling it."
+            ),
+            columns=(
+                # Never PHI, unlike the crosswalk's own source_system column:
+                # this row is an AGGREGATE count with no member in it at all,
+                # and masking the one thing a scorecard names — which source —
+                # would break "leadership sees Fidelis at 99.8%" outright.
+                Column("source_system", TypeName.STRING, nullable=False),
+                Column("business_date", TypeName.DATE, nullable=False),
+                Column("total", TypeName.INT64, nullable=False),
+                Column("with_link_id", TypeName.INT64, nullable=False),
+                Column("with_our_id", TypeName.INT64, nullable=False),
+                Column("with_both", TypeName.INT64, nullable=False),
+                Column("computed_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("source_system", "business_date"),
+            indexes=(("business_date",),),
+        ),
+        Table(
+            name="identity_parity_check",
+            comment=(
+                "CF-V3-E9-04 — the automated form of 'validate LinkID matches between lake and "
+                "legacy', done by hand once and now a standing daily scorecard. One row per "
+                "(source_system, business_date); the itemised differences behind `mismatched` "
+                "come from `legacy_readonly.compare()` at check time and are not re-stored here "
+                "— this row is the TREND, the same split `identity_exception` draws from its "
+                "own event ledger."
+            ),
+            columns=(
+                Column("source_system", TypeName.STRING, nullable=False),
+                Column("business_date", TypeName.DATE, nullable=False),
+                Column("checked", TypeName.INT64, nullable=False),
+                Column("matched", TypeName.INT64, nullable=False),
+                Column("mismatched", TypeName.INT64, nullable=False),
+                Column("computed_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+            ),
+            primary_key=("source_system", "business_date"),
+            indexes=(("business_date",),),
+            check_constraints=("checked = matched + mismatched",),
+        ),
+    ),
+)
+
+
 def all_schemas() -> tuple[Schema, ...]:
     """Every schema the installer provisions, in dependency order.
 
@@ -1085,4 +1249,5 @@ def all_schemas() -> tuple[Schema, ...]:
         KNOWLEDGE_SCHEMA,
         PROFILING_SCHEMA,
         OPS_SCHEMA,
+        IDENTITY_SCHEMA,
     )

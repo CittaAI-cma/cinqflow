@@ -109,6 +109,29 @@ DESTINATIONS: tuple[Destination, ...] = (
         prominent_for=frozenset({Role.PLATFORM_ENGINEER, Role.DATA_STEWARD}),
     ),
     Destination(
+        key="merge-evidence",
+        label="Merge & Split Review",
+        route="/data/identity/merge",
+        group=NavGroup.DATA,
+        answers="For a proposed merge, the evidence side by side and every record it would touch.",
+        wave=3,
+        requires=Action.APPROVE,
+        prominent_for=frozenset({Role.DATA_STEWARD}),
+    ),
+    #: CF-V3-E9-02. VIEW, not APPROVE: the queue itself is readable by anyone
+    #: who could read a merge candidate — assigning and resolving are the
+    #: acts requiring more, gated per-action inside the screen and the API,
+    #: not by whether the destination appears at all.
+    Destination(
+        key="identity-queue",
+        label="Identity Exception Queue",
+        route="/data/identity/queue",
+        group=NavGroup.DATA,
+        answers="Every identity problem, triaged, deduplicated, aged and assignable.",
+        wave=3,
+        prominent_for=frozenset({Role.DATA_STEWARD}),
+    ),
+    Destination(
         key="mapping",
         label="Mapping & Rules",
         route="/data/mapping",
@@ -178,6 +201,32 @@ DESTINATIONS: tuple[Destination, ...] = (
         answers="Which batches are certified, and what the evidence says.",
         wave=2,
         prominent_for=frozenset({Role.OPERATIONS, Role.DATA_STEWARD}),
+    ),
+    #: CF-V3-E9-04. "CINQFLOW de-risks this decision with daily parity
+    #: evidence; it does not make it" — this screen is the evidence, never a
+    #: button that decides the OurID cutover.
+    Destination(
+        key="identity-coverage",
+        label="Identity Coverage & Parity",
+        route="/operations/identity-coverage",
+        group=NavGroup.OPERATIONS,
+        answers="What share of records carry LinkId and legacy OurId, per source, trending.",
+        wave=3,
+        prominent_for=frozenset({Role.OPERATIONS, Role.DATA_STEWARD}),
+    ),
+    #: CF-V3-E10-02. Keyed by entity name in the route itself, not the model
+    #: version — "a stable contract page downstream teams can link to" means
+    #: the link a Business Analyst bookmarks today must still resolve once
+    #: the model underneath it moves to v4.
+    Destination(
+        key="ods-model",
+        label="Canonical Data Model",
+        route="/data/ods-model",
+        group=NavGroup.DATA,
+        answers="What every entity looks like today, what changed between "
+        "versions, and who breaks if a column goes away.",
+        wave=3,
+        prominent_for=frozenset({Role.BUSINESS_ANALYST, Role.DATA_STEWARD}),
     ),
     Destination(
         key="ask",

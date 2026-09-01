@@ -74,7 +74,16 @@ export default async function CertificationDetail({
           <ul className="tree-list">
             {certification.variances.map((variance) => (
               <li key={variance.variance_id}>
-                {variance.kind} — {variance.outcome}
+                <span className="mono">{variance.kind}</span> — {variance.outcome}
+                {variance.critical ? <span className="note"> · critical</span> : null}
+                <span className="note">
+                  {" "}
+                  · expected {variance.expected}, actual {variance.actual} (Δ {variance.delta},
+                  tolerance {variance.tolerance})
+                </span>
+                {variance.explanation ? (
+                  <p className="note">{variance.explanation}</p>
+                ) : null}
                 {variance.waiver_reason ? (
                   <span className="note"> · waived: {variance.waiver_reason}</span>
                 ) : null}

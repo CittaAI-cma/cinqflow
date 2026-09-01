@@ -23,6 +23,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
+from cinqflow.core.identity.exceptions import (
+    ExceptionState,
+    IdentityException,
+    IdentityExceptionEvent,
+)
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
 from cinqflow.core.operations.actions import ActionRecord
@@ -377,4 +382,49 @@ class MetadataDbPort(Protocol):
     ) -> Sequence[Variance]:
         """Current state per variance, newest first — what `certify()` folds
         into a verdict, and what the monthly recon report reads."""
+        ...
+
+    # ── identity_exception / identity_exception_event · CF-V3-E9-01/E9-02 ────
+    #
+    # THE ONE PLACE THIS PIN DEPARTS FROM incident_event's "newest row wins"
+    # idiom. An incident's ledger row already carries its whole state; an
+    # exception's `occurrences` tuple only grows, one batch at a time, and no
+    # single row can hold a tuple that grows row by row. So the ledger holds
+    # DELTAS — one row per occurrence or per transition — and the current
+    # `IdentityException` is `core.identity.exceptions.fold()` of every row
+    # this pin has ever recorded for one `exception_key`. The adapter may
+    # cache the folded answer (the schema's `identity_exception` table exists
+    # for exactly that), but the ledger is what a cache is checked against,
+    # never the reverse.
+
+    def record_identity_exception_event(
+        self, event: IdentityExceptionEvent
+    ) -> IdentityExceptionEvent:
+        """Append one occurrence or one transition. There is no update verb —
+        the same reason every other ledger on this pin lacks one: a
+        chronically-failing record's third occurrence must make its exception
+        look WORSE, and folding is how "worse" stays computable rather than
+        remembered."""
+        ...
+
+    def get_identity_exception(self, exception_key: str) -> IdentityException:
+        """The current state, folded from every event this key has ever had.
+
+        Raises `ObjectNotFoundError` for a key the ledger has never seen —
+        the same posture `get_incident_event` takes, for the same reason: a
+        person nobody's identity resolution has ever failed for is a missing
+        answer here, not an ordinary OPEN one.
+        """
+        ...
+
+    def list_identity_exceptions(
+        self,
+        *,
+        source_system: str | None = None,
+        state: ExceptionState | None = None,
+        limit: int = 50,
+    ) -> Sequence[IdentityException]:
+        """Current state per exception, oldest-opened first — the queue
+        screen's own ordering: the longest-standing problem is the one a
+        steward should see first, not the one that happened most recently."""
         ...

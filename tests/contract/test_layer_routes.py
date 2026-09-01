@@ -107,13 +107,37 @@ def test_a_count_is_null_and_never_zero_when_nothing_is_on_the_plane(
 
 def test_an_unbuilt_layer_answers_200_with_its_reason_not_404(client: TestClient) -> None:
     """404 would make the screen unable to tell "not in this architecture" from
-    "not built yet". The second is true; the first is not."""
-    response = client.get("/api/layers/identity", headers=_as(ENGINEER))
+    "not built yet". The second is true; the first is not.
+
+    `gold` is the layer with no schema at all. `identity` used to be, and is
+    asserted separately below — the two are DIFFERENT answers and the test that
+    conflated them had to be split when identity's schema landed.
+    """
+    response = client.get("/api/layers/gold", headers=_as(ENGINEER))
     assert response.status_code == 200
     body = response.json()
     assert body["layer"]["status"] == "not_built"
-    assert "Wave 3" in body["layer"]["absence_reason"]
+    assert body["layer"]["schema_name"] == ""
+    assert "Wave 4" in body["layer"]["absence_reason"]
     assert body["tables"] == []
+
+
+def test_a_provisioned_empty_layer_reports_its_tables_and_no_rows(
+    client: TestClient,
+) -> None:
+    """The third status, and the one that is easiest to render as a bug.
+
+    `identity` has five tables on the plane and nothing in them, because G3 is
+    Wave 3. "Provisioned and empty" is a different sentence from "not built",
+    and a screen that showed either as the other would be wrong about whether
+    somebody still has to build it.
+    """
+    body = client.get("/api/layers/identity", headers=_as(ENGINEER)).json()
+    assert body["layer"]["status"] == "provisioned_empty"
+    assert body["layer"]["schema_name"] == "identity"
+    assert "Wave 3" in body["layer"]["absence_reason"]
+    assert body["tables"], "a provisioned layer must report the tables it has"
+    assert all(table["row_count"] == 0 for table in body["tables"])
 
 
 def test_a_layer_name_that_is_not_one_is_404_and_names_the_six(client: TestClient) -> None:

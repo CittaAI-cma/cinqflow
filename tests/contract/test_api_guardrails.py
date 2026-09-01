@@ -402,6 +402,18 @@ READ_ONLY_POSTS = frozenset(
         # who cannot preview the rule they are being asked to approve is being
         # asked to approve prose.
         "/api/feeds/{feed_id}/preview-rules",
+        # CF-V3-E9-03. The identity merge PREVIEW — deterministic, plus an
+        # AI-narrated evidence card. A POST because the candidate set travels
+        # in a body, not because anything changes: it computes and returns.
+        #
+        # The act is a DIFFERENT route. `/api/identity/merge-preview/execute`
+        # requires APPROVE, which is what makes merge and split R4
+        # (human-steward-always) rather than something a reader can trigger.
+        # Listing the preview here is safe precisely because that split exists —
+        # and `test_the_read_only_post_exceptions_stay_read_only` is what keeps
+        # it honest: if this route ever grew a write it would need a write
+        # permission, and that test would fail.
+        "/api/identity/merge-preview",
     }
 )
 

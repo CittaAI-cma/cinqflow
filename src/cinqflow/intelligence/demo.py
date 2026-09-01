@@ -40,6 +40,7 @@ from cinqflow.core.agents.mapping_suggestion.graph import (
 )
 from cinqflow.core.agents.mapping_suggestion.graph import NO_CONFIDENT_TARGET
 from cinqflow.core.agents.mapping_suggestion.prompts import TEMPLATES as MAPPING_TEMPLATES
+from cinqflow.core.agents.merge_evidence.prompts import TEMPLATES as MERGE_EVIDENCE_TEMPLATES
 from cinqflow.core.agents.phi_detection.prompts import TEMPLATES as PHI_TEMPLATES
 from cinqflow.core.agents.pipeline_insight.prompts import TEMPLATES
 from cinqflow.core.agents.schema_inference.prompts import TEMPLATES as SCHEMA_TEMPLATES
@@ -64,6 +65,7 @@ from cinqflow.core.schema_spec import TypeName
 from cinqflow.intelligence.agents.alert_enrichment import AlertEnrichmentAgent
 from cinqflow.intelligence.agents.fingerprint_match import FingerprintMatchAgent
 from cinqflow.intelligence.agents.mapping_suggestion import MappingSuggestionAgent
+from cinqflow.intelligence.agents.merge_evidence import MergeEvidenceAgent
 from cinqflow.intelligence.agents.pipeline_insight import PipelineInsightAgent
 from cinqflow.intelligence.agents.schema_inference import SchemaInferenceAgent
 from cinqflow.intelligence.gateway import LlmGateway
@@ -203,6 +205,7 @@ def seed(store: MetadataDbPort, control: ControlTablesPort) -> None:
         *FINGERPRINT_TEMPLATES,
         *MAPPING_TEMPLATES,
         *ALERT_ENRICHMENT_TEMPLATES,
+        *MERGE_EVIDENCE_TEMPLATES,
     ):
         store.save(_published(template.as_governed(author=AUTHOR)))
 
@@ -596,6 +599,26 @@ def schema_inference_for(metadata: MetadataDbPort) -> SchemaInferenceAgent:
     )
 
 
+def merge_evidence_agent_for(metadata: MetadataDbPort) -> MergeEvidenceAgent:
+    """CF-V3-E9-03 on the dev server, with the same scripted stand-in.
+
+    Worth wiring even against a mock: `gather` (the deterministic half) is
+    real, so a steward reviewing a merge sees the true plan and the true
+    comparison even before any real model endpoint exists — the mock only
+    ever leaves `narrative` empty, never invents one.
+    """
+    return MergeEvidenceAgent(
+        llm=LlmGateway(
+            llm=ScriptedLlm(responder=scripted),
+            phi_scrub=PatternPhiScrub(),
+            metadata_db=metadata,
+            observability=NoopObservability(),
+            budget=BUDGET,
+            routing=Routing(small="mock-small", large="mock-large"),
+        )
+    )
+
+
 def scripted(prompt: str, task_class: Any) -> str:
     """A deterministic stand-in so the dev server needs no credential.
 
@@ -634,6 +657,13 @@ def scripted(prompt: str, task_class: Any) -> str:
         # near-miss sentence is invented, only ever quoted from `retrieve`'s
         # own findings — and this mock quotes nothing, so it says nothing.
         return json.dumps({"narrative": "", "citations": []})
+
+    if "Merge Evidence agent" in prompt:
+        # Same honesty as the incident-narrator branch above: this mock
+        # cannot safely quote a value it was never shown a scrubbed form of,
+        # so it says nothing rather than invent a plausible-sounding sentence
+        # about which fields matched.
+        return json.dumps({"narrative": "", "grounded_fields": []})
 
     if "recovery-guide drafting assistant" in prompt:
         # `remedy` is left unset on purpose: a mock that guessed a real

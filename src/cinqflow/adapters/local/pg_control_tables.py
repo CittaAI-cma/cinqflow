@@ -20,6 +20,8 @@ from datetime import date, datetime
 from typing import Any
 
 from cinqflow.adapters.local.pg_control import Connection
+from cinqflow.core.identity import CrosswalkEntry, MatchOutcome
+from cinqflow.core.identity.telemetry import CoverageSnapshot, ParityCheckSummary
 from cinqflow.core.model.vocabulary import BatchState, ErrorCategory, FileState, Layer
 from cinqflow.ports import port
 from cinqflow.ports.control_tables import (
@@ -29,6 +31,8 @@ from cinqflow.ports.control_tables import (
     DropLedgerEntry,
     ErrorRecord,
     FeedSlaConfig,
+    IdentityRequestLogEntry,
+    IdentityResponseLogEntry,
     InputFile,
     QuarantineSummary,
     Reconciliation,
@@ -74,6 +78,13 @@ class PostgresControlTables:
             "CASE WHEN %s IN ('COMPLETED','FAILED') THEN now() ELSE completed_ts END "
             "WHERE batch_id = %s",
             (state.value, state.value, batch_id),
+        )
+
+    def record_model_version(self, batch_id: str, model_version: str) -> None:
+        self.get_batch(batch_id)  # a stamp on a missing batch is a bug, not a no-op
+        self._db.execute(
+            "UPDATE control.batch_control SET model_version = %s WHERE batch_id = %s",
+            (model_version, batch_id),
         )
 
     def record_stage(self, status: StageStatus) -> None:
@@ -201,6 +212,61 @@ class PostgresControlTables:
                 drift.detail,
                 drift.blocked_batch,
                 drift.detected_ts,
+            ),
+        )
+
+    # ── the identity stage · CF-V3-E9-01 ──────────────────────────────────────
+    def record_identity_request(self, entry: IdentityRequestLogEntry) -> None:
+        self._db.execute(
+            "INSERT INTO identity.verato_request_log (request_id, batch_id, source_system, "
+            "source_member_id, payload, payload_hash, sent_ts) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (
+                entry.request_id,
+                entry.batch_id,
+                entry.source_system,
+                entry.source_member_id,
+                json.dumps(entry.payload),
+                entry.payload_hash,
+                entry.sent_ts,
+            ),
+        )
+
+    def record_identity_response(self, entry: IdentityResponseLogEntry) -> None:
+        self._db.execute(
+            "INSERT INTO identity.verato_response_log (response_id, request_id, batch_id, "
+            "payload, payload_hash, outcome, received_ts) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (
+                entry.response_id,
+                entry.request_id,
+                entry.batch_id,
+                json.dumps(entry.payload),
+                entry.payload_hash,
+                entry.outcome.value,
+                entry.received_ts,
+            ),
+        )
+
+    def record_crosswalk(self, entry: CrosswalkEntry) -> None:
+        # Upsert on the schema's own unique constraint — the idempotency
+        # guarantee itself, not a check the caller performs first.
+        self._db.execute(
+            "INSERT INTO identity.bridge_member_source_to_verato (crosswalk_id, source_system, "
+            "source_member_id, internal_member_id, verato_person_id, outcome, "
+            "match_confidence_score, batch_id, effective_date, created_ts) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s, CURRENT_DATE, now()) "
+            "ON CONFLICT (source_system, source_member_id, batch_id) DO UPDATE SET "
+            "internal_member_id = EXCLUDED.internal_member_id, "
+            "verato_person_id = EXCLUDED.verato_person_id, outcome = EXCLUDED.outcome, "
+            "match_confidence_score = EXCLUDED.match_confidence_score",
+            (
+                str(uuid.uuid4()),
+                entry.source_system,
+                entry.source_member_id,
+                entry.internal_member_id,
+                entry.verato_person_id,
+                entry.outcome.value,
+                entry.match_confidence_score,
+                entry.batch_id,
             ),
         )
 
@@ -446,6 +512,86 @@ class PostgresControlTables:
             for row in rows
         )
 
+    def get_crosswalk(
+        self, *, source_system: str, source_member_id: str, batch_id: str
+    ) -> CrosswalkEntry | None:
+        rows = self._db.fetch_all(
+            "SELECT source_system, source_member_id, internal_member_id, verato_person_id, "
+            "outcome, match_confidence_score, batch_id "
+            "FROM identity.bridge_member_source_to_verato "
+            "WHERE source_system = %s AND source_member_id = %s AND batch_id = %s",
+            (source_system, source_member_id, batch_id),
+        )
+        if not rows:
+            return None
+        return _crosswalk_entry(rows[0])
+
+    def list_crosswalk(self, batch_id: str) -> Sequence[CrosswalkEntry]:
+        rows = self._db.fetch_all(
+            "SELECT source_system, source_member_id, internal_member_id, verato_person_id, "
+            "outcome, match_confidence_score, batch_id "
+            "FROM identity.bridge_member_source_to_verato "
+            "WHERE batch_id = %s ORDER BY source_system, source_member_id",
+            (batch_id,),
+        )
+        return tuple(_crosswalk_entry(row) for row in rows)
+
+    # ── coverage and parity telemetry · CF-V3-E9-04 ───────────────────────────
+    def record_coverage_snapshot(self, snapshot: CoverageSnapshot) -> None:
+        self._db.execute(
+            "INSERT INTO identity.identity_coverage_snapshot (source_system, business_date, "
+            "total, with_link_id, with_our_id, with_both, computed_ts) "
+            "VALUES (%s,%s,%s,%s,%s,%s, now()) "
+            "ON CONFLICT (source_system, business_date) DO UPDATE SET "
+            "total = EXCLUDED.total, with_link_id = EXCLUDED.with_link_id, "
+            "with_our_id = EXCLUDED.with_our_id, with_both = EXCLUDED.with_both, "
+            "computed_ts = now()",
+            (
+                snapshot.source_system,
+                snapshot.business_date,
+                snapshot.total,
+                snapshot.with_link_id,
+                snapshot.with_our_id,
+                snapshot.with_both,
+            ),
+        )
+
+    def coverage_history(self, source_system: str, *, days: int = 90) -> Sequence[CoverageSnapshot]:
+        rows = self._db.fetch_all(
+            "SELECT source_system, business_date, total, with_link_id, with_our_id, with_both "
+            "FROM identity.identity_coverage_snapshot WHERE source_system = %s "
+            "ORDER BY business_date DESC LIMIT %s",
+            (source_system, days),
+        )
+        return tuple(_coverage_snapshot(row) for row in rows)
+
+    def record_parity_check(self, summary: ParityCheckSummary) -> None:
+        self._db.execute(
+            "INSERT INTO identity.identity_parity_check (source_system, business_date, "
+            "checked, matched, mismatched, computed_ts) VALUES (%s,%s,%s,%s,%s, now()) "
+            "ON CONFLICT (source_system, business_date) DO UPDATE SET "
+            "checked = EXCLUDED.checked, matched = EXCLUDED.matched, "
+            "mismatched = EXCLUDED.mismatched, computed_ts = now()",
+            (
+                summary.source_system,
+                summary.business_date,
+                summary.checked,
+                summary.matched,
+                summary.mismatched,
+            ),
+        )
+
+    def parity_check_history(
+        self, source_system: str, *, days: int = 90
+    ) -> Sequence[ParityCheckSummary]:
+        rows = self._db.fetch_all(
+            "SELECT source_system, business_date, checked, matched, mismatched "
+            "FROM identity.identity_parity_check WHERE source_system = %s "
+            "ORDER BY business_date DESC LIMIT %s",
+            (source_system, days),
+        )
+        return tuple(_parity_check_summary(row) for row in rows)
+
     def get_quarantine_summary(self, batch_id: str) -> Sequence[QuarantineSummary]:
         rows = self._db.fetch_all(
             "SELECT stage_name, rule_id, reason, column_names, record_count "
@@ -654,6 +800,39 @@ def _sla_alert(row: tuple[Any, ...]) -> SlaAlert:
         acknowledged_by=row[8] or "",
         acknowledged_ts=row[9],
         raised_ts=row[10],
+    )
+
+
+def _coverage_snapshot(row: tuple[Any, ...], /) -> CoverageSnapshot:
+    return CoverageSnapshot(
+        source_system=row[0],
+        business_date=str(row[1]),
+        total=row[2],
+        with_link_id=row[3],
+        with_our_id=row[4],
+        with_both=row[5],
+    )
+
+
+def _parity_check_summary(row: tuple[Any, ...], /) -> ParityCheckSummary:
+    return ParityCheckSummary(
+        source_system=row[0],
+        business_date=str(row[1]),
+        checked=row[2],
+        matched=row[3],
+        mismatched=row[4],
+    )
+
+
+def _crosswalk_entry(row: tuple[Any, ...], /) -> CrosswalkEntry:
+    return CrosswalkEntry(
+        source_system=row[0],
+        source_member_id=row[1],
+        internal_member_id=row[2],
+        verato_person_id=row[3],
+        outcome=MatchOutcome(row[4]),
+        match_confidence_score=row[5],
+        batch_id=row[6],
     )
 
 

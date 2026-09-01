@@ -24,8 +24,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
+from cinqflow.core.identity import CrosswalkEntry, MatchOutcome
+from cinqflow.core.identity.telemetry import CoverageSnapshot, ParityCheckSummary
 from cinqflow.core.model.vocabulary import (
     BatchState,
     ErrorCategory,
@@ -297,6 +299,41 @@ class RuleResult:
 
 
 @dataclass(frozen=True)
+class IdentityRequestLogEntry:
+    """A row of `identity.verato_request_log` — CF-V3-E9-01's audit trail.
+
+    "Store full request and response payloads with hashes, per the client's
+    own schema design — the audit trail is the design's core." One row per
+    (batch_id, source_system, source_member_id): even though `IdentityPort.
+    submit()` takes a whole batch in one call, the audit trail is what
+    Verato actually saw for ONE person, never a call-shaped blob nobody could
+    later attribute to the record it concerned.
+    """
+
+    request_id: str
+    batch_id: str
+    source_system: str
+    source_member_id: str
+    payload: dict[str, str]
+    payload_hash: str
+    sent_ts: datetime
+
+
+@dataclass(frozen=True)
+class IdentityResponseLogEntry:
+    """A row of `identity.verato_response_log` — linked to the request that
+    caused it, never reconstructed from the crosswalk row it also produced."""
+
+    response_id: str
+    request_id: str
+    batch_id: str
+    payload: dict[str, Any]
+    payload_hash: str
+    outcome: MatchOutcome
+    received_ts: datetime
+
+
+@dataclass(frozen=True)
 class FeedSlaConfig:
     """A row of `control.feed_sla_config` — a feed's delivery contract.
 
@@ -393,6 +430,12 @@ class ControlTablesPort(Protocol):
     # ── writes: the observable behaviour of every engine story ───────────────
     def open_batch(self, batch: BatchControl) -> None: ...
     def update_batch_state(self, batch_id: str, state: BatchState) -> None: ...
+    def record_model_version(self, batch_id: str, model_version: str) -> None:
+        """ "Every batch records the model version it loaded into" — FIG 10.
+        CF-V3-E8-05's load stage is the one caller; stamped once the batch's
+        rows actually land, never guessed in advance of the load."""
+        ...
+
     def record_stage(self, status: StageStatus) -> None: ...
     def register_input_file(self, file: InputFile) -> None: ...
     def link_input_to_batch(self, fingerprint: str, batch_id: str) -> None:
@@ -455,6 +498,70 @@ class ControlTablesPort(Protocol):
         """Refuses (`ControlTableError`) for an alert id that was never
         raised — an acknowledgement of nothing is a lie in the audit trail,
         not a no-op."""
+        ...
+
+    # ── the identity stage — CF-V3-E9-01 ──────────────────────────────────────
+    #
+    # Pure pipeline telemetry, batch-linked, the same shape as `record_error`
+    # and `record_schema_drift` — which is why it lives on THIS pin rather
+    # than `metadata_db`'s ledgers: those hold the platform's own decisions
+    # (a suspension, an incident's acknowledgement); this is what a batch's
+    # run actually did, recomputed by nobody.
+
+    def record_identity_request(self, entry: IdentityRequestLogEntry) -> None:
+        """Append-only. Written BEFORE the call it describes returns, so a
+        crash mid-call leaves a request logged with no matching response —
+        visible as exactly that, never as a request that silently vanished."""
+        ...
+
+    def record_identity_response(self, entry: IdentityResponseLogEntry) -> None:
+        """Append-only, linked to its request by `request_id`."""
+        ...
+
+    def record_crosswalk(self, entry: CrosswalkEntry) -> None:
+        """Upsert on `(source_system, source_member_id, batch_id)` — the
+        schema's own unique constraint. Calling this twice with the same
+        entry is the idempotency guarantee itself: 'the same input arrives
+        twice, safely skipped' means the SECOND write changes nothing, not
+        that the caller must remember not to make it."""
+        ...
+
+    def get_crosswalk(
+        self, *, source_system: str, source_member_id: str, batch_id: str
+    ) -> CrosswalkEntry | None:
+        """Non-None means this record has already been submitted for THIS
+        batch — the worker's own idempotency check, asked one record at a
+        time so a batch half-processed by a crashed run resumes exactly where
+        it stopped rather than resubmitting what already resolved."""
+        ...
+
+    def list_crosswalk(self, batch_id: str) -> Sequence[CrosswalkEntry]:
+        """Every entry this batch has produced so far — G4's own accounting
+        reads this, and `IdentityDisposition` is built directly from it."""
+        ...
+
+    # ── coverage and parity telemetry — CF-V3-E9-04 ───────────────────────────
+    def record_coverage_snapshot(self, snapshot: CoverageSnapshot) -> None:
+        """Upsert on `(source_system, business_date)` — the same day
+        recomputed twice corrects the row rather than duplicating it, the
+        idempotency guarantee the story names outright."""
+        ...
+
+    def coverage_history(self, source_system: str, *, days: int = 90) -> Sequence[CoverageSnapshot]:
+        """Newest first, bounded — the trend line a cutover-readiness view
+        reads, and what `detect_regressions` compares today against."""
+        ...
+
+    def record_parity_check(self, summary: ParityCheckSummary) -> None:
+        """Upsert on `(source_system, business_date)`, for the same reason
+        `record_coverage_snapshot` is."""
+        ...
+
+    def parity_check_history(
+        self, source_system: str, *, days: int = 90
+    ) -> Sequence[ParityCheckSummary]:
+        """Newest first, bounded — the standing scorecard CF-V3-E9-04 asks
+        for, automated from what used to be validated by hand once."""
         ...
 
     # ── reads: what every screen and every certified query tool sees ─────────

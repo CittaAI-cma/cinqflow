@@ -11,6 +11,7 @@ platform's safety floor stated in one place.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,13 @@ from typing import Any
 import pytest
 
 from cinqflow.core.compiler.plan import LogicalPlan, compile_steps
+from cinqflow.core.identity import MatchOutcome
+from cinqflow.core.identity.exceptions import (
+    ExceptionEventAction,
+    ExceptionState,
+    IdentityExceptionEvent,
+    exception_key,
+)
 from cinqflow.core.model.governed import (
     Actor,
     AuditEntry,
@@ -36,6 +44,7 @@ from cinqflow.ports.authn import AuthenticationError, AuthnPort, Role
 from cinqflow.ports.catalog import CatalogPort
 from cinqflow.ports.compute_job import ComputeError, ComputeJobPort
 from cinqflow.ports.identity import IdentityPort, UnapprovedMergeError
+from cinqflow.ports.legacy_readonly import LegacyReadOnlyPort
 from cinqflow.ports.metadata_db import (
     ActionRecordRow,
     ConcurrentVersionError,
@@ -331,6 +340,102 @@ def test_the_incident_ledger_has_no_edit_path_and_no_lifecycle_state(
     from dataclasses import fields as dataclass_fields
 
     assert "lifecycle_state" not in {f.name for f in dataclass_fields(IncidentEvent)}
+
+
+# ── identity_exception / identity_exception_event · CF-V3-E9-01/E9-02 ───────
+def _occurrence_event(
+    *,
+    source_member_id: str = "M-1",
+    batch_id: str = "B-1244",
+    occurred_ts: datetime = NOW,
+) -> IdentityExceptionEvent:
+    return IdentityExceptionEvent(
+        event_id=str(uuid.uuid4()),
+        exception_key=exception_key("fidelis", source_member_id),
+        action=ExceptionEventAction.OCCURRENCE,
+        source_system="fidelis",
+        source_member_id=source_member_id,
+        occurred_ts=occurred_ts,
+        batch_id=batch_id,
+        outcome=MatchOutcome.UNRESOLVED,
+    )
+
+
+def test_a_second_occurrence_grows_the_same_exception_not_a_new_one(
+    metadata: MetadataDbPort,
+) -> None:
+    """ "The same person failing in three batches is one exception with three
+    occurrences, not three items." — CF-V3-E9-02"""
+    metadata.record_identity_exception_event(_occurrence_event(batch_id="B-1"))
+    metadata.record_identity_exception_event(
+        _occurrence_event(batch_id="B-2", occurred_ts=NOW + timedelta(days=1))
+    )
+    exc = metadata.get_identity_exception(exception_key("fidelis", "M-1"))
+    assert exc.occurrence_count == 2
+    assert exc.state is ExceptionState.OPEN
+
+
+def test_an_assignment_is_a_transition_row_and_the_current_answer(
+    metadata: MetadataDbPort,
+) -> None:
+    metadata.record_identity_exception_event(_occurrence_event(source_member_id="M-2"))
+    metadata.record_identity_exception_event(
+        IdentityExceptionEvent(
+            event_id=str(uuid.uuid4()),
+            exception_key=exception_key("fidelis", "M-2"),
+            action=ExceptionEventAction.ASSIGNED,
+            source_system="fidelis",
+            source_member_id="M-2",
+            occurred_ts=NOW + timedelta(hours=1),
+            actor_subject="rule-engine",
+            detail="enrollment-steward@cinqcare.test",
+        )
+    )
+    exc = metadata.get_identity_exception(exception_key("fidelis", "M-2"))
+    assert exc.state is ExceptionState.ASSIGNED
+    assert exc.assigned_to == "enrollment-steward@cinqcare.test"
+
+
+def test_the_state_filter_reads_the_folded_state_not_the_occurrence_rows(
+    metadata: MetadataDbPort,
+) -> None:
+    """A resolved exception must not reappear as open through its own
+    occurrence rows — the same discipline `list_incident_events` holds."""
+    metadata.record_identity_exception_event(_occurrence_event(source_member_id="M-3"))
+    metadata.record_identity_exception_event(
+        IdentityExceptionEvent(
+            event_id=str(uuid.uuid4()),
+            exception_key=exception_key("fidelis", "M-3"),
+            action=ExceptionEventAction.RESOLVED,
+            source_system="fidelis",
+            source_member_id="M-3",
+            occurred_ts=NOW + timedelta(hours=2),
+            actor_subject="steward@cinqcare.test",
+        )
+    )
+    metadata.record_identity_exception_event(_occurrence_event(source_member_id="M-4"))
+
+    open_now = metadata.list_identity_exceptions(state=ExceptionState.OPEN)
+    assert exception_key("fidelis", "M-4") in {exc.key for exc in open_now}
+    assert exception_key("fidelis", "M-3") not in {exc.key for exc in open_now}
+
+
+def test_an_untouched_identity_exception_is_a_missing_object_here(
+    metadata: MetadataDbPort,
+) -> None:
+    with pytest.raises(ObjectNotFoundError):
+        metadata.get_identity_exception(exception_key("fidelis", "nobody-failed-for-this-one"))
+
+
+def test_the_identity_exception_ledger_has_no_edit_path_for_anyone(
+    metadata: MetadataDbPort,
+) -> None:
+    for forbidden in (
+        "update_identity_exception_event",
+        "delete_identity_exception_event",
+        "clear_identity_exceptions",
+    ):
+        assert not hasattr(metadata, forbidden), f"metadata_db exposes {forbidden}"
 
 
 # ── ops.variance_event · CF-V2-E13-03 ────────────────────────────────────────
@@ -673,6 +778,43 @@ def test_submission_accounting_balances(identity: IdentityPort) -> None:
     records = [{"source_system": "fidelis", "source_member_id": f"MBR{i:06d}"} for i in range(1, 4)]
     entries = identity.submit(records, batch_id="8842")
     assert len(entries) == len(records)
+
+
+# ── legacy_readonly · CF-V3-E9-04's first real caller ────────────────────────
+#
+# "Fitted in Wave 0 as a NAMED SEAT so conformance can report it unenergized
+#  ... Parallel run is CF-V5-E15-*." Coverage/parity telemetry is a narrower,
+# earlier use of the SAME socket — a standing daily comparison of one column
+# (LinkId) for OurIds the lake already knows about, not the full row-for-row
+# migration comparator Wave 5's parallel run needs. The port's own contract
+# (`fetch`/`compare`, read-only, no free-form query) is unchanged either way.
+@pytest.fixture(params=adapters_for("legacy_readonly"))
+def legacy(request: pytest.FixtureRequest, make: Callable[..., Any]) -> LegacyReadOnlyPort:
+    return make(request.param)
+
+
+def test_the_port_offers_no_write_verb_at_all(legacy: LegacyReadOnlyPort) -> None:
+    """Structural, not a policy comment — ADR-0013's additive-only estate has
+    no seat for a comparator that could write back to it."""
+    for forbidden in ("write", "update", "delete", "insert", "execute"):
+        assert not hasattr(legacy, forbidden), f"legacy_readonly exposes {forbidden}"
+
+
+def test_fetching_an_unfitted_query_name_answers_empty_not_an_error(
+    legacy: LegacyReadOnlyPort,
+) -> None:
+    assert legacy.fetch("no-such-named-query") == ()
+
+
+def test_compare_matches_on_key_and_reports_only_what_disagrees(
+    legacy: LegacyReadOnlyPort,
+) -> None:
+    ours = [{"key": "OUR-1", "link_id": "LINK-1"}, {"key": "OUR-2", "link_id": "LINK-2"}]
+    differences = legacy.compare("ourid_link_id_crosswalk", ours)
+    # An unfitted query has no legacy rows at all — every key is a difference,
+    # never a silent pass, which is what "report coverage without its
+    # denominator visible" would look like for a parity check instead.
+    assert {d.key for d in differences} == {"OUR-1", "OUR-2"}
 
 
 # ── compute_job ──────────────────────────────────────────────────────────────

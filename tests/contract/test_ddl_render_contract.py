@@ -19,7 +19,10 @@ import re
 import pytest
 
 from cinqflow.adapters.local.pg_ddl import PostgresDdlRenderer
-from cinqflow.core.schema_spec import BRONZE_SCHEMA, CONTROL_SCHEMA, all_schemas
+from cinqflow.core.schema_spec import BRONZE_SCHEMA, CONTROL_SCHEMA, TypeName, all_schemas
+from cinqflow.core.schema_spec import Column as SpecColumn
+from cinqflow.core.schema_spec import Schema as SpecSchema
+from cinqflow.core.schema_spec import Table as SpecTable
 
 pytestmark = pytest.mark.contract
 
@@ -114,6 +117,40 @@ def test_rendering_is_idempotent_by_construction(renderer: PostgresDdlRenderer) 
         head = statement.strip().upper()
         if head.startswith(("CREATE SCHEMA", "CREATE TABLE", "CREATE INDEX")):
             assert "IF NOT EXISTS" in head, statement[:80]
+
+
+@pytest.mark.parametrize("renderer", RENDERERS)
+def test_identifiers_are_quoted_so_case_survives(renderer: PostgresDdlRenderer) -> None:
+    """CF-V3-E10-01's own regression: an unquoted `OurId` is what Postgres
+    silently folds to `ourid` — harmless for the platform's own snake_case
+    tables, a real mismatch against the client's SQL Server naming the first
+    live ODS deploy found. Every identifier this renderer emits is quoted,
+    verified here on a synthetic PascalCase table so no future schema needs
+    to discover the same bug against a live database again."""
+    mixed_case = SpecSchema(
+        name="silver_ods",
+        description="A synthetic PascalCase table, proving quoting alone.",
+        tables=(
+            SpecTable(
+                name="Members",
+                comment="",
+                columns=(
+                    SpecColumn("OurId", TypeName.INT64, nullable=False),
+                    SpecColumn("DateOfBirth", TypeName.DATE),
+                ),
+                primary_key=("OurId",),
+                indexes=(("DateOfBirth",),),
+            ),
+        ),
+    )
+    rendered = "\n".join(renderer.render_schema(mixed_case))
+    assert '"Members"' in rendered
+    assert '"OurId"' in rendered
+    assert '"DateOfBirth"' in rendered
+    # The exact failure mode this guards: an unquoted mixed-case identifier
+    # sitting bare in the CREATE, which Postgres would fold to lowercase.
+    assert "Members (" not in rendered
+    assert " OurId " not in rendered
 
 
 @pytest.mark.parametrize("renderer", RENDERERS)

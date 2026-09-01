@@ -347,6 +347,94 @@ class CanonicalModelOut(BaseModel):
     unclaimed_tables: list[str] = Field(default_factory=list)
 
 
+class OdsColumnOut(BaseModel):
+    """One column of the published canonical ODS model. CF-V3-E10-02."""
+
+    name: str
+    type: str
+    nullable: bool
+    is_phi: bool = False
+    comment: str = ""
+
+
+class OdsConsumerOut(BaseModel):
+    """One mapping that populates a column, and the business-named reports
+    it says depend on it — "list affected consumers from lineage.\""""
+
+    mapping_id: str
+    business_consumers: list[str] = Field(default_factory=list)
+
+
+class OdsFieldChangeOut(BaseModel):
+    """One entity/column-level change between two model versions — never a
+    raw body diff. "in terms a consumer understands.\""""
+
+    entity: str
+    column: str
+    kind: str
+    was: str = ""
+    now: str = ""
+
+
+class OdsDeprecationOut(BaseModel):
+    """One removal a proposed version would make, with its real, computed
+    consumers — "list affected consumers... before the break.\""""
+
+    change: OdsFieldChangeOut
+    consumers: list[OdsConsumerOut] = Field(default_factory=list)
+    is_breaking: bool = False
+
+
+class OdsModelSummaryOut(BaseModel):
+    """The currently PUBLISHED model — never a proposal in review. The
+    landing page for the contract browser."""
+
+    version: int
+    published_by: str
+    published_ts: datetime
+    entities: list[str]
+
+
+class OdsContractPageOut(BaseModel):
+    """The stable, linkable page for one entity — CF-V3-E10-02's own words:
+    "every entity a stable contract page downstream teams can link to."
+    Keyed by entity name alone; the URL does not change across versions."""
+
+    entity: str
+    model_version: int
+    columns: list[OdsColumnOut]
+    consumers: dict[str, list[OdsConsumerOut]] = Field(default_factory=dict)
+    pending_deprecations: list[OdsDeprecationOut] = Field(default_factory=list)
+
+
+class OdsVersionOut(BaseModel):
+    """One version in the model's history. `is_current` marks the one
+    downstream teams may actually rely on — the published one, never the
+    highest version number alone."""
+
+    version: int
+    lifecycle_state: str
+    created_by_subject: str
+    created_by_name: str
+    created_ts: datetime
+    approved_by_subject: str | None = None
+    approved_ts: datetime | None = None
+    is_current: bool = False
+
+
+class OdsChangelogOut(BaseModel):
+    """What changed and why, between two versions. "why" is the reviewer's
+    and approver's own recorded comments — never a field invented for this
+    view."""
+
+    from_version: int
+    to_version: int
+    rationale: str = ""
+    added: list[OdsFieldChangeOut] = Field(default_factory=list)
+    removed: list[OdsFieldChangeOut] = Field(default_factory=list)
+    retyped: list[OdsFieldChangeOut] = Field(default_factory=list)
+
+
 class PauseFeedIn(BaseModel):
     """Stop new work on a feed. CF-V1-E3-04.
 
@@ -858,6 +946,46 @@ class KeySearchOut(BaseModel):
     note: str
 
 
+class StructurePathOut(BaseModel):
+    """CF-V3-E5-05. One path in a nested NDJSON/FHIR/HL7-derived JSON
+    sample's structure tree, with its fill rate and — for a repeating
+    group — its element-count range."""
+
+    path: str
+    documents_with_path: int
+    documents_total: int
+    fill_rate: float
+    is_array: bool
+    array_length_min: int | None
+    array_length_max: int | None
+    array_length_avg: float | None
+
+
+class FlattenProposalOut(BaseModel):
+    """CF-V3-E5-05. A reviewable proposal, never an applied transform."""
+
+    source_path: str
+    proposed_entity: str
+    element_count_min: int
+    element_count_max: int
+    description: str
+
+
+class FixedWidthColumnOut(BaseModel):
+    start: int
+    end: int
+    name: str | None
+    confidence: float
+
+
+class FixedWidthLayoutOut(BaseModel):
+    """CF-V3-E5-05. One candidate segmentation — `source` is
+    `"statistical"` for the detected layout the profiler itself computed."""
+
+    source: str
+    columns: list[FixedWidthColumnOut]
+
+
 class FileProfileOut(BaseModel):
     """The profile, as the wizard renders it.
 
@@ -887,6 +1015,11 @@ class FileProfileOut(BaseModel):
     profiled_ts: datetime
     citation_id: str
     route: str
+    #: CF-V3-E5-05 · nested formats only. Empty for every flat format.
+    structure_paths: list[StructurePathOut] = []
+    flatten_proposals: list[FlattenProposalOut] = []
+    #: CF-V3-E5-05 · `fixed_width` only. `None` for every other format.
+    fixed_width_layout: FixedWidthLayoutOut | None = None
 
 
 # ── CF-V1-E3-05 · delivery ───────────────────────────────────────────────────
@@ -2462,3 +2595,170 @@ class LayerRowsOut(BaseModel):
     truncated: bool
     masked_columns: list[str]
     batch_id: str | None = None
+
+
+# ── CF-V3-E9-03 · the merge evidence card ────────────────────────────────────
+
+
+class SatelliteRowIn(BaseModel):
+    """One satellite row, as the merge engine needs to see it — never the
+    row's own PHI-bearing content, only what identifies it and a normalized
+    signature of what it says. The caller computes `content_key`; this API
+    never receives a raw address or email to compare."""
+
+    entity: str
+    record_id: str
+    owner_member_id: str
+    content_key: str
+
+
+class MergeCandidateIn(BaseModel):
+    """Everything needed to preview a merge: which two members, their
+    satellite rows (for the repoint/collapse preview), and a PHI-free
+    demographic comparison (already computed by the caller — this route
+    never receives a raw name or date of birth)."""
+
+    merged_away_member_id: str
+    survivor_member_id: str
+    merged_away_rows: list[SatelliteRowIn] = Field(default_factory=list)
+    survivor_rows: list[SatelliteRowIn] = Field(default_factory=list)
+    #: field name -> "match" | "differs" | "similar", from
+    #: `core.identity.merge.compare_demographics`.
+    demographic_comparison: dict[str, str]
+
+
+class SatelliteRepointOut(BaseModel):
+    entity: str
+    record_id: str
+    from_member_id: str
+    to_member_id: str
+
+
+class DuplicateCollapseOut(BaseModel):
+    entity: str
+    kept_record_id: str
+    collapsed_record_id: str
+
+
+class MergePlanOut(BaseModel):
+    merged_away_member_id: str
+    survivor_member_id: str
+    marked_merged: str
+    repoints: list[SatelliteRepointOut]
+    collapses: list[DuplicateCollapseOut]
+    fingerprint: str
+
+
+class EvidenceCardOut(BaseModel):
+    """What the steward reads before deciding. `narrative` is empty and
+    `model_called` is false when no LLM pin is fitted or the endpoint could
+    not be reached — the plan and comparison are still complete either way."""
+
+    demographic_comparison: dict[str, str]
+    plan: MergePlanOut
+    narrative: str
+    grounded_fields: list[str]
+    model_called: bool
+
+
+class MergeExecuteIn(BaseModel):
+    """R4: no confidence field exists here, and none ever will. The plan is
+    re-sent rather than looked up by id, because this route has no case
+    store yet — see `MergeExecuteOut`'s own note."""
+
+    plan: MergePlanOut
+    steward_approval_id: str
+
+
+class MergeExecuteOut(BaseModel):
+    """The authorization record. `plan` is echoed back so a caller can
+    immediately re-derive it for `verify_post_change` once the actual
+    repointing (a worker's I/O) has happened."""
+
+    plan: MergePlanOut
+    steward_approval_id: str
+    authorized_ts: datetime
+
+
+# ── CF-V3-E9-02 · the identity exception queue ───────────────────────────────
+
+
+class IdentityExceptionOccurrenceOut(BaseModel):
+    """One batch's contribution — never merged away, so a steward can see
+    that the same person has failed three times, not just that they have."""
+
+    batch_id: str
+    outcome: str
+    occurred_ts: datetime
+    detail: str = ""
+
+
+class IdentityExceptionOut(BaseModel):
+    """Current state of one person's identity problem, folded from the
+    ledger — `key` is what every other route on this queue addresses it by."""
+
+    key: str
+    source_system: str
+    source_member_id: str
+    state: str
+    assigned_to: str | None = None
+    opened_ts: datetime
+    latest_ts: datetime
+    occurrence_count: int
+    occurrences: list[IdentityExceptionOccurrenceOut]
+
+
+class QueueHealthOut(BaseModel):
+    """Per-source, never rolled up across every payer first — "a payer
+    sending bad demographics becomes visible" only if the number stays split."""
+
+    source_system: str
+    open_count: int
+    breached_count: int
+    resolved_count: int
+
+
+class AssignIdentityExceptionIn(BaseModel):
+    assigned_to: str = Field(min_length=1)
+
+
+class ResolveIdentityExceptionIn(BaseModel):
+    """A note is optional — the core's own `resolve()` needs no reason to
+    accept, and requiring one here would be a rule this route invented."""
+
+    note: str = ""
+
+
+# ── CF-V3-E9-04 · daily identity accounting and coverage telemetry ──────────
+
+
+class CoverageSnapshotOut(BaseModel):
+    """One source, one day. `total` always rides beside the percentages it
+    is a share of — "report coverage without its denominator visible" is a
+    documented don't. `is_regression`/`drop_points` compare this row against
+    the day immediately before it in the same response, so a caller never
+    has to fetch two pages to see what the dashboard is flagging."""
+
+    source_system: str
+    business_date: str
+    total: int
+    with_link_id: int
+    with_our_id: int
+    with_both: int
+    link_id_coverage_pct: Decimal
+    our_id_coverage_pct: Decimal
+    both_coverage_pct: Decimal
+    is_regression: bool = False
+    drop_points: Decimal | None = None
+
+
+class ParityCheckOut(BaseModel):
+    """The automated form of 'validate LinkID matches between lake and
+    legacy' — one row per day this source's scorecard ran."""
+
+    source_system: str
+    business_date: str
+    checked: int
+    matched: int
+    mismatched: int
+    match_rate_pct: Decimal

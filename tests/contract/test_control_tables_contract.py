@@ -20,6 +20,8 @@ from typing import Any
 
 import pytest
 
+from cinqflow.core.identity import CrosswalkEntry, MatchOutcome
+from cinqflow.core.identity.telemetry import CoverageSnapshot, ParityCheckSummary
 from cinqflow.core.model.vocabulary import BatchState, ErrorCategory, FileState, Layer
 from cinqflow.ports.control_tables import (
     CONTROL_TABLES,
@@ -30,6 +32,8 @@ from cinqflow.ports.control_tables import (
     DropLedgerEntry,
     ErrorRecord,
     FeedSlaConfig,
+    IdentityRequestLogEntry,
+    IdentityResponseLogEntry,
     InputFile,
     QuarantineSummary,
     Reconciliation,
@@ -78,6 +82,24 @@ def test_there_are_exactly_eleven_control_tables() -> None:
 def test_a_batch_is_retrievable_by_the_one_join_key(opened: ControlTablesPort) -> None:
     batch = opened.get_batch(BATCH)
     assert (batch.feed_id, batch.feed_version, batch.state) == (FEED, 1, BatchState.RECEIVED)
+
+
+def test_a_model_version_starts_unset(opened: ControlTablesPort) -> None:
+    assert opened.get_batch(BATCH).model_version is None
+
+
+def test_recording_the_model_version_stamps_the_batch(opened: ControlTablesPort) -> None:
+    """ "Every batch records the model version it loaded into" — FIG 10.
+    CF-V3-E8-05 stamps this once the batch's rows actually land."""
+    opened.record_model_version(BATCH, "1")
+    assert opened.get_batch(BATCH).model_version == "1"
+
+
+def test_recording_the_model_version_on_a_missing_batch_is_a_named_failure(
+    control: ControlTablesPort,
+) -> None:
+    with pytest.raises(BatchNotFoundError):
+        control.record_model_version("does-not-exist", "1")
 
 
 def test_a_missing_batch_is_a_named_failure_not_none(control: ControlTablesPort) -> None:
@@ -352,6 +374,16 @@ def test_schema_drift_is_recorded_whether_or_not_it_blocked_the_batch(
 
 
 def test_batches_list_newest_first_for_a_feed(opened: ControlTablesPort) -> None:
+    """Newest first, asserted on ORDER rather than on the whole list.
+
+    The assertion used to be `== ["8843", "8842"]`, which is a claim that the
+    feed has exactly two batches ever. That is true of an empty plane and false
+    of a real one: this suite runs against the same Postgres the pipeline
+    commits to, and the moment that plane carried real batches for this feed a
+    correct implementation started failing. What the contract actually promises
+    is descending order and that both batches appear — so that is what is
+    checked, and the check now holds however much history the feed has.
+    """
     opened.open_batch(
         BatchControl(
             batch_id="8843",
@@ -362,7 +394,15 @@ def test_batches_list_newest_first_for_a_feed(opened: ControlTablesPort) -> None
             started_ts=datetime(2026, 9, 1, 3, 14, tzinfo=UTC),
         )
     )
-    assert [b.batch_id for b in opened.list_batches(FEED)] == ["8843", "8842"]
+    batches = list(opened.list_batches(FEED))
+    listed = [b.batch_id for b in batches]
+    assert {"8843", "8842"} <= set(listed), listed
+    # The newer batch comes FIRST. Stated as a relative position rather than an
+    # index, because a real plane may hold other batches for this feed between
+    # or around these two, and their presence is not a defect.
+    assert listed.index("8843") < listed.index("8842"), listed
+    started = [b.started_ts for b in batches]
+    assert started == sorted(started, reverse=True), "list_batches must be newest first"
 
 
 def test_the_port_offers_no_generic_sql_escape_hatch(control: ControlTablesPort) -> None:
@@ -662,3 +702,162 @@ def test_the_history_is_newest_first_and_bounded(opened: ControlTablesPort) -> N
 
 def test_a_feed_with_no_rule_runs_is_empty_not_an_error(control: ControlTablesPort) -> None:
     assert control.rule_result_history("a-feed-nobody-onboarded") == ()
+
+
+# ── the identity stage · CF-V3-E9-01 ─────────────────────────────────────────
+
+
+def _crosswalk_entry(
+    *, source_member_id: str = "M-1", outcome: MatchOutcome = MatchOutcome.RESOLVED
+) -> CrosswalkEntry:
+    return CrosswalkEntry(
+        source_system="fidelis",
+        source_member_id=source_member_id,
+        internal_member_id=f"internal-{source_member_id}",
+        verato_person_id="verato-1" if outcome is MatchOutcome.RESOLVED else None,
+        batch_id=BATCH,
+        outcome=outcome,
+    )
+
+
+def test_a_recorded_request_and_response_are_stored_with_their_hashes(
+    opened: ControlTablesPort,
+) -> None:
+    """ "Store full request and response payloads with hashes ... the audit
+    trail is the design's core." — CF-V3-E9-01. Storage is write-only from
+    this pin's own contract (no read verb is required by the story); what
+    matters here is that recording twice — a request AND its matching
+    response — never refuses."""
+    request_id = str(uuid.uuid4())
+    opened.record_identity_request(
+        IdentityRequestLogEntry(
+            request_id=request_id,
+            batch_id=BATCH,
+            source_system="fidelis",
+            source_member_id="M-1",
+            payload={"first_name": "Jane", "last_name": "Doe"},
+            payload_hash="deadbeef",
+            sent_ts=NOW,
+        )
+    )
+    opened.record_identity_response(
+        IdentityResponseLogEntry(
+            response_id=str(uuid.uuid4()),
+            request_id=request_id,
+            batch_id=BATCH,
+            payload={"outcome": "resolved", "verato_person_id": "verato-1"},
+            payload_hash="cafebabe",
+            outcome=MatchOutcome.RESOLVED,
+            received_ts=NOW,
+        )
+    )
+
+
+def test_recording_the_same_crosswalk_entry_twice_is_the_idempotency_guarantee(
+    opened: ControlTablesPort,
+) -> None:
+    """ "Given the same input arrives twice ... it is safely skipped — data is
+    never duplicated." The port's own upsert makes the SECOND write a no-op
+    on content, which is what lets a worker call this unconditionally rather
+    than checking first."""
+    opened.record_crosswalk(_crosswalk_entry())
+    opened.record_crosswalk(_crosswalk_entry())
+    assert len(opened.list_crosswalk(BATCH)) == 1
+
+
+def test_get_crosswalk_answers_the_workers_own_idempotency_check(
+    opened: ControlTablesPort,
+) -> None:
+    assert (
+        opened.get_crosswalk(source_system="fidelis", source_member_id="M-1", batch_id=BATCH)
+        is None
+    )
+    opened.record_crosswalk(_crosswalk_entry())
+    entry = opened.get_crosswalk(source_system="fidelis", source_member_id="M-1", batch_id=BATCH)
+    assert entry is not None
+    assert entry.outcome is MatchOutcome.RESOLVED
+
+
+def test_list_crosswalk_is_g4s_own_accounting_source(opened: ControlTablesPort) -> None:
+    opened.record_crosswalk(_crosswalk_entry(source_member_id="M-1"))
+    opened.record_crosswalk(
+        _crosswalk_entry(source_member_id="M-2", outcome=MatchOutcome.UNRESOLVED)
+    )
+    entries = opened.list_crosswalk(BATCH)
+    assert {e.source_member_id for e in entries} == {"M-1", "M-2"}
+    assert opened.list_crosswalk("a-batch-nobody-ran") == ()
+
+
+# ── coverage and parity telemetry · CF-V3-E9-04 ──────────────────────────────
+
+
+def _coverage(
+    *, source_system: str = "fidelis", business_date: str = "2026-08-31", total: int = 100
+) -> CoverageSnapshot:
+    return CoverageSnapshot(
+        source_system=source_system,
+        business_date=business_date,
+        total=total,
+        with_link_id=total,
+        with_our_id=total,
+        with_both=total,
+    )
+
+
+def test_recording_the_same_days_coverage_twice_corrects_rather_than_duplicates(
+    control: ControlTablesPort,
+) -> None:
+    """ "Given the same input arrives twice ... it is safely skipped." """
+    control.record_coverage_snapshot(_coverage(total=100))
+    control.record_coverage_snapshot(_coverage(total=97))
+    (row,) = control.coverage_history("fidelis")
+    assert row.total == 97
+
+
+def test_coverage_history_is_newest_first_and_scoped_to_its_source(
+    control: ControlTablesPort,
+) -> None:
+    control.record_coverage_snapshot(_coverage(business_date="2026-08-29"))
+    control.record_coverage_snapshot(_coverage(business_date="2026-08-30"))
+    control.record_coverage_snapshot(_coverage(source_system="optum", business_date="2026-08-30"))
+
+    history = control.coverage_history("fidelis")
+    assert [row.business_date for row in history] == ["2026-08-30", "2026-08-29"]
+
+
+def test_coverage_history_for_a_source_never_recorded_is_empty_not_an_error(
+    control: ControlTablesPort,
+) -> None:
+    assert control.coverage_history("a-source-nobody-fed") == ()
+
+
+def _parity(
+    *, source_system: str = "fidelis", business_date: str = "2026-08-31", mismatched: int = 0
+) -> ParityCheckSummary:
+    return ParityCheckSummary(
+        source_system=source_system,
+        business_date=business_date,
+        checked=100,
+        matched=100 - mismatched,
+        mismatched=mismatched,
+    )
+
+
+def test_recording_the_same_days_parity_check_twice_corrects_rather_than_duplicates(
+    control: ControlTablesPort,
+) -> None:
+    control.record_parity_check(_parity(mismatched=0))
+    control.record_parity_check(_parity(mismatched=3))
+    (row,) = control.parity_check_history("fidelis")
+    assert row.mismatched == 3
+
+
+def test_parity_check_history_is_newest_first_and_scoped_to_its_source(
+    control: ControlTablesPort,
+) -> None:
+    control.record_parity_check(_parity(business_date="2026-08-29"))
+    control.record_parity_check(_parity(business_date="2026-08-30"))
+    control.record_parity_check(_parity(source_system="optum", business_date="2026-08-30"))
+
+    history = control.parity_check_history("fidelis")
+    assert [row.business_date for row in history] == ["2026-08-30", "2026-08-29"]

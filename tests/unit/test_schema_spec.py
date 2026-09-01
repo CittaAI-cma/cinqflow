@@ -125,7 +125,11 @@ def test_the_provisioned_schemas_are_the_plate_s_seven_plus_the_platform_s() -> 
     `profiling` (CF-V1-E5-01's computed evidence — BESIDE the client's control
     framework, never inside it, per ADR-0013) and `ops` (CF-V1-E3-04's feed
     suspensions: OPERATIONAL state, deliberately not governance, so that
-    lifting a pause needs no approver while publishing configuration does)."""
+    lifting a pause needs no approver while publishing configuration does).
+    Wave 3 (CF-V3-E9-01/E9-02) adds `identity`: the crosswalk, its full
+    request/response audit trail, and the exception queue — the seat was
+    fitted from Wave 0 (`ports/identity.py`); this is where it becomes a real,
+    queryable plane object."""
     assert [s.name for s in all_schemas()] == [
         "landing_ctl",
         "control",
@@ -142,7 +146,43 @@ def test_the_provisioned_schemas_are_the_plate_s_seven_plus_the_platform_s() -> 
         "knowledge",
         "profiling",
         "ops",
+        "identity",
     ]
+
+
+@pytest.mark.unit
+def test_the_identity_schema_retains_source_identifiers_on_every_table() -> None:
+    """Model rule #1 applies to the crosswalk itself: a resolved LinkId is
+    worthless for tracing without the source_system/source_member_id it
+    resolved FROM. `verato_response_log` traces through its `request_id` FK
+    rather than duplicating the identifiers a second time — one join, not a
+    second PHI-bearing copy of the same columns."""
+    identity = next(s for s in all_schemas() if s.name == "identity")
+    for table in identity.tables:
+        columns = {c.name for c in table.columns}
+        assert (
+            "source_system" in columns or "exception_key" in columns or "request_id" in columns
+        ), table.name
+
+
+@pytest.mark.unit
+def test_the_verato_logs_are_append_only_and_carry_a_payload_hash() -> None:
+    """ "Store full request and response payloads with hashes, per the client's
+    own schema design — the audit trail is the design's core." — CF-V3-E9-01"""
+    identity = next(s for s in all_schemas() if s.name == "identity")
+    for name in ("verato_request_log", "verato_response_log"):
+        table = identity.table(name)
+        assert table.append_only is True
+        columns = {c.name for c in table.columns}
+        assert {"payload", "payload_hash"} <= columns
+
+
+@pytest.mark.unit
+def test_every_phi_bearing_identity_column_is_flagged() -> None:
+    identity = next(s for s in all_schemas() if s.name == "identity")
+    crosswalk = identity.table("bridge_member_source_to_verato")
+    assert crosswalk.column("source_member_id").is_phi
+    assert crosswalk.column("source_system").is_phi
 
 
 @pytest.mark.unit

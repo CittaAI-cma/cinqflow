@@ -28,6 +28,14 @@ from typing import Any
 
 from cinqflow.adapters.local.pg_control import Connection
 from cinqflow.core.citations import parse as parse_citation
+from cinqflow.core.identity import MatchOutcome
+from cinqflow.core.identity.exceptions import (
+    ExceptionEventAction,
+    ExceptionState,
+    IdentityException,
+    IdentityExceptionEvent,
+    fold,
+)
 from cinqflow.core.model.agent_action import ActionOutcome, AgentAction
 from cinqflow.core.model.governed import (
     Actor,
@@ -235,6 +243,28 @@ def _variance(row: tuple[Any, ...]) -> Variance:
         opened_ts=row[9],
         explanation=row[10] or "",
         waiver=waiver,
+    )
+
+
+def _identity_exception_event(row: tuple[Any, ...]) -> IdentityExceptionEvent:
+    # `identity.identity_exception_event` has no source_system/source_member_id
+    # columns — a second place to store what `exception_key` already encodes
+    # is a second place for the two to disagree. Splitting on the first colon
+    # is exact because `exception_key()` only ever joins with one, and a
+    # source system name never contains one.
+    exception_key = row[1]
+    source_system, source_member_id = exception_key.split(":", 1)
+    return IdentityExceptionEvent(
+        event_id=row[0],
+        exception_key=exception_key,
+        action=ExceptionEventAction(row[2]),
+        source_system=source_system,
+        source_member_id=source_member_id,
+        batch_id=row[3],
+        outcome=MatchOutcome(row[4]) if row[4] is not None else None,
+        actor_subject=row[5] or "",
+        detail=row[6] or "",
+        occurred_ts=row[7],
     )
 
 
@@ -957,3 +987,73 @@ class PostgresMetadataDb:
         rows = self._db.fetch_all(statement, parameters)
         current = sorted(rows, key=lambda row: row[15], reverse=True)
         return tuple(_variance(row) for row in current[:limit])
+
+    # ── identity_exception / identity_exception_event · CF-V3-E9-01/E9-02 ────
+    #
+    # A DELTA ledger, not a snapshot one — see the port's own module note.
+    # `fold()` runs on every read rather than trusting `identity.
+    # identity_exception` as a second source of truth; that table stays
+    # unused here deliberately, a documented follow-up once the queue screen
+    # needs the read to be an index lookup rather than an event-table scan.
+    def record_identity_exception_event(
+        self, event: IdentityExceptionEvent
+    ) -> IdentityExceptionEvent:
+        self._db.execute(
+            "INSERT INTO identity.identity_exception_event (event_id, exception_key, action, "
+            "batch_id, outcome, actor_subject, detail, occurred_ts) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                str(uuid.uuid4()),
+                event.exception_key,
+                event.action.value,
+                event.batch_id,
+                event.outcome.value if event.outcome is not None else None,
+                event.actor_subject,
+                event.detail,
+                event.occurred_ts,
+            ),
+        )
+        return event
+
+    def get_identity_exception(self, exception_key: str) -> IdentityException:
+        events = self._identity_exception_events(exception_key=exception_key)
+        if not events:
+            raise ObjectNotFoundError(f"identity exception {exception_key} has no events")
+        return fold(events)
+
+    def list_identity_exceptions(
+        self,
+        *,
+        source_system: str | None = None,
+        state: ExceptionState | None = None,
+        limit: int = 50,
+    ) -> Sequence[IdentityException]:
+        # No source_system column to filter in SQL — the same reason the
+        # mapper above derives it from exception_key rather than storing it
+        # twice. Filtering after folding costs nothing at rung-0.5 scale.
+        by_key: dict[str, list[IdentityExceptionEvent]] = {}
+        for event in self._identity_exception_events():
+            by_key.setdefault(event.exception_key, []).append(event)
+        current_exceptions = [fold(events) for events in by_key.values()]
+        filtered = [
+            exc
+            for exc in current_exceptions
+            if (source_system is None or exc.source_system == source_system)
+            and (state is None or exc.state is state)
+        ]
+        filtered.sort(key=lambda exc: exc.opened_ts)
+        return tuple(filtered[:limit])
+
+    def _identity_exception_events(
+        self, *, exception_key: str | None = None
+    ) -> tuple[IdentityExceptionEvent, ...]:
+        statement = (
+            "SELECT event_id, exception_key, action, batch_id, outcome, actor_subject, "
+            "detail, occurred_ts FROM identity.identity_exception_event WHERE 1=1"
+        )
+        parameters: tuple[Any, ...] = ()
+        if exception_key is not None:
+            statement += " AND exception_key = %s"
+            parameters += (exception_key,)
+        rows = self._db.fetch_all(statement, parameters)
+        return tuple(_identity_exception_event(row) for row in rows)
