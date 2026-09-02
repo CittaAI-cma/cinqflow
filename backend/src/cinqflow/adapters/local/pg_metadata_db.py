@@ -44,7 +44,7 @@ from cinqflow.core.model.governed import (
     LifecycleState,
     ObjectType,
 )
-from cinqflow.core.model.vocabulary import ActorType, BatchState, RiskClass
+from cinqflow.core.model.vocabulary import ActorType, AgentJobState, BatchState, RiskClass
 from cinqflow.core.operations.actions import ActionPhase, ActionRecord, OpsAction
 from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
 from cinqflow.core.profiling import FileProfile
@@ -59,6 +59,7 @@ from cinqflow.core.variance import Variance, VarianceKind, VarianceOutcome, Waiv
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
     ActionRecordRow,
+    AgentJob,
     ConcurrentVersionError,
     FileProfileRecord,
     ObjectNotFoundError,
@@ -305,6 +306,21 @@ def _action_row(row: tuple[Any, ...]) -> ActionRecordRow:
             requested_ts=row[11],
             verified_ts=row[12],
         ),
+    )
+
+
+def _agent_job(row: tuple[Any, ...]) -> AgentJob:
+    return AgentJob(
+        job_id=row[0],
+        feed_id=row[1],
+        agent=row[2],
+        state=AgentJobState(row[3]),
+        requested_ts=row[4],
+        started_ts=row[5],
+        completed_ts=row[6],
+        proposal_id=row[7],
+        error=row[8],
+        requested_by=row[9],
     )
 
 
@@ -853,6 +869,45 @@ class PostgresMetadataDb:
         current_rows = tuple(_action_row(row) for row in self._db.fetch_all(statement, parameters))
         newest_first = sorted(current_rows, key=lambda row: row.occurred_ts, reverse=True)
         return tuple(newest_first[:limit])
+
+    # ── ops.agent_job ─────────────────────────────────────────────────────────
+    def record_agent_job(self, job: AgentJob) -> None:
+        """Append-only — one INSERT, no `ON CONFLICT`, matching every other
+        `ops.*` writer in this file (`record_action_event`, `record_incident_
+        event`)."""
+        self._db.execute(
+            "INSERT INTO ops.agent_job (event_id, job_id, feed_id, agent, state, "
+            "requested_ts, started_ts, completed_ts, proposal_id, error, requested_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                str(uuid.uuid4()),
+                job.job_id,
+                job.feed_id,
+                job.agent,
+                job.state.value,
+                job.requested_ts,
+                job.started_ts,
+                job.completed_ts,
+                job.proposal_id,
+                job.error,
+                job.requested_by,
+            ),
+        )
+
+    def get_agent_job(self, job_id: str) -> AgentJob:
+        rows = self._db.fetch_all(
+            "SELECT job_id, feed_id, agent, state, requested_ts, started_ts, completed_ts, "
+            "proposal_id, error, requested_by FROM ops.agent_job WHERE job_id = %s",
+            (job_id,),
+        )
+        if not rows:
+            raise ObjectNotFoundError(f"agent job {job_id} was never recorded")
+        phases = tuple(_agent_job(row) for row in rows)
+        current = phases[0]
+        for phase in phases[1:]:
+            if phase.occurred_ts >= current.occurred_ts:
+                current = phase
+        return current
 
     # ── ops.incident_event · CF-V2-E12-04 — append-only, one row per transition ──
     def record_incident_event(self, event: IncidentEvent) -> IncidentEvent:

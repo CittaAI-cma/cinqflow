@@ -152,6 +152,18 @@ class BatchState(StrEnum):
 
 
 @unique
+class AgentJobState(StrEnum):
+    """A background agent task's own lifecycle — separate from `BatchState`
+    because a job is a call to a model, not a pipeline stage; the two must
+    never be confused by sharing one vocabulary."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+@unique
 class FileState(StrEnum):
     """Internal. RECEIVED -> ACCEPTED | REJECTED -> PROCESSED."""
 

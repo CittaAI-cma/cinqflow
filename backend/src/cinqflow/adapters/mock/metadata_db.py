@@ -21,6 +21,7 @@ from cinqflow.core.variance import Variance
 from cinqflow.ports import port
 from cinqflow.ports.metadata_db import (
     ActionRecordRow,
+    AgentJob,
     ConcurrentVersionError,
     FileProfileRecord,
     ObjectNotFoundError,
@@ -44,6 +45,7 @@ class MemMetadataDb:
         self._proposals: dict[str, Proposal] = {}
         self._suspensions: list[SuspensionEvent] = []
         self._action_events: list[ActionRecordRow] = []
+        self._agent_jobs: list[AgentJob] = []
         self._incident_events: list[IncidentEvent] = []
         self._variance_events: list[tuple[Variance, str, object]] = []
         self._identity_exception_events: list[IdentityExceptionEvent] = []
@@ -252,6 +254,24 @@ class MemMetadataDb:
                 newest[row.record_id] = row
         current_rows = sorted(newest.values(), key=lambda row: row.occurred_ts, reverse=True)
         return tuple(current_rows[:limit])
+
+    # ── ops.agent_job ─────────────────────────────────────────────────────────
+    def record_agent_job(self, job: AgentJob) -> None:
+        """Append-only, one row per phase — no removal path, like the action
+        events list right above it."""
+        self._agent_jobs.append(job)
+
+    def get_agent_job(self, job_id: str) -> AgentJob:
+        phases = [job for job in self._agent_jobs if job.job_id == job_id]
+        if not phases:
+            raise ObjectNotFoundError(f"agent job {job_id} was never recorded")
+        # Ties on occurred_ts go to the LATER APPEND — see `get_action_record`'s
+        # identical tie-break for why.
+        current = phases[0]
+        for job in phases[1:]:
+            if job.occurred_ts >= current.occurred_ts:
+                current = job
+        return current
 
     # ── ops.incident_event · CF-V2-E12-04 ────────────────────────────────────
     def record_incident_event(self, event: IncidentEvent) -> IncidentEvent:

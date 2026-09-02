@@ -985,6 +985,36 @@ OPS_SCHEMA = Schema(
             append_only=True,
         ),
         Table(
+            name="agent_job",
+            comment=(
+                "One EVENT per background agent task's phase — schema_inference, "
+                "phi_detection, mapping_suggestion or rule_authoring, run off the request "
+                "thread rather than inline in it. APPEND-ONLY, like the rest of this "
+                "schema: PENDING, then RUNNING, then COMPLETED|FAILED are three rows "
+                "sharing one job_id, not one row edited in place; the current phase is "
+                "the newest row. proposal_id is set only on COMPLETED, error only on "
+                "FAILED. Operational state — a job is a call to a model, never a "
+                "governed object."
+            ),
+            columns=(
+                Column("event_id", TypeName.UUID, nullable=False),
+                Column("job_id", TypeName.STRING, nullable=False),
+                _FEED,
+                Column("agent", TypeName.STRING, nullable=False),
+                _STATE,
+                Column("requested_ts", TypeName.TIMESTAMP_UTC, nullable=False),
+                Column("started_ts", TypeName.TIMESTAMP_UTC),
+                Column("completed_ts", TypeName.TIMESTAMP_UTC),
+                Column("proposal_id", TypeName.STRING),
+                Column("error", TypeName.STRING),
+                Column("requested_by", TypeName.STRING, nullable=False),
+            ),
+            primary_key=("event_id",),
+            indexes=(("job_id",), ("feed_id", "requested_ts")),
+            check_constraints=("state IN ('PENDING','RUNNING','COMPLETED','FAILED')",),
+            append_only=True,
+        ),
+        Table(
             name="incident_event",
             comment=(
                 "CF-V2-E12-04 — an incident's OPERATIONAL state, one row per transition. "

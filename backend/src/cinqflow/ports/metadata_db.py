@@ -30,6 +30,7 @@ from cinqflow.core.identity.exceptions import (
 )
 from cinqflow.core.model.agent_action import AgentAction
 from cinqflow.core.model.governed import AuditEntry, GovernedObject, ObjectType
+from cinqflow.core.model.vocabulary import AgentJobState
 from cinqflow.core.operations.actions import ActionRecord
 from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
 from cinqflow.core.profiling import FileProfile
@@ -60,6 +61,37 @@ class ActionRecordRow:
         """When THIS phase happened — the ledger's ordering key, derived from
         the record so the adapter never consults a clock."""
         return self.record.verified_ts or self.record.requested_ts
+
+
+@dataclass(frozen=True)
+class AgentJob:
+    """ops.agent_job — one PHASE of a background agent task's lifecycle.
+
+    A job is a call to a model, never a governed object and never a pipeline
+    stage — `AgentJobState` is its own small vocabulary for exactly that
+    reason. APPEND-ONLY, like the rest of `ops.*`: PENDING, then RUNNING,
+    then COMPLETED|FAILED are three rows sharing one `job_id`, not one row
+    edited in place. `proposal_id` is set only once `state` reaches
+    COMPLETED; `error` only once it reaches FAILED.
+    """
+
+    job_id: str
+    feed_id: str
+    agent: str
+    state: AgentJobState
+    requested_ts: datetime
+    requested_by: str
+    started_ts: datetime | None = None
+    completed_ts: datetime | None = None
+    proposal_id: str | None = None
+    error: str | None = None
+
+    @property
+    def occurred_ts(self) -> datetime:
+        """When THIS phase happened — the ordering key, derived from the row
+        so the adapter never consults a clock, the same idiom
+        `ActionRecordRow.occurred_ts` already is."""
+        return self.completed_ts or self.started_ts or self.requested_ts
 
 
 @dataclass(frozen=True)
@@ -319,6 +351,19 @@ class MetadataDbPort(Protocol):
     ) -> Sequence[ActionRecordRow]:
         """Current phase per record, newest first — the screen's action
         history, and the worker's queue of REQUESTED work to verify."""
+        ...
+
+    # ── ops.agent_job — a background agent task's own status ────────────────
+    def record_agent_job(self, job: AgentJob) -> None:
+        """Append one phase. There is deliberately no update verb — a worker
+        calls this at PENDING, again at RUNNING, again at COMPLETED or
+        FAILED, and each call is a NEW row, the same idiom
+        `record_action_event` already is for `ops.action_record`."""
+        ...
+
+    def get_agent_job(self, job_id: str) -> AgentJob:
+        """The CURRENT phase — the newest row for this job_id. Raises
+        `ObjectNotFoundError` for a job_id nobody ever recorded."""
         ...
 
     # ── ops.incident_event · CF-V2-E12-04 ────────────────────────────────────

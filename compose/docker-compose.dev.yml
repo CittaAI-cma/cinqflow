@@ -42,6 +42,19 @@ services:
       postgres-platform: {condition: service_healthy}
       postgres-data: {condition: service_healthy}
 
+  worker:
+    image: cinqflow/backend:${CINQFLOW_IMAGE_TAG:-dev}
+    environment:
+      CINQFLOW_SECRET_PG_DSN: "host=postgres-platform port=5432 user=${CINQFLOW_PG_PLATFORM_USER} password=${CINQFLOW_PG_PLATFORM_PASSWORD} dbname=${CINQFLOW_PG_PLATFORM_DB}"
+      CINQFLOW_SECRET_DATA_PG_DSN: "host=postgres-data port=5432 user=${CINQFLOW_PG_DATA_USER} password=${CINQFLOW_PG_DATA_PASSWORD} dbname=${CINQFLOW_PG_DATA_DB}"
+      CINQFLOW_OTLP_ENDPOINT: http://otel-collector:4317
+    command: ["cinqflow", "serve-worker", "--profile", "profiles/dev.yaml"]
+    volumes:
+      - dev-landing:/app/.cinqflow
+    depends_on:
+      postgres-platform: {condition: service_healthy}
+      postgres-data: {condition: service_healthy}
+
   frontend:
     image: cinqflow/frontend:${CINQFLOW_IMAGE_TAG:-dev}
     ports: ["${CINQFLOW_FRONTEND_PORT:-3000}:3000"]

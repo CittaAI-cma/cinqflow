@@ -36,6 +36,20 @@ services:
       CINQFLOW_PORT: "8000"
     restart: unless-stopped
 
+  # The tick-then-drain loop, always on — see `installer.cli.serve_worker`.
+  # Same image as `backend`, a different command per overlay, the same way
+  # `backend` itself already varies its command per overlay.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        EXTRA_REQUIREMENTS: ${CINQFLOW_EXTRA_REQUIREMENTS:-}
+        SPACY_MODEL: ${CINQFLOW_SPACY_MODEL:-en_core_web_lg}
+    image: cinqflow/backend:${CINQFLOW_IMAGE_TAG:-local}
+    env_file: [.env]
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend

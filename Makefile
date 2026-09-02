@@ -61,7 +61,7 @@ ps:  ## what is running, and whether it is healthy
 
 .PHONY: restart
 restart:  ## restart just the app tier, leaving the databases up
-	$(COMPOSE) restart backend frontend
+	$(COMPOSE) restart backend worker frontend
 
 .PHONY: shell
 shell:  ## a shell in the backend container

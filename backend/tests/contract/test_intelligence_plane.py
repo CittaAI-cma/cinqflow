@@ -41,6 +41,7 @@ def _profile(**pins: object) -> Profile:
         },
         "phi_scrub": {"adapter": "mock"},
         "vector": {"adapter": "mock"},
+        "agent_runtime": {"adapter": "inproc"},
     }
     base.update(pins)
     return Profile(source="test.yaml", rung=0.0, socket="mock", mode=Mode.FULL, pins=base)

@@ -35,7 +35,7 @@ from cinqflow.core.model.governed import (
     LifecycleState,
     ObjectType,
 )
-from cinqflow.core.model.vocabulary import ActorType, BatchState, Layer
+from cinqflow.core.model.vocabulary import ActorType, AgentJobState, BatchState, Layer
 from cinqflow.core.operations.actions import ActionPhase, OpsAction
 from cinqflow.core.operations.actions import verify as ops_verify
 from cinqflow.core.operations.fingerprint import IncidentEvent, IncidentState
@@ -47,6 +47,7 @@ from cinqflow.ports.identity import IdentityPort, UnapprovedMergeError
 from cinqflow.ports.legacy_readonly import LegacyReadOnlyPort
 from cinqflow.ports.metadata_db import (
     ActionRecordRow,
+    AgentJob,
     ConcurrentVersionError,
     MetadataDbPort,
     ObjectNotFoundError,
@@ -263,6 +264,66 @@ def test_the_action_ledger_has_no_edit_path_for_anyone(metadata: MetadataDbPort)
     not a permission that could be misconfigured."""
     for forbidden in ("update_action_record", "delete_action_record", "clear_action_records"):
         assert not hasattr(metadata, forbidden), f"metadata_db exposes {forbidden}"
+
+
+# ── ops.agent_job ─────────────────────────────────────────────────────────────
+def _pending_job(job_id: str, *, agent: str = "schema_inference") -> AgentJob:
+    return AgentJob(
+        job_id=job_id,
+        feed_id="fidelis-downstate-roster",
+        agent=agent,
+        state=AgentJobState.PENDING,
+        requested_ts=NOW,
+        requested_by="ba@cinqcare.test",
+    )
+
+
+def test_a_recorded_job_is_readable_back_pending(metadata: MetadataDbPort) -> None:
+    metadata.record_agent_job(_pending_job("job-1"))
+    job = metadata.get_agent_job("job-1")
+    assert job.state is AgentJobState.PENDING
+    assert job.proposal_id is None
+    assert job.error is None
+
+
+def test_each_state_transition_is_a_new_row_and_the_newest_is_current(
+    metadata: MetadataDbPort,
+) -> None:
+    """Append-only, like the rest of `ops.*` — a worker calls this at
+    PENDING, RUNNING and COMPLETED|FAILED, and each call is a NEW row; only
+    the current-phase READ folds them back to one answer."""
+    metadata.record_agent_job(_pending_job("job-2"))
+    metadata.record_agent_job(
+        replace(
+            _pending_job("job-2"),
+            state=AgentJobState.COMPLETED,
+            started_ts=NOW,
+            completed_ts=NOW + timedelta(seconds=4),
+            proposal_id="prop-77",
+        )
+    )
+    job = metadata.get_agent_job("job-2")
+    assert job.state is AgentJobState.COMPLETED
+    assert job.proposal_id == "prop-77"
+
+
+def test_a_failed_job_carries_its_error(metadata: MetadataDbPort) -> None:
+    metadata.record_agent_job(
+        replace(
+            _pending_job("job-3"),
+            state=AgentJobState.FAILED,
+            error="LLM gateway timed out after 30s",
+        )
+    )
+    job = metadata.get_agent_job("job-3")
+    assert job.state is AgentJobState.FAILED
+    assert job.proposal_id is None
+    assert job.error == "LLM gateway timed out after 30s"
+
+
+def test_an_unrecorded_job_is_a_missing_object(metadata: MetadataDbPort) -> None:
+    with pytest.raises(ObjectNotFoundError):
+        metadata.get_agent_job("never-submitted")
 
 
 # ── ops.incident_event · CF-V2-E12-04 ────────────────────────────────────────

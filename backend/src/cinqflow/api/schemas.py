@@ -798,6 +798,21 @@ class BatchOut(BaseModel):
     route: str
 
 
+class JobOut(BaseModel):
+    """A background agent task — `POST /infer-schema`'s 202, and what
+    `GET /feeds/{feed_id}/jobs/{job_id}` polls back."""
+
+    job_id: str
+    feed_id: str
+    agent: str
+    state: str
+    requested_ts: datetime
+    started_ts: datetime | None = None
+    completed_ts: datetime | None = None
+    proposal_id: str | None = None
+    error: str | None = None
+
+
 class RowsOut(BaseModel):
     """A tool result, as the UI consumes it.
 

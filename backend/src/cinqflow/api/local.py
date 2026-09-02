@@ -55,6 +55,7 @@ from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
 from cinqflow.adapters.local.pg_layers import PostgresLayerReader
 from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
 from cinqflow.adapters.local.pg_orchestration import PostgresOrchestration
+from cinqflow.adapters.local.pg_queue import PostgresQueue
 from cinqflow.adapters.local.pg_sql_query import PostgresSqlQuery
 from cinqflow.adapters.local.secrets import DotenvSecrets
 from cinqflow.adapters.mock.authn import StaticAuthn
@@ -214,6 +215,10 @@ def build(profile_path: str = DEFAULT_PROFILE, landing_root: str | None = None) 
         # `due()` returned nothing on a plane full of published feeds and
         # `cinqflow tick` was right to say "nothing due".
         orchestration=PostgresOrchestration(connection),
+        # CF-V1-E5-02, backgrounded. The SAME queue `cinqflow serve-worker`
+        # drains `pipeline.run_feed` from — `POST /infer-schema` now submits
+        # onto it instead of calling the model inline.
+        queue=PostgresQueue(connection),
         notify=ConsoleNotification(echo=True),
         alert_enrichment_agent=intelligence.alert_enrichment(control, metadata, secrets),
         # From the profile's own `llm.budgets`, never a module constant — a cap

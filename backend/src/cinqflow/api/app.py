@@ -113,6 +113,7 @@ from cinqflow.api.schemas import (
     IncidentRowOut,
     InferSchemaIn,
     InheritedOut,
+    JobOut,
     KeyCandidateOut,
     KeySearchOut,
     LayerCellOut,
@@ -268,7 +269,7 @@ from cinqflow.core.model.governed import (
     ObjectType,
 )
 from cinqflow.core.model.profile import Profile
-from cinqflow.core.model.vocabulary import BatchState, Layer
+from cinqflow.core.model.vocabulary import AgentJobState, BatchState, Layer
 from cinqflow.core.navigation import ACTIVE_WAVE, for_roles
 from cinqflow.core.onboarding import evidence
 from cinqflow.core.onboarding import release as onboarding_release
@@ -327,16 +328,19 @@ from cinqflow.ports.document_parse import (
 )
 from cinqflow.ports.metadata_db import (
     ActionRecordRow,
+    AgentJob,
     FileProfileRecord,
     MetadataDbPort,
     ObjectNotFoundError,
 )
 from cinqflow.ports.notification import Alert, NotificationPort, Severity
 from cinqflow.ports.orchestration import OrchestrationPort, Schedule
+from cinqflow.ports.queue import QueuePort
 from cinqflow.ports.storage import StoragePort
 from cinqflow.workers.delivery import DeliveryOutcome, DeliveryWorker
 from cinqflow.workers.drift import propose_reprocess_for_newly_mapped_columns
 from cinqflow.workers.identity import IDENTITY_EXCEPTION_SLA
+from cinqflow.workers.agent_task import AGENT_TASK_TOPIC
 from cinqflow.workers.incidents import priors_for, recovery_guides
 from cinqflow.workers.knowledge import KnowledgeIngestWorker
 from cinqflow.workers.ops import OpsVerifier
@@ -460,6 +464,12 @@ def _authn(request: Request) -> AuthnPort:
     return request.app.state.wiring.authn  # type: ignore[no-any-return]
 
 
+def _queue(request: Request) -> QueuePort | None:
+    """`None` on a deployment with no queue pin fitted — see `infer_schema`'s
+    own 503 for what a route does with that."""
+    return request.app.state.queue  # type: ignore[no-any-return]
+
+
 def _profiler(request: Request) -> Profiler | None:
     """The profiler, or None when no storage pin is fitted.
 
@@ -490,6 +500,7 @@ Audit = Annotated[AuditLog, Depends(_audit)]
 Plane = Annotated[ExecutionPlaneRegister, Depends(_plane)]
 Directory = Annotated[AuthnPort, Depends(_authn)]
 Layers = Annotated["LayerReader | None", Depends(_layers)]
+Queue = Annotated["QueuePort | None", Depends(_queue)]
 
 
 def _connection_profile(request: Request) -> Profile | None:
@@ -524,6 +535,10 @@ def create_app(
     #: says so in a warning, which is the honest degrade on a socket with no
     #: scheduler — never a silent success.
     orchestration: OrchestrationPort | None = None,
+    #: CF-V1-E5-02, backgrounded. `None` leaves `infer_schema` degrading the
+    #: same way it already does with no LLM pin fitted — the deterministic
+    #: profile and the manual editor still work; only the async path doesn't.
+    queue: QueuePort | None = None,
     alert_enrichment_agent: AlertEnrichmentAgent | None = None,
     layer_reader: LayerReader | None = None,
     budget: Budget | None = None,
@@ -552,6 +567,7 @@ def create_app(
     # accident — see `_environment_of`.
     app.state.profile = profile
     app.state.orchestration = orchestration
+    app.state.queue = queue
     app.state.control_tables = control_tables or MemStoreControlTables()
     # No default. Unlike control tables, there is no in-memory landing zone
     # that would be honest here: a profiler pointed at an empty store would
@@ -1965,7 +1981,8 @@ def create_app(
 
     @app.post(
         f"{API_PREFIX}/feeds/{{feed_id}}/infer-schema",
-        response_model=ProposalOut,
+        response_model=JobOut,
+        status_code=status.HTTP_202_ACCEPTED,
         tags=["intelligence"],
     )
     def infer_schema(
@@ -1973,51 +1990,92 @@ def create_app(
         body: InferSchemaIn,
         request: Request,
         metadata: Store,
+        queue: Queue,
         principal: Annotated[Principal, Depends(require(Action.EDIT_FEED))],
-        audit: Audit,
-    ) -> ProposalOut:
-        """Read a stored profile, propose a contract, leave one proposal row.
+    ) -> JobOut:
+        """Read a stored profile, submit a job, return immediately.
 
-        503 rather than a stub when no LLM pin is fitted — but note that a feed
-        whose columns the profiler and glossary both settled produces a full
-        proposal with NO model call at all, so this route is useful on a
-        deployment with no model endpoint whenever the payer names things
-        sensibly.
+        The model call used to happen INLINE here, so the caller waited out
+        the LLM's full latency. It now runs in `workers.agent_task
+        .AgentTaskWorker`, claimed off `AGENT_TASK_TOPIC` by `cinqflow
+        serve-worker` — this route only validates, records intent, and hands
+        off. Poll `GET /feeds/{feed_id}/jobs/{job_id}` for the outcome.
+
+        `job_id` is DERIVED from `(feed_id, profile_id)`, not random, so a
+        resubmit of the same sample is the same job — the same idempotency
+        `PostgresQueue.enqueue`'s `dedupe_key` already gives every producer,
+        extended to the row this route hands back rather than only to the
+        message underneath it.
+
+        503 rather than a stub when no LLM pin or no queue pin is fitted —
+        the deterministic profile and the manual contract editor still work
+        either way.
         """
-        agent_factory = request.app.state.schema_inference_factory
-        if agent_factory is None:
+        if request.app.state.schema_inference_factory is None:
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "no LLM pin is fitted on this deployment, so schema inference is not "
                 "available. The deterministic profile is still on the feed's profile page, "
                 "and the manual contract editor still works.",
             )
+        if queue is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no queue pin is fitted on this deployment, so background agent tasks "
+                "cannot be submitted.",
+            )
         try:
-            record = metadata.get_profile(body.profile_id, feed_id)
+            metadata.get_profile(body.profile_id, feed_id)
         except ObjectNotFoundError:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND,
                 f"no profile {body.profile_id!r} for feed {feed_id!r} — profile the sample first",
             ) from None
 
-        result = agent_factory(metadata).propose(
-            record.profile,
-            feed_id=feed_id,
-            glossary=_glossary_of(metadata),
-            caller=principal.as_actor(),
+        job_id = f"infer-schema:{feed_id}:{body.profile_id}"
+        metadata.record_agent_job(
+            AgentJob(
+                job_id=job_id,
+                feed_id=feed_id,
+                agent="schema_inference",
+                state=AgentJobState.PENDING,
+                requested_ts=datetime.now(UTC),
+                requested_by=principal.as_actor().subject,
+            )
         )
-        audit.record(
-            object_type=ObjectType.FEED,
-            object_id=feed_id,
-            action="propose_schema",
-            actor=principal.as_actor(),
-            detail=(
-                f"{result.proposal.proposal_id} · {len(result.columns)} columns, "
-                f"{len(result.needs_input)} needing input, "
-                f"model_called={result.model_called}"
-            ),
+        queue.enqueue(
+            AGENT_TASK_TOPIC,
+            {
+                "job_id": job_id,
+                "feed_id": feed_id,
+                "agent": "schema_inference",
+                "profile_id": body.profile_id,
+            },
+            dedupe_key=job_id,
         )
-        return _proposal_out(result.proposal, model_called=result.model_called)
+        return _job_out(metadata.get_agent_job(job_id))
+
+    @app.get(
+        f"{API_PREFIX}/feeds/{{feed_id}}/jobs/{{job_id}}",
+        response_model=JobOut,
+        tags=["intelligence"],
+    )
+    def get_agent_job(
+        feed_id: str,
+        job_id: str,
+        metadata: Store,
+        _: Annotated[Principal, Depends(require(Action.VIEW))],
+    ) -> JobOut:
+        """What `infer_schema`'s 202 poll resolves to. 404 either for a
+        job_id nobody recorded, or for one recorded against a different feed —
+        the same shape `_batch_or_404` uses, for the same reason."""
+        try:
+            job = metadata.get_agent_job(job_id)
+        except ObjectNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
+        if job.feed_id != feed_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+        return _job_out(job)
 
     # ── PHI and code-set detection · CF-V1-E5-03 ─────────────────────────────
 
@@ -7081,6 +7139,20 @@ def _merge_plan_out(plan: MergePlan) -> MergePlanOut:
             for c in plan.collapses
         ],
         fingerprint=plan.fingerprint,
+    )
+
+
+def _job_out(job: AgentJob) -> JobOut:
+    return JobOut(
+        job_id=job.job_id,
+        feed_id=job.feed_id,
+        agent=job.agent,
+        state=job.state.value,
+        requested_ts=job.requested_ts,
+        started_ts=job.started_ts,
+        completed_ts=job.completed_ts,
+        proposal_id=job.proposal_id,
+        error=job.error,
     )
 
 

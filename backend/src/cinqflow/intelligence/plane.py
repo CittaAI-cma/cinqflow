@@ -73,6 +73,7 @@ from cinqflow.intelligence.gateway import LlmGateway
 from cinqflow.intelligence.retrieval import RetrievalService
 from cinqflow.intelligence.tools import ToolContext
 from cinqflow.intelligence.wiring import budget_from, llm_from, routing_from
+from cinqflow.ports.agent_runtime import AgentRuntimePort
 from cinqflow.ports.control_tables import ControlTablesPort
 from cinqflow.ports.metadata_db import MetadataDbPort
 from cinqflow.ports.observability import ObservabilityPort
@@ -83,7 +84,7 @@ from cinqflow.ports.vector import VectorPort
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from cinqflow.adapters.local.pg_control import Connection
 
-__all__ = ["IntelligencePlane", "phi_scrub_from", "vector_from"]
+__all__ = ["IntelligencePlane", "agent_runtime_from", "phi_scrub_from", "vector_from"]
 
 
 #: The scope a platform-triggered agent runs its certified tool calls under.
@@ -164,6 +165,37 @@ def vector_from(profile: Profile, *, connection: Connection | None = None) -> Ve
             )
 
 
+def agent_runtime_from(profile: Profile) -> AgentRuntimePort:
+    """Fit the `agent_runtime` pin as the profile says, and no other way.
+
+    Before this function, every caller constructed `InProcAgentRuntime()`
+    directly — `agent_runtime: {adapter: langgraph}` in a profile had no
+    effect at all, because nothing ever read it. Same shape as
+    `phi_scrub_from`: an adapter this deployment asked for but did not
+    install is a named refusal, never a silent fall back to `inproc`.
+    """
+    adapter = profile.adapter_for("agent_runtime")
+    match adapter:
+        case "mock" | "inproc":
+            return InProcAgentRuntime()
+        case "langgraph":
+            try:
+                from cinqflow.adapters.langgraph import LangGraphAgentRuntime
+            except ImportError:
+                raise ProfileError(
+                    f"{profile.source}: agent_runtime is `langgraph`, but langgraph is not "
+                    "installed — `pip install -r requirements/agents.txt` to energize the "
+                    "pin. Falling back to `inproc` is NOT done here, for the same reason "
+                    "`phi_scrub_from` never falls back to the pattern scrubber."
+                ) from None
+            return LangGraphAgentRuntime()
+        case unknown:
+            raise ProfileError(
+                f"{profile.source}: {unknown!r} is not an adapter for the agent_runtime pin "
+                "(inproc, langgraph)"
+            )
+
+
 @dataclass(frozen=True)
 class IntelligencePlane:
     """Every agent this deployment has, and the one gateway they share.
@@ -179,6 +211,7 @@ class IntelligencePlane:
     phi_scrub: PhiScrubPort
     observability: ObservabilityPort
     vector: VectorPort | None
+    agent_runtime: AgentRuntimePort
     profile: Profile
 
     @classmethod
@@ -195,6 +228,7 @@ class IntelligencePlane:
             phi_scrub=phi_scrub_from(profile),
             observability=observability or NoopObservability(),
             vector=vector_from(profile, connection=connection),
+            agent_runtime=agent_runtime_from(profile),
             profile=profile,
         )
 
@@ -237,7 +271,7 @@ class IntelligencePlane:
                 llm=self.gateway(metadata, secrets),
                 phi_scrub=self.phi_scrub,
             ),
-            runtime=InProcAgentRuntime(),
+            runtime=self.agent_runtime,
         )
 
     def retrieval(self, metadata: MetadataDbPort, secrets: SecretsPort) -> RetrievalService:
@@ -311,7 +345,7 @@ class IntelligencePlane:
                 llm=self.gateway(metadata, secrets),
                 phi_scrub=self.phi_scrub,
             ),
-            runtime=InProcAgentRuntime(),
+            runtime=self.agent_runtime,
         )
 
     def alert_enrichment(
@@ -329,5 +363,5 @@ class IntelligencePlane:
                 llm=self.gateway(metadata, secrets),
                 phi_scrub=self.phi_scrub,
             ),
-            runtime=InProcAgentRuntime(),
+            runtime=self.agent_runtime,
         )

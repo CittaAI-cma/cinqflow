@@ -28,6 +28,7 @@ from cinqflow.adapters.mock.llm import ScriptedLlm
 from cinqflow.adapters.mock.metadata_db import MemMetadataDb
 from cinqflow.adapters.mock.observability import NoopObservability
 from cinqflow.adapters.mock.phi_scrub import PatternPhiScrub
+from cinqflow.adapters.mock.queue import MemQueue
 from cinqflow.api.app import create_app
 from cinqflow.core.agents.schema_inference.prompts import TEMPLATES
 from cinqflow.core.intelligence import Budget, Routing
@@ -394,6 +395,7 @@ def client(store, tmp_path):  # type: ignore[no-untyped-def]
         authn=StaticAuthn(),
         metadata_db=store,
         storage=landing,
+        queue=MemQueue(),
         schema_inference_factory=lambda metadata: _agent(
             metadata, ScriptedLlm(lambda p, t: GOOD_ANSWER)
         ),
@@ -405,17 +407,46 @@ def _as(subject: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {subject}"}
 
 
+def _drain_agent_task(client: TestClient) -> None:
+    """Run `AGENT_TASK_TOPIC` to empty — the same worker code `cinqflow
+    serve-worker` runs on an interval, called directly here instead of
+    waiting on one, since a test asserting on a proposal needs it to exist
+    before the assertion, not eventually."""
+    from cinqflow.workers.agent_task import AGENT_TASK_TOPIC, AgentTaskWorker
+    from cinqflow.workers.consumer import Consumer
+
+    state = client.app.state
+    worker = AgentTaskWorker(
+        metadata=state.metadata_db,
+        agent_factories={"schema_inference": state.schema_inference_factory},
+    )
+    consumer = Consumer(state.queue)
+    consumer.register(AGENT_TASK_TOPIC, worker.handle)
+    consumer.drain_topic(AGENT_TASK_TOPIC)
+
+
 def _profile_and_infer(client: TestClient) -> dict:
+    """Submit, drain, and return the FINISHED proposal — the route itself now
+    only hands back a job; every existing caller below still wants the
+    proposal a completed job resolves to."""
     profiled = client.post(
         f"/api/feeds/{FEED}/profile",
         json={"file_key": KEY, "file_format": "csv"},
         headers=_as(BA),
     ).json()
-    response = client.post(
+    submitted = client.post(
         f"/api/feeds/{FEED}/infer-schema",
         json={"profile_id": profiled["profile_id"]},
         headers=_as(BA),
     )
+    assert submitted.status_code == 202, submitted.text
+    job_id = submitted.json()["job_id"]
+
+    _drain_agent_task(client)
+
+    job = client.get(f"/api/feeds/{FEED}/jobs/{job_id}", headers=_as(BA)).json()
+    assert job["state"] == "COMPLETED", job
+    response = client.get(f"/api/proposals/{job['proposal_id']}", headers=_as(BA))
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -520,6 +551,7 @@ def test_a_column_still_needing_input_is_not_typed_into_the_contract(store, tmp_
             authn=StaticAuthn(),
             metadata_db=store,
             storage=landing,
+            queue=MemQueue(),
             schema_inference_factory=lambda m: _agent(m, ScriptedLlm(lambda p, t: declined)),
         )
     )
@@ -630,3 +662,75 @@ def test_a_deployment_with_no_llm_pin_says_so_and_keeps_the_manual_path(store, t
     )
     assert response.status_code == 503
     assert "manual contract editor still works" in response.json()["detail"]
+
+
+# ── backgrounded, CF-V1-E5-02's route as a job instead of an inline call ──────
+
+
+def test_a_deployment_with_no_queue_pin_says_so_and_keeps_the_manual_path(
+    store, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    """The LLM pin is fitted here; the queue pin is not — a different 503 for
+    a different missing pin, so a reader knows which one to fix."""
+    landing = LocalFsStorage(root=str(tmp_path))
+    landing.place(KEY, ROSTER)
+    client = TestClient(
+        create_app(
+            authn=StaticAuthn(),
+            metadata_db=store,
+            storage=landing,
+            schema_inference_factory=lambda m: _agent(m, ScriptedLlm(lambda p, t: GOOD_ANSWER)),
+        )
+    )
+    profiled = client.post(
+        f"/api/feeds/{FEED}/profile",
+        json={"file_key": KEY, "file_format": "csv"},
+        headers=_as(BA),
+    ).json()
+    response = client.post(
+        f"/api/feeds/{FEED}/infer-schema",
+        json={"profile_id": profiled["profile_id"]},
+        headers=_as(BA),
+    )
+    assert response.status_code == 503
+    assert "background agent tasks" in response.json()["detail"]
+
+
+def test_submitting_returns_202_and_a_pending_job_immediately(client: TestClient) -> None:
+    """The caller no longer waits out the model's latency — it gets a job
+    back before anything has drained `AGENT_TASK_TOPIC` at all."""
+    profiled = client.post(
+        f"/api/feeds/{FEED}/profile",
+        json={"file_key": KEY, "file_format": "csv"},
+        headers=_as(BA),
+    ).json()
+    response = client.post(
+        f"/api/feeds/{FEED}/infer-schema",
+        json={"profile_id": profiled["profile_id"]},
+        headers=_as(BA),
+    )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["state"] == "PENDING"
+    assert body["job_id"]
+    assert body["proposal_id"] is None
+
+
+def test_a_resubmit_of_the_same_sample_is_the_same_job(client: TestClient) -> None:
+    """`job_id` is derived from `(feed_id, profile_id)` — a resubmit before
+    the first job has even drained must not fork into a second job the
+    worker will never see."""
+    profiled = client.post(
+        f"/api/feeds/{FEED}/profile",
+        json={"file_key": KEY, "file_format": "csv"},
+        headers=_as(BA),
+    ).json()
+    body = {"profile_id": profiled["profile_id"]}
+    first = client.post(f"/api/feeds/{FEED}/infer-schema", json=body, headers=_as(BA)).json()
+    second = client.post(f"/api/feeds/{FEED}/infer-schema", json=body, headers=_as(BA)).json()
+    assert first["job_id"] == second["job_id"]
+
+
+def test_an_unrecorded_job_id_is_a_404(client: TestClient) -> None:
+    response = client.get(f"/api/feeds/{FEED}/jobs/never-submitted", headers=_as(BA))
+    assert response.status_code == 404
