@@ -20,6 +20,8 @@ from cinqflow.adapters.local.folder_connector import FolderDropConnector
 from cinqflow.adapters.local.localfs_storage import LocalFsStorage
 from cinqflow.adapters.local.upload_connector import UploadConnector
 from cinqflow.adapters.mock.connector import ScriptedConnector
+from cinqflow.adapters.mock.secrets import MemSecrets
+from cinqflow.adapters.sftp.connector import SftpPollerConnector
 from cinqflow.core.model.profile import Profile, ProfileError
 from cinqflow.core.model.vocabulary import Mode
 from cinqflow.installer.connectors import connectors_from
@@ -91,9 +93,70 @@ def test_a_folder_drop_route_with_no_drop_root_is_refused(tmp_path: Path) -> Non
 
 
 def test_an_unknown_adapter_name_is_refused_with_the_fitted_list() -> None:
-    profile = _profile({"connector": {"routes": {"default": {"adapter": "sftp-poller"}}}})
-    with pytest.raises(ProfileError, match="sftp-poller"):
+    """`api-puller` names a real seat plate 09 reserves, but nothing is
+    fitted to it yet — unlike `sftp-poller`, which now is (see below)."""
+    profile = _profile({"connector": {"routes": {"default": {"adapter": "api-puller"}}}})
+    with pytest.raises(ProfileError, match="api-puller"):
         connectors_from(profile, storage=None)
+
+
+def test_an_sftp_poller_route_builds_a_real_client(tmp_path: Path) -> None:
+    """ADR-0023: a real `asyncssh` client, configured entirely from the
+    profile plus a resolved secret — zero code per source."""
+    storage = LocalFsStorage(root=str(tmp_path / "landing"))
+    secrets = MemSecrets({"sftp-password": "s3cret"})
+    profile = _profile(
+        {
+            "connector": {
+                "routes": {
+                    "fidelis-sftp": {
+                        "adapter": "sftp-poller",
+                        "host": "simulator",
+                        "username": "cinqflow",
+                        "password": "secret://sftp-password",
+                        "remote_root": "incoming",
+                    }
+                }
+            }
+        }
+    )
+    connectors = connectors_from(profile, storage=storage, secrets=secrets)
+    connector = connectors["fidelis-sftp"]
+    assert isinstance(connector, SftpPollerConnector)
+    assert connector.source == "fidelis-sftp"
+
+
+def test_an_sftp_poller_route_with_no_secrets_pin_is_refused(tmp_path: Path) -> None:
+    storage = LocalFsStorage(root=str(tmp_path / "landing"))
+    profile = _profile(
+        {
+            "connector": {
+                "routes": {
+                    "fidelis-sftp": {
+                        "adapter": "sftp-poller",
+                        "host": "simulator",
+                        "username": "cinqflow",
+                    }
+                }
+            }
+        }
+    )
+    with pytest.raises(ProfileError, match="secrets"):
+        connectors_from(profile, storage=storage)
+
+
+def test_an_sftp_poller_route_with_no_host_is_refused(tmp_path: Path) -> None:
+    storage = LocalFsStorage(root=str(tmp_path / "landing"))
+    secrets = MemSecrets({})
+    profile = _profile(
+        {
+            "connector": {
+                "routes": {"fidelis-sftp": {"adapter": "sftp-poller", "username": "cinqflow"}}
+            }
+        }
+    )
+    with pytest.raises(ProfileError, match="host"):
+        connectors_from(profile, storage=storage, secrets=secrets)
 
 
 def test_routes_that_is_not_a_mapping_is_refused() -> None:

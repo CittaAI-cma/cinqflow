@@ -47,14 +47,18 @@ pins:
   # CF-V1-E8-09 — routes, not one adapter. `default` is what a feed whose
   # `endpoint_ref` names no route falls back to (every manual-upload feed).
   # `fidelis-sftp` is a NAMED route: a feed registered with that
-  # `endpoint_ref` polls this drop directory instead — the certified dev
-  # stand-in for `sftp-poller`, which ADR-0023 defers to rung 3 as a client
-  # swapped in behind the SAME route name, with zero change to the registry
-  # row. Onboarding a new SFTP feed is one more entry here, never new code.
+  # `endpoint_ref` polls a real SFTP server instead — `sftp-poller` (ADR-0023),
+  # pointed here at `compose/docker-compose.local.yml`'s `simulator` service.
+  # Onboarding a new SFTP feed is one more entry here, never new code.
   connector:
     routes:
       default:      { adapter: upload }
-      fidelis-sftp: { adapter: folder-drop, drop_root: ".cinqflow/drop/fidelis-sftp" }
+      fidelis-sftp:
+        adapter: sftp-poller
+        host: "secret://sftp-host"
+        username: cinqflow
+        password: "secret://sftp-password"
+        remote_root: incoming
   control_tables: { adapter: pg-control, schema: control }
   # W3-01 fitted a REAL adapter to this pin: `pg-information-schema` answers
   # schemas/lineage/grants from information_schema, joined to the schema

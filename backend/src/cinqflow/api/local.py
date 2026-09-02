@@ -173,7 +173,7 @@ def build(profile_path: str = DEFAULT_PROFILE, landing_root: str | None = None) 
         # CF-V1-E8-09. Every route the profile fits — `connector.routes` —
         # wired with zero code per source: a new SFTP feed is a registry row
         # naming an `endpoint_ref` and one more entry under `routes` here.
-        connectors=connectors_from(profile, storage=storage),
+        connectors=connectors_from(profile, storage=storage, secrets=secrets),
         layer_reader=layer_reader,
         # CF-V1-E16-06. The companion guide's own door needs a parser fitted;
         # `local-pypdf-docx` is what `profiles/local.yaml` names for the

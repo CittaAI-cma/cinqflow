@@ -46,6 +46,10 @@ services:
       # had — see the note in .env. This form needs no encoding at all.
       CINQFLOW_SECRET_PG_DSN: "host=postgres-platform port=5432 user=${CINQFLOW_PG_PLATFORM_USER} password=${CINQFLOW_PG_PLATFORM_PASSWORD} dbname=${CINQFLOW_PG_PLATFORM_DB}"
       CINQFLOW_SECRET_DATA_PG_DSN: "host=postgres-data port=5432 user=${CINQFLOW_PG_DATA_USER} password=${CINQFLOW_PG_DATA_PASSWORD} dbname=${CINQFLOW_PG_DATA_DB}"
+      # `fidelis-sftp`'s route — the same `simulator` service the connector
+      # contract test proves against a live counterpart.
+      CINQFLOW_SECRET_SFTP_HOST: simulator
+      CINQFLOW_SECRET_SFTP_PASSWORD: ${CINQFLOW_SFTP_PASSWORD}
     # NO PROFILE ARGUMENT, and that is correct rather than an omission:
     # `api/local.py`'s DEFAULT_PROFILE *is* `profiles/local.yaml`, so this
     # environment's profile is the module's default and naming it again would
@@ -85,6 +89,10 @@ services:
     environment:
       CINQFLOW_SECRET_PG_DSN: "host=postgres-platform port=5432 user=${CINQFLOW_PG_PLATFORM_USER} password=${CINQFLOW_PG_PLATFORM_PASSWORD} dbname=${CINQFLOW_PG_PLATFORM_DB}"
       CINQFLOW_SECRET_DATA_PG_DSN: "host=postgres-data port=5432 user=${CINQFLOW_PG_DATA_USER} password=${CINQFLOW_PG_DATA_PASSWORD} dbname=${CINQFLOW_PG_DATA_DB}"
+      # `fidelis-sftp`'s route — the same `simulator` service the connector
+      # contract test proves against a live counterpart.
+      CINQFLOW_SECRET_SFTP_HOST: simulator
+      CINQFLOW_SECRET_SFTP_PASSWORD: ${CINQFLOW_SFTP_PASSWORD}
     command: ["cinqflow", "serve-worker", "--profile", "profiles/local.yaml"]
     depends_on:
       postgres-platform: {condition: service_healthy}
@@ -251,9 +259,16 @@ services:
 
   # The payer source simulator, serving SFTP — so the connector is always
   # tested against a live counterpart. The demo places no files by hand.
+  #
+  # `atmoz/sftp`'s command syntax is `user:pass:uid:gid:dir`, and it has no
+  # `_FILE` variant for the password field the way the databases do — so this
+  # one credential is a plain `.env` var rather than the file-based secret
+  # every other service here uses. Same value the backend/worker resolve
+  # `secret://sftp-password` to, so the real client and the real server agree
+  # on one password instead of two independently-typed ones drifting apart.
   simulator:
     image: atmoz/sftp:alpine
-    command: ["cinqflow::1001:::incoming"]
+    command: ["cinqflow:${CINQFLOW_SFTP_PASSWORD}:1001:::incoming"]
     ports: ["${CINQFLOW_SFTP_PORT:-2222}:22"]
     volumes:
       - twin-sftp:/home/cinqflow/incoming

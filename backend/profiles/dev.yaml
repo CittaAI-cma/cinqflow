@@ -50,10 +50,11 @@ pins:
   # CF-V1-E8-09 — routes, not one adapter. `default` is what a feed whose
   # `endpoint_ref` names no route falls back to (every manual-upload feed).
   # `fidelis-sftp` is a NAMED route: a feed registered with that
-  # `endpoint_ref` polls this drop directory instead — the certified dev
-  # stand-in for `sftp-poller`, which ADR-0023 defers to rung 3 as a client
-  # swapped in behind the SAME route name, with zero change to the registry
-  # row. Onboarding a new SFTP feed is one more entry here, never new code.
+  # `endpoint_ref` polls this drop directory instead. `local.yaml` fits the
+  # real `sftp-poller` (ADR-0023) here, against its compose `simulator`
+  # service; `docker-compose.dev.yml` has no such service yet, so this
+  # overlay stays on `folder-drop`, its certified dev stand-in, until one is
+  # added — swapping to a real client is then this one line, zero new code.
   connector:
     routes:
       default:      { adapter: upload }

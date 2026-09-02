@@ -18,10 +18,14 @@ import typer
 from rich.console import Console
 from rich.table import Table as RichTable
 
+from cinqflow.core.model.governed import Actor, GovernedObject, LifecycleState, ObjectType
+from cinqflow.core.model.vocabulary import ActorType
 from cinqflow.core.schema_spec import all_schemas
 from cinqflow.installer import profile as profile_module
 from cinqflow.installer.manifest import InstallationManifest
 from cinqflow.installer.prompts import PromptSeedReport
+from cinqflow.ports.metadata_db import MetadataDbPort
+from cinqflow.ports.orchestration import OrchestrationPort
 
 app = typer.Typer(
     name="cinqflow",
@@ -370,6 +374,155 @@ def seed_prompts(
     console.print(report.explain())
 
 
+@app.command("seed-fidelis-feeds")
+def seed_fidelis_feeds(
+    profile: ProfileOption = Path("profiles/local.yaml"),
+    approved_by: Annotated[
+        str,
+        typer.Option(
+            "--approved-by",
+            help="The named steward publishing the one runnable feed onto this plane.",
+        ),
+    ] = "dev-steward@cinqcare.test",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Report; write nothing.")] = False,
+) -> None:
+    """Register Fidelis's real file inventory — Milestone 2, Part G.
+
+    THE 26 REAL CLAIMS PATTERNS (`core.registry.fidelis_claims`, sourced from
+    the client's own `Source Details.xlsx`) ARRIVE AS DRAFT AND STAY THAT
+    WAY. Nobody has authored a `SchemaContract` for any of them — Draft is
+    the honest state: registered, visible, not yet runnable. Re-running is
+    safe; a `feed_id` already present is left exactly as it is.
+
+    THE ONE FEED WITH A REAL CONTRACT — `core.registry.golden_fidelis`'s
+    downstate enrollment roster — is published for real, through the actual
+    lifecycle (`transition_to`, never a constructed Published row — the same
+    discipline `seed-prompts` already holds itself to), with its
+    `operations.endpoint_ref` set to `fidelis-sftp` and its schedule
+    registered with the orchestrator. That is what lets `cinqflow
+    serve-worker` poll, deliver and run it with no `cinqflow ingest` bypass.
+    """
+    from cinqflow.adapters.local.pg_control import commit
+    from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
+    from cinqflow.adapters.local.pg_orchestration import PostgresOrchestration
+    from cinqflow.core.registry.fidelis_claims import all_claims_feeds
+    from cinqflow.ports.metadata_db import ObjectNotFoundError
+
+    loaded = profile_module.load(profile)
+    claims = all_claims_feeds()
+    approver = Actor(
+        subject=approved_by, actor_type=ActorType.HUMAN, display_name=approved_by.split("@")[0]
+    )
+    console.print(
+        f"[bold]cinqflow seed-fidelis-feeds[/bold]  {len(claims)} claims patterns  "
+        f"+ 1 published feed, approved by [bold]{approved_by}[/bold]"
+    )
+    if dry_run:
+        for feed in claims:
+            console.print(f"  draft  {feed.feed_id}")
+        console.print("  publish  fidelis-downstate-roster (+ contract, + rules, + schedule)")
+        raise typer.Exit(0)
+
+    with commit(loaded) as connection:
+        store = PostgresMetadataDb(connection)
+        orchestration = PostgresOrchestration(connection)
+
+        written = skipped = 0
+        for feed in claims:
+            try:
+                store.get(ObjectType.FEED, feed.feed_id)
+            except ObjectNotFoundError:
+                store.save(feed.as_governed(author=_SEED_AUTHOR))
+                written += 1
+            else:
+                skipped += 1
+
+        published = _publish_golden_roster(store, orchestration, approver=approver)
+
+    summary = RichTable(title="seeded", show_edge=False)
+    summary.add_column("outcome")
+    summary.add_column("count", justify="right")
+    summary.add_row("claims feeds registered as Draft", str(written))
+    summary.add_row("claims feeds already present", str(skipped))
+    summary.add_row("golden roster feed published this run", "1" if published else "0")
+    console.print(summary)
+
+
+#: Who a seeded registry row is AUTHORED by — the build authored these
+#: templates, and saying so is truer than attributing them to whoever
+#: happened to run the installer. Same reasoning `installer.prompts
+#: .SEED_AUTHOR` states.
+_SEED_AUTHOR = Actor(
+    subject="cinqflow.installer",
+    actor_type=ActorType.SYSTEM,
+    display_name="CINQFLOW installer",
+)
+
+
+def _publish_golden_roster(
+    store: MetadataDbPort, orchestration: OrchestrationPort, *, approver: Actor
+) -> bool:
+    """Publish `golden_fidelis`'s FEED/CONTRACT/RULES for real, and register
+    its schedule. `False` (a no-op) if the feed is already Published — this
+    is the idempotency `seed-prompts` gets from checking `(id, version)`
+    before doing any work.
+    """
+    from dataclasses import replace
+
+    from cinqflow.core.registry import golden_fidelis
+    from cinqflow.core.registry.contract import contract_as_governed, rules_as_governed
+    from cinqflow.core.registry.operations import FeedOperations
+    from cinqflow.ports.metadata_db import ObjectNotFoundError
+    from cinqflow.ports.orchestration import Schedule
+
+    try:
+        existing = store.get(ObjectType.FEED, golden_fidelis.FEED.feed_id)
+        if existing.lifecycle_state is LifecycleState.PUBLISHED:
+            return False
+    except ObjectNotFoundError:
+        pass
+
+    feed_draft = golden_fidelis.FEED.as_governed(
+        author=_SEED_AUTHOR, version=golden_fidelis.FEED_VERSION
+    )
+    # The route `connector.routes.fidelis-sftp` resolves — set here, once,
+    # rather than through the wizard, since this feed is being onboarded by a
+    # seeder rather than a BA.
+    feed_draft = replace(
+        feed_draft,
+        body={**feed_draft.body, "operations": FeedOperations(endpoint_ref="fidelis-sftp").as_body()},
+    )
+    store.save(_through_the_lifecycle(feed_draft, approver=approver))
+
+    contract_draft = contract_as_governed(golden_fidelis.CONTRACT, author=_SEED_AUTHOR)
+    store.save(_through_the_lifecycle(contract_draft, approver=approver))
+
+    rules_draft = rules_as_governed(
+        golden_fidelis.FEED.feed_id, golden_fidelis.RULES, author=_SEED_AUTHOR
+    )
+    store.save(_through_the_lifecycle(rules_draft, approver=approver))
+
+    # CF-V1-E4-03 — activate scheduling only at publication. The same act an
+    # API `POST .../publish` would trigger; there is no HTTP request here to
+    # trigger it, so this seeder makes the call itself.
+    orchestration.register(
+        golden_fidelis.FEED.feed_id, Schedule(cron=golden_fidelis.FEED.schedule_cron)
+    )
+    return True
+
+
+def _through_the_lifecycle(draft: GovernedObject, *, approver: Actor) -> GovernedObject:
+    """Draft -> In Review -> Approved -> Published, for real — never a
+    constructed Published row. `GovernedObject.transition_to` refuses a
+    self-approval, so the author and the approver must differ; `_SEED_AUTHOR`
+    is a SYSTEM actor and `approver` is a named human, which is also why this
+    would refuse to run with `--approved-by` left as a SYSTEM subject."""
+    reviewing, _ = draft.transition_to(LifecycleState.PENDING_REVIEW, actor=_SEED_AUTHOR)
+    approved, _ = reviewing.transition_to(LifecycleState.APPROVED, actor=approver)
+    published, _ = approved.transition_to(LifecycleState.PUBLISHED, actor=approver)
+    return published
+
+
 @app.command()
 def ask(
     question: str,
@@ -550,10 +703,15 @@ def serve_worker(
     this is a loop around them, not a new execution engine. Also registers
     `workers.agent_task.AgentTaskWorker` against `AGENT_TASK_TOPIC`, so a
     `POST /infer-schema` submitted while nobody is watching still gets a
-    Proposal the next time this loop wakes up.
+    Proposal the next time this loop wakes up, and calls
+    `workers.delivery_poll.poll_deliveries` every pass — Milestone 2, Part H:
+    the caller `DeliveryWorker.deliver_available` never had, so a real
+    payer's SFTP drop is picked up on its own, not only a manually delivered
+    file.
     """
     import signal
     import threading
+    from datetime import UTC, datetime
 
     from cinqflow.adapters.local.localfs_storage import LocalFsStorage
     from cinqflow.adapters.local.pg_compute import PostgresCompute
@@ -563,9 +721,11 @@ def serve_worker(
     from cinqflow.adapters.local.pg_orchestration import PostgresOrchestration
     from cinqflow.adapters.local.pg_queue import PostgresQueue
     from cinqflow.adapters.local.secrets import DotenvSecrets
+    from cinqflow.installer.connectors import connectors_from
     from cinqflow.intelligence.plane import IntelligencePlane
     from cinqflow.workers.agent_task import AGENT_TASK_TOPIC, AgentTaskWorker
     from cinqflow.workers.consumer import Consumer
+    from cinqflow.workers.delivery_poll import poll_deliveries
     from cinqflow.workers.loop import run_once
     from cinqflow.workers.pipeline import PipelineRunner
     from cinqflow.workers.run_feed import FeedRunWorker
@@ -590,6 +750,22 @@ def serve_worker(
             control_tables = PostgresControlTables(connection)
             queue = PostgresQueue(connection)
             intelligence = IntelligencePlane.from_profile(loaded, secrets, connection=connection)
+
+            # Part H: poll every Published feed's connector before ticking —
+            # a file that lands THIS pass is visible to the due-check below
+            # in the SAME iteration, not one cycle later.
+            polled = poll_deliveries(
+                metadata_db,
+                storage,
+                control_tables,
+                connectors_from(loaded, storage=storage, secrets=secrets),
+                business_date=datetime.now(UTC).date().replace(day=1).isoformat(),
+            )
+            for outcome in polled:
+                if outcome.error:
+                    console.print(f"[yellow]poll {outcome.feed_id}: {outcome.error}[/yellow]")
+                elif outcome.delivered:
+                    console.print(f"[dim]poll {outcome.feed_id}: {len(outcome.delivered)} delivered[/dim]")
 
             scheduler = SchedulerWorker(
                 orchestration=PostgresOrchestration(connection),

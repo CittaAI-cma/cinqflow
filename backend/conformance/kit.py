@@ -279,6 +279,7 @@ def _register_adapters() -> None:
     import cinqflow.adapters.mock
     import cinqflow.adapters.openai_compatible
     import cinqflow.adapters.replay  # noqa: F401
+    import cinqflow.adapters.sftp  # noqa: F401
 
 
 if __name__ == "__main__":
