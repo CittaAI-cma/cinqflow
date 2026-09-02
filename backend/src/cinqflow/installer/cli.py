@@ -11,6 +11,7 @@ the demo cannot silently rot between showings.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated
 
@@ -26,6 +27,8 @@ from cinqflow.installer.manifest import InstallationManifest
 from cinqflow.installer.prompts import PromptSeedReport
 from cinqflow.ports.metadata_db import MetadataDbPort
 from cinqflow.ports.orchestration import OrchestrationPort
+from cinqflow.workers.delivery_poll import PollOutcome
+from cinqflow.workers.loop import LoopIteration
 
 app = typer.Typer(
     name="cinqflow",
@@ -700,36 +703,24 @@ def serve_worker(
     a person typed both commands by hand, every cycle, forever.
 
     Built from the exact same pieces `tick` and `work` already construct —
-    this is a loop around them, not a new execution engine. Also registers
-    `workers.agent_task.AgentTaskWorker` against `AGENT_TASK_TOPIC`, so a
-    `POST /infer-schema` submitted while nobody is watching still gets a
-    Proposal the next time this loop wakes up, and calls
-    `workers.delivery_poll.poll_deliveries` every pass — Milestone 2, Part H:
-    the caller `DeliveryWorker.deliver_available` never had, so a real
-    payer's SFTP drop is picked up on its own, not only a manually delivered
-    file.
+    this is a loop around them, not a new execution engine. `workers.wiring
+    .build` is what constructs them each pass (adapter construction used to
+    live inline here, across three growing milestones — pulled out once the
+    function doing five jobs at once stopped being readable); this command
+    is left with only the loop, the schedule and the logging.
     """
     import signal
     import threading
     from datetime import UTC, datetime
 
     from cinqflow.adapters.local.localfs_storage import LocalFsStorage
-    from cinqflow.adapters.local.pg_compute import PostgresCompute
     from cinqflow.adapters.local.pg_control import connect
-    from cinqflow.adapters.local.pg_control_tables import PostgresControlTables
-    from cinqflow.adapters.local.pg_metadata_db import PostgresMetadataDb
-    from cinqflow.adapters.local.pg_orchestration import PostgresOrchestration
-    from cinqflow.adapters.local.pg_queue import PostgresQueue
     from cinqflow.adapters.local.secrets import DotenvSecrets
-    from cinqflow.installer.connectors import connectors_from
-    from cinqflow.intelligence.plane import IntelligencePlane
-    from cinqflow.workers.agent_task import AGENT_TASK_TOPIC, AgentTaskWorker
-    from cinqflow.workers.consumer import Consumer
+    from cinqflow.workers import wiring
+    from cinqflow.workers.agent_task import AGENT_TASK_TOPIC
     from cinqflow.workers.delivery_poll import poll_deliveries
     from cinqflow.workers.loop import run_once
-    from cinqflow.workers.pipeline import PipelineRunner
-    from cinqflow.workers.run_feed import FeedRunWorker
-    from cinqflow.workers.scheduler import RUN_FEED_TOPIC, SchedulerWorker
+    from cinqflow.workers.scheduler import RUN_FEED_TOPIC
 
     loaded = profile_module.load(str(profile))
     secrets = DotenvSecrets()
@@ -746,64 +737,40 @@ def serve_worker(
     )
     while not stop.is_set():
         with connect(loaded, autocommit=True) as connection:
-            metadata_db = PostgresMetadataDb(connection)
-            control_tables = PostgresControlTables(connection)
-            queue = PostgresQueue(connection)
-            intelligence = IntelligencePlane.from_profile(loaded, secrets, connection=connection)
+            built = wiring.build(loaded, secrets, connection, storage)
 
             # Part H: poll every Published feed's connector before ticking —
             # a file that lands THIS pass is visible to the due-check below
             # in the SAME iteration, not one cycle later.
             polled = poll_deliveries(
-                metadata_db,
-                storage,
-                control_tables,
-                connectors_from(loaded, storage=storage, secrets=secrets),
+                built.metadata,
+                built.storage,
+                built.control,
+                built.connectors,
                 business_date=datetime.now(UTC).date().replace(day=1).isoformat(),
             )
-            for outcome in polled:
-                if outcome.error:
-                    console.print(f"[yellow]poll {outcome.feed_id}: {outcome.error}[/yellow]")
-                elif outcome.delivered:
-                    console.print(f"[dim]poll {outcome.feed_id}: {len(outcome.delivered)} delivered[/dim]")
+            _log_polled(polled)
+            iteration = run_once(built.scheduler, built.consumer, topics=(RUN_FEED_TOPIC, AGENT_TASK_TOPIC))
 
-            scheduler = SchedulerWorker(
-                orchestration=PostgresOrchestration(connection),
-                metadata=metadata_db,
-                control=control_tables,
-                queue=queue,
-            )
-            consumer = Consumer(queue)
-            consumer.register(
-                RUN_FEED_TOPIC,
-                FeedRunWorker(
-                    metadata=metadata_db,
-                    storage=storage,
-                    runner=PipelineRunner(
-                        storage=storage, control=control_tables, compute=PostgresCompute(connection)
-                    ),
-                ).handle,
-            )
-            consumer.register(
-                AGENT_TASK_TOPIC,
-                AgentTaskWorker(
-                    metadata=metadata_db,
-                    agent_factories={
-                        "schema_inference": lambda store: intelligence.schema_inference(
-                            store, secrets
-                        ),
-                    },
-                ).handle,
-            )
-            iteration = run_once(scheduler, consumer, topics=(RUN_FEED_TOPIC, AGENT_TASK_TOPIC))
-
-        if iteration.tick.due_count or iteration.processed:
-            console.print(
-                f"[dim]{iteration.tick.as_of.isoformat()}[/dim]  "
-                f"{len(iteration.tick.released)} released, {len(iteration.tick.held)} held, "
-                f"{iteration.processed} processed"
-            )
+        _log_iteration(iteration)
         stop.wait(interval_s)
+
+
+def _log_polled(polled: Sequence[PollOutcome]) -> None:
+    for outcome in polled:
+        if outcome.error:
+            console.print(f"[yellow]poll {outcome.feed_id}: {outcome.error}[/yellow]")
+        elif outcome.delivered:
+            console.print(f"[dim]poll {outcome.feed_id}: {len(outcome.delivered)} delivered[/dim]")
+
+
+def _log_iteration(iteration: LoopIteration) -> None:
+    if iteration.tick.due_count or iteration.processed:
+        console.print(
+            f"[dim]{iteration.tick.as_of.isoformat()}[/dim]  "
+            f"{len(iteration.tick.released)} released, {len(iteration.tick.held)} held, "
+            f"{iteration.processed} processed"
+        )
 
 
 @app.command()
