@@ -52,7 +52,10 @@ services:
       CINQFLOW_LLM_MODEL: ${CINQFLOW_LLM_MODEL:-claude-sonnet-5}
       CINQFLOW_LLM_API_KEY: ${CINQFLOW_LLM_API_KEY:-}
       # Matches FRONTEND_HOST_PORT below by default; override both together.
-      CINQFLOW_CORS_ALLOWED_ORIGINS: http://localhost:${FRONTEND_HOST_PORT:-3000}
+      # Both hostnames are listed because a browser treats localhost and
+      # 127.0.0.1 as different origins even though they reach the same
+      # container port.
+      CINQFLOW_CORS_ALLOWED_ORIGINS: http://localhost:${FRONTEND_HOST_PORT:-3000},http://127.0.0.1:${FRONTEND_HOST_PORT:-3000}
     volumes: &backend-volumes
       # Live code, so `--reload` (api) and iteration work without a rebuild.
       - ../backend/src:/app/backend/src
