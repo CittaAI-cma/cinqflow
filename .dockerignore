@@ -1,0 +1,18 @@
+# Only backend/Dockerfile.railway builds from the repo root (it needs both
+# backend/ and knowledge/ - see that file's header comment). Everything below
+# is never COPYed by it, so excluding it keeps the build context small instead
+# of uploading it for nothing - docs/ alone carries files up to ~88MB.
+.git
+docs
+.cinqflow
+.claude
+
+frontend/node_modules
+frontend/.next
+
+backend/.venv
+backend/**/__pycache__
+backend/.pytest_cache
+backend/.ruff_cache
+
+**/.DS_Store
