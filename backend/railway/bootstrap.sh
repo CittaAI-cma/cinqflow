@@ -13,6 +13,12 @@
 #    EXISTS), same command `make install-db` runs locally.
 set -e
 
+if [ -z "$CINQFLOW_DATABASE_URL" ] || [[ "$CINQFLOW_DATABASE_URL" == *localhost* ]]; then
+    echo "CINQFLOW_DATABASE_URL is unset or points at localhost - set it on this" >&2
+    echo "service to the Postgres reference variable, e.g. \${{Postgres.DATABASE_URL}}" >&2
+    exit 1
+fi
+
 if [ -n "$CINQFLOW_KNOWLEDGE_ROOT" ] && [ ! -d "$CINQFLOW_KNOWLEDGE_ROOT" ]; then
     echo "empty knowledge volume at $CINQFLOW_KNOWLEDGE_ROOT - seeding from the image"
     mkdir -p "$(dirname "$CINQFLOW_KNOWLEDGE_ROOT")"
