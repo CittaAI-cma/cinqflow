@@ -1,0 +1,375 @@
+version: 1
+updated: "2026-09-03"
+
+# Loader-facing feed contract. YamlKnowledgeProvider.get_source() reads this exact path;
+# ContextBuilder injects it whole at file understanding and mapping. Richer organisational
+# knowledge for this source is in sources/cms_aco_reach_d0284/.
+#
+# Columns, row counts, null rates and value shapes below were read from the de-identified
+# sample and its profile report, not inferred.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/8.Cinq ACO Reach/"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/8.Cinq ACO Reach/ACO Beneficiary_D0284_AlignmentRoster_Profile Report.pdf"
+
+source_system: cms_aco_reach_d0284
+feed: alignment_roster
+domain: enrollments
+payer: "CMS - ACO REACH"
+population: D0284
+contract: cms_aco_reach_d0284
+line_of_business: "Medicare fee-for-service beneficiaries aligned to the REACH ACO; dual status carried in BENE_DUAL_STUS_CD"
+file_pattern: "^D0284_AlignmentRoster\\.(xlsx|csv)$"
+cadence: monthly
+delivery: portal_download
+arrival_archetype: restated_history
+
+format:
+  container: "named .xlsx but the bytes are comma-separated text - the reader must be configured as CSV"
+  delimiter: ","
+  quoting: "minimal, on free-text fields only"
+  header: row 1
+  line_terminator: CRLF
+  encoding: "mostly ASCII; one description column carries mis-encoded UTF-8"
+  trailer: none
+
+business_date:
+  source: "columns, not the file name"
+  filedate: "YYYYMMDD integer - the CMS alignment report file date"
+  yr_mo: "YYYY_MM - the alignment month"
+  note: "mo is not zero-padded (1..12) while yr_mo is"
+
+grain: one row per beneficiary per alignment month within a file date
+natural_key: [aco_id, filedate, yr_mo, Beneficiary MBI ID]
+secondary_identifiers: [MBI_original, MBI_previous]
+key_note: >
+  5,131 duplicate pairs sit in yr_mo 2023_12 (a December restatement written twice) plus 4 exact duplicate rows. In the pairs only de-identified columns differ, so in the real file they are almost certainly identical. Dedupe at Silver Raw with a collapse count, never in Bronze.
+
+# Observed in the de-identified sample (75,611 rows, 111 columns).
+sample_observed:
+  rows: 75611
+  columns: 111
+  blank_rows: 0
+  rows_with_wrong_field_count: 0
+
+# The 111 columns as they actually arrive, in file order.
+expected_columns:
+  - aco_id
+  - filedate
+  - yr_latest_filedate_flag
+  - runout_file_flag
+  - yr_mo
+  - yr
+  - mo
+  - cohort_flag
+  - Beneficiary MBI ID
+  - MBI_original
+  - MBI_previous
+  - MBI_previous_end_month
+  - Beneficiary Alignment Effective Start Date
+  - Beneficiary Alignment Effective Termination Date
+  - Beneficiary Date of Death
+  - Alignment Status
+  - alignment_status_description
+  - alignment_with_death_month
+  - alignment_restatement_flag
+  - Beneficiary First Name
+  - Beneficiary Last Name
+  - Beneficiary Date of Birth
+  - Beneficiary Age
+  - Beneficiary Gender
+  - "Race-Ethnicity"
+  - race_ethnicity_description
+  - Beneficiary Line 1 Address
+  - Beneficiary Line 2 Address
+  - Beneficiary Line 3 Address
+  - Beneficiary Line 4 Address
+  - Beneficiary Line 5 Address
+  - Beneficiary Line 6 Address
+  - Beneficiary City
+  - Beneficiary USPS State Code
+  - Beneficiary Zip 5
+  - Beneficiary Zip 4
+  - "Beneficiary State-County of Residence SSA"
+  - "Beneficiary State-County of Residence FIPS"
+  - Beneficiary Eligibility Alignment Year 1
+  - Beneficiary Eligibility Alignment Year 2
+  - Beneficiary Part D Coverage Alignment Year 1
+  - Beneficiary Part D Coverage Alignment Year 2
+  - Newly Aligned Beneficiary Flag
+  - Prospective Plus Alignment
+  - Claim Based Alignment Indicator
+  - Voluntary Alignment Type
+  - Mobility Impairment Indicator
+  - Frailty Indicator
+  - Medium Risk with Unplanned Admissions Indicator
+  - High Risk Score Indicator
+  - riskscore_source
+  - riskscore_filedate
+  - riskscore_yrmo
+  - riskscore_raw
+  - riskscore_norm
+  - riskscore_norm_fallback_flag
+  - County Name
+  - Benchmark Year
+  - Benchmark Type
+  - Benchmark Period
+  - County Rate
+  - county_rate_fallback_flag
+  - bmark_mmo
+  - mbi_cclf8_flag
+  - BENE_DUAL_STUS_CD
+  - BENE_DUAL_STUS_CD_desc_short
+  - BENE_DUAL_STUS_CD_desc_long
+  - BENE_DUAL_STUS_CD_benefit_type
+  - BENE_DUAL_STUS_CD_category
+  - BENE_MDCR_STUS_CD
+  - BENE_MDCR_STUS
+  - ESRD_flag
+  - aged_flag
+  - disabled_flag
+  - aged_or_disabled_flag
+  - active_mgmt_flag
+  - active_mgmt_dispo
+  - active_mgmt_notes
+  - aligned_any_flag
+  - aligned_inpi
+  - aligned_inpi_name
+  - aligned_npi_start_date
+  - aligned_npi_end_date
+  - aligned_npi_approval_status
+  - aligned_tin
+  - aligned_tin_name
+  - aligned_tin_market
+  - aligned_tin_submarket
+  - aligned_affiliate
+  - aligned_org_name
+  - aligned_palmr_va_flag
+  - aligned_palmr_va_inpi
+  - aligned_palmr_va_tin
+  - aligned_palmr_va_type
+  - aligned_palmr_va_filedate
+  - aligned_palmr_clm_primarycare_flag
+  - aligned_palmr_clm_primarycare_inpi
+  - aligned_palmr_clm_primarycare_tin
+  - aligned_palmr_clm_primarycare_paytotal
+  - aligned_palmr_clm_primarycare_filedate
+  - aligned_palmr_clm_other_flag
+  - aligned_palmr_clm_other_inpi
+  - aligned_palmr_clm_other_tin
+  - aligned_palmr_clm_other_paytotal
+  - aligned_palmr_clm_other_filedate
+  - aligned_affiliate_manual_mapping_flag
+  - Exclude
+  - memb_mo
+  - Aligned
+  - bmark_mmo_new
+  - RTA_adjustedbmark
+
+# Per-column facts the profiler measured. `null_pct` counts empty strings and literal
+# null tokens. `phi` marks member-identifying columns (HIPAA Safe Harbor).
+columns:
+  - { name: aco_id, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: filedate, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: yr_latest_filedate_flag, type: int, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: runout_file_flag, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: yr_mo, type: string, null_pct: 0.0, distinct: 13, phi: false }
+  - { name: yr, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: mo, type: int, null_pct: 0.0, distinct: 12, phi: false }
+  - { name: cohort_flag, type: string, null_pct: 86.4, distinct: 1, phi: false }
+  - { name: Beneficiary MBI ID, type: string, null_pct: 0.0, distinct: 12658, phi: true }
+  - { name: MBI_original, type: string, null_pct: 0.0, distinct: 12730, phi: true }
+  - { name: MBI_previous, type: string, null_pct: 98.7, distinct: 84, phi: true }
+  - { name: MBI_previous_end_month, type: string, null_pct: 98.7, distinct: 8, phi: true }
+  - { name: Beneficiary Alignment Effective Start Date, type: date:YYYY-MM-DD, null_pct: 0.1, distinct: 672, phi: false }
+  - { name: Beneficiary Alignment Effective Termination Date, type: date:YYYY-MM-DD, null_pct: 90.5, distinct: 336, phi: false }
+  - { name: Beneficiary Date of Death, type: date:YYYY-MM-DD, null_pct: 97.5, distinct: 336, phi: true }
+  - { name: Alignment Status, type: string, null_pct: 0.0, distinct: 9, phi: false }
+  - { name: alignment_status_description, type: string, null_pct: 0.0, distinct: 9, phi: false }
+  - { name: alignment_with_death_month, type: int, null_pct: 0.0, distinct: 2, phi: true }
+  - { name: alignment_restatement_flag, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Beneficiary First Name, type: string, null_pct: 0.1, distinct: 690, phi: true }
+  - { name: Beneficiary Last Name, type: string, null_pct: 0.1, distinct: 1000, phi: true }
+  - { name: Beneficiary Date of Birth, type: date:YYYY-MM-DD, null_pct: 0.1, distinct: 18267, phi: true }
+  - { name: Beneficiary Age, type: int, null_pct: 0.1, distinct: 86, phi: true }
+  - { name: Beneficiary Gender, type: string, null_pct: 0.1, distinct: 2, phi: true }
+  - { name: "Race-Ethnicity", type: int, null_pct: 0.1, distinct: 7, phi: true }
+  - { name: race_ethnicity_description, type: string, null_pct: 0.1, distinct: 7, phi: false }
+  - { name: Beneficiary Line 1 Address, type: string, null_pct: 0.1, distinct: 74503, phi: true }
+  - { name: Beneficiary Line 2 Address, type: string, null_pct: 88.9, distinct: 8385, phi: true }
+  - { name: Beneficiary Line 3 Address, type: string, null_pct: 99.9, distinct: 39, phi: true }
+  - { name: Beneficiary Line 4 Address, type: string, null_pct: 100.0, distinct: 26, phi: true }
+  - { name: Beneficiary Line 5 Address, type: string, null_pct: 100.0, distinct: 13, phi: true }
+  - { name: Beneficiary Line 6 Address, type: empty, null_pct: 100.0, distinct: 0, phi: true }
+  - { name: Beneficiary City, type: string, null_pct: 0.1, distinct: 32653, phi: true }
+  - { name: Beneficiary USPS State Code, type: string, null_pct: 0.1, distinct: 28, phi: false }
+  - { name: Beneficiary Zip 5, type: int, null_pct: 0.1, distinct: 5968, phi: true }
+  - { name: Beneficiary Zip 4, type: int, null_pct: 0.8, distinct: 8998, phi: true }
+  - { name: "Beneficiary State-County of Residence SSA", type: string, null_pct: 0.1, distinct: 223, phi: true }
+  - { name: "Beneficiary State-County of Residence FIPS", type: string, null_pct: 0.1, distinct: 223, phi: true }
+  - { name: Beneficiary Eligibility Alignment Year 1, type: string, null_pct: 0.1, distinct: 2, phi: false }
+  - { name: Beneficiary Eligibility Alignment Year 2, type: string, null_pct: 0.1, distinct: 2, phi: false }
+  - { name: Beneficiary Part D Coverage Alignment Year 1, type: string, null_pct: 0.1, distinct: 2, phi: false }
+  - { name: Beneficiary Part D Coverage Alignment Year 2, type: string, null_pct: 0.1, distinct: 2, phi: false }
+  - { name: Newly Aligned Beneficiary Flag, type: string, null_pct: 0.1, distinct: 2, phi: false }
+  - { name: Prospective Plus Alignment, type: string, null_pct: 0.1, distinct: 2, phi: false }
+  - { name: Claim Based Alignment Indicator, type: string, null_pct: 0.1, distinct: 2, phi: false }
+  - { name: Voluntary Alignment Type, type: string, null_pct: 0.1, distinct: 3, phi: false }
+  - { name: Mobility Impairment Indicator, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Frailty Indicator, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Medium Risk with Unplanned Admissions Indicator, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: High Risk Score Indicator, type: string, null_pct: 86.4, distinct: 1, phi: false }
+  - { name: riskscore_source, type: string, null_pct: 11.1, distinct: 1, phi: false }
+  - { name: riskscore_filedate, type: date:YYYY-MM-DD, null_pct: 11.1, distinct: 336, phi: false }
+  - { name: riskscore_yrmo, type: string, null_pct: 11.1, distinct: 9, phi: false }
+  - { name: riskscore_raw, type: decimal, null_pct: 11.1, distinct: 1912, phi: false }
+  - { name: riskscore_norm, type: decimal, null_pct: 10.6, distinct: 2077, phi: false }
+  - { name: riskscore_norm_fallback_flag, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: County Name, type: string, null_pct: 0.0, distinct: 117, phi: true }
+  - { name: Benchmark Year, type: int, null_pct: 13.7, distinct: 1, phi: false }
+  - { name: Benchmark Type, type: string, null_pct: 13.6, distinct: 2, phi: false }
+  - { name: Benchmark Period, type: string, null_pct: 14.7, distinct: 1, phi: false }
+  - { name: County Rate, type: decimal, null_pct: 13.6, distinct: 136, phi: true }
+  - { name: county_rate_fallback_flag, type: int, null_pct: 0.0, distinct: 2, phi: true }
+  - { name: bmark_mmo, type: decimal, null_pct: 14.1, distinct: 3733, phi: false }
+  - { name: mbi_cclf8_flag, type: int, null_pct: 0.0, distinct: 2, phi: true }
+  - { name: BENE_DUAL_STUS_CD, type: string, null_pct: 11.1, distinct: 7, phi: false }
+  - { name: BENE_DUAL_STUS_CD_desc_short, type: string, null_pct: 11.1, distinct: 7, phi: false }
+  - { name: BENE_DUAL_STUS_CD_desc_long, type: string, null_pct: 11.1, distinct: 7, phi: false }
+  - { name: BENE_DUAL_STUS_CD_benefit_type, type: string, null_pct: 11.1, distinct: 3, phi: false }
+  - { name: BENE_DUAL_STUS_CD_category, type: string, null_pct: 0.0, distinct: 3, phi: false }
+  - { name: BENE_MDCR_STUS_CD, type: string, null_pct: 11.1, distinct: 6, phi: false }
+  - { name: BENE_MDCR_STUS, type: string, null_pct: 11.1, distinct: 6, phi: false }
+  - { name: ESRD_flag, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: aged_flag, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: disabled_flag, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: aged_or_disabled_flag, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: active_mgmt_flag, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: active_mgmt_dispo, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: active_mgmt_notes, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: aligned_any_flag, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: aligned_inpi, type: int, null_pct: 13.7, distinct: 175, phi: false }
+  - { name: aligned_inpi_name, type: string, null_pct: 14.4, distinct: 100, phi: false }
+  - { name: aligned_npi_start_date, type: date:YYYY-MM-DD, null_pct: 19.5, distinct: 336, phi: false }
+  - { name: aligned_npi_end_date, type: date:YYYY-MM-DD, null_pct: 19.5, distinct: 336, phi: false }
+  - { name: aligned_npi_approval_status, type: string, null_pct: 0.0, distinct: 3, phi: false }
+  - { name: aligned_tin, type: int, null_pct: 13.5, distinct: 39, phi: false }
+  - { name: aligned_tin_name, type: string, null_pct: 13.5, distinct: 10, phi: false }
+  - { name: aligned_tin_market, type: string, null_pct: 13.5, distinct: 5, phi: false }
+  - { name: aligned_tin_submarket, type: string, null_pct: 13.5, distinct: 6, phi: false }
+  - { name: aligned_affiliate, type: string, null_pct: 13.5, distinct: 10, phi: false }
+  - { name: aligned_org_name, type: string, null_pct: 13.5, distinct: 10, phi: false }
+  - { name: aligned_palmr_va_flag, type: int, null_pct: 96.2, distinct: 1, phi: false }
+  - { name: aligned_palmr_va_inpi, type: int, null_pct: 96.2, distinct: 31, phi: false }
+  - { name: aligned_palmr_va_tin, type: int, null_pct: 96.2, distinct: 17, phi: false }
+  - { name: aligned_palmr_va_type, type: string, null_pct: 96.2, distinct: 2, phi: false }
+  - { name: aligned_palmr_va_filedate, type: date:YYYY-MM-DD, null_pct: 96.2, distinct: 336, phi: false }
+  - { name: aligned_palmr_clm_primarycare_flag, type: int, null_pct: 18.1, distinct: 1, phi: false }
+  - { name: aligned_palmr_clm_primarycare_inpi, type: int, null_pct: 18.1, distinct: 171, phi: false }
+  - { name: aligned_palmr_clm_primarycare_tin, type: int, null_pct: 24.1, distinct: 36, phi: false }
+  - { name: aligned_palmr_clm_primarycare_paytotal, type: decimal, null_pct: 18.1, distinct: 3599, phi: false }
+  - { name: aligned_palmr_clm_primarycare_filedate, type: date:YYYY-MM-DD, null_pct: 18.1, distinct: 336, phi: false }
+  - { name: aligned_palmr_clm_other_flag, type: int, null_pct: 18.1, distinct: 1, phi: false }
+  - { name: aligned_palmr_clm_other_inpi, type: int, null_pct: 18.1, distinct: 211, phi: false }
+  - { name: aligned_palmr_clm_other_tin, type: int, null_pct: 24.1, distinct: 36, phi: false }
+  - { name: aligned_palmr_clm_other_paytotal, type: decimal, null_pct: 18.1, distinct: 404, phi: false }
+  - { name: aligned_palmr_clm_other_filedate, type: date:YYYY-MM-DD, null_pct: 18.1, distinct: 336, phi: false }
+  - { name: aligned_affiliate_manual_mapping_flag, type: int, null_pct: 94.7, distinct: 1, phi: false }
+  - { name: Exclude, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: memb_mo, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Aligned, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: bmark_mmo_new, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: RTA_adjustedbmark, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+
+# Always empty in the sample. Emptiness here is a layout fact, not drift (DQ-B-03 must
+# not fire on these) unless the registered contract says they were populated before.
+expected_empty_columns:
+  - Beneficiary Line 4 Address
+  - Beneficiary Line 5 Address
+  - Beneficiary Line 6 Address
+  - Mobility Impairment Indicator
+  - Frailty Indicator
+  - Medium Risk with Unplanned Admissions Indicator
+  - active_mgmt_flag
+  - active_mgmt_dispo
+  - active_mgmt_notes
+  - Exclude
+  - memb_mo
+  - Aligned
+  - bmark_mmo_new
+  - RTA_adjustedbmark
+
+phi_columns:
+  - Beneficiary MBI ID
+  - MBI_original
+  - MBI_previous
+  - MBI_previous_end_month
+  - Beneficiary Date of Death
+  - alignment_with_death_month
+  - Beneficiary First Name
+  - Beneficiary Last Name
+  - Beneficiary Date of Birth
+  - Beneficiary Age
+  - Beneficiary Gender
+  - "Race-Ethnicity"
+  - Beneficiary Line 1 Address
+  - Beneficiary Line 2 Address
+  - Beneficiary Line 3 Address
+  - Beneficiary Line 4 Address
+  - Beneficiary Line 5 Address
+  - Beneficiary Line 6 Address
+  - Beneficiary City
+  - Beneficiary Zip 5
+  - Beneficiary Zip 4
+  - "Beneficiary State-County of Residence SSA"
+  - "Beneficiary State-County of Residence FIPS"
+  - County Name
+  - County Rate
+  - county_rate_fallback_flag
+  - mbi_cclf8_flag
+
+# Closed-domain columns and the values observed. A value outside these is DQ-B-07.
+value_domains:
+  aco_id: [D0284]
+  runout_file_flag: [C]
+  Beneficiary Gender: [F, M]
+  Alignment Status: [AL, MC, DY, MS, CO, NV, DD, AB]
+  Voluntary Alignment Type: ["No", Paper, Electronic]
+  Benchmark Type: [A, E]
+  Benchmark Period: [Prospective]
+  BENE_DUAL_STUS_CD: [NA, 01, 02, 03, 04, 06, 08]
+  BENE_MDCR_STUS_CD: [10, 11, 20, 21, 31, NA]
+  aligned_npi_approval_status: ["No", Unknown, "Yes"]
+  aligned_palmr_va_type: [SVA, MVA]
+  aligned_tin_market: [NY, CA, GA, MI, VA]
+  aligned_tin_submarket: ["NY - Upstate", "NY - Downstate", CA, GA, MI, VA]
+
+formats:
+  dates: "YYYY-MM-DD on every date column"
+  mbi: "11-character Medicare Beneficiary Identifier"
+  cms_flags: Y/N on the CMS alignment columns; 0/1 on the derived flags
+  race: "Race-Ethnicity is the CMS RTI code 0-6 with race_ethnicity_description alongside"
+  geography: "SSA and FIPS state-county codes are 5 digits; 39 rows carry the placeholder ~~"
+  risk_scores: "riskscore_raw to 3 decimal places, riskscore_norm to 8"
+
+# De-identification artefacts in the SAMPLE ONLY. Never tune a rule or threshold on
+# these; the production feed has a different shape.
+deid_artifacts:
+  - "Beneficiary MBI ID, MBI_original, MBI_previous, aligned_inpi, aligned_tin and every PALMR identifier are hashed; names, address lines, city, ZIP and the aligned provider, TIN, affiliate and organisation names are faked; every date column is date-faked."
+  - The profile report says the source is .xlsx while the supplied file is CSV.
+  - The Members by State chart in the profile report disagrees with the data and should be ignored.
+
+quirks:
+  - "Beneficiary Line 3 to 6 Address arrive as 40 spaces rather than empty on 75,526 rows, a fixed-width remnant. Trim before any null test or the null rate reads as zero."
+  - "High Risk Score Indicator holds the literal string ',,' on the 10,252 rows from file date 20240116, a quoting or column-shift artefact in that month's file."
+  - "BENE_DUAL_STUS_CD_desc_long contains a mis-encoded UTF-8 replacement character in the Qualifying Individual description, so the source was written in a non-UTF-8 code page."
+  - Seven trailing columns are placeholders that are empty on every row.
+  - "This is a curated roster, not a raw CMS file: CMS Alignment Report columns in Title Case are joined to PALMR and RAP reference reports and to derived lower-snake fields."
+
+notes: >
+  The alignment roster is the denominator of the ACO REACH contract, so its beneficiary count is
+  a settlement input rather than a data-quality statistic. MBI_original and MBI_previous carry the
+  Medicare identifier change history that CCLF9 exists to provide, which makes this feed the
+  authoritative Medicare identity crosswalk for the D0284 population. Alignment Status tells you
+  why a beneficiary left: MC moved to Medicare Advantage, DY died in the performance year, MS
+  Medicare became the secondary payer, CO moved out of the service area, NV eligibility could not
+  be verified, DD died before the performance year, AB lost Part A or Part B.

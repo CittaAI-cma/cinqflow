@@ -1,0 +1,283 @@
+version: 1
+updated: "2026-09-03"
+domain: claims
+
+# GROUNDED IN, and only in:
+#   docs/03_data_source_schemas/claims/claims-model-final-raw.xlsx  (sheet "Claims Silver Raw")
+#   docs/03_data_source_schemas/claims/Silver-Claims-ODS-Data-Model.pptx (layer intent, slide 4)
+# Every table, column, type and primary key below was read from the "Claims Silver Raw"
+# sheet. Column meanings are the sheet's own descriptions, shortened. Nothing is inferred.
+#
+# WHY SILVER RAW AND NOT SILVER ODS: this file lists the LEGAL MAPPING TARGETS for a
+# claims feed landing from Bronze. Silver ODS (claim_id_sk surrogate keys, *_desc
+# enrichments, is_latest_version) is derived downstream by the platform and is never a
+# mapping target. ODS-only columns are recorded under `contested_fields`.
+grounded_in:
+  - "docs/03_data_source_schemas/claims/claims-model-final-raw.xlsx"
+  - "docs/03_data_source_schemas/claims/Silver-Claims-ODS-Data-Model.pptx"
+  - "docs/05_business_logic_and_domain_rules/BCDA_Handling_Claim_Adjustments_and_Claim_Status.docx"
+
+# Populated by the platform, never by a mapping. A proposal targeting one of these is a
+# validation failure, not a suggestion.
+system_populated:
+  - source_system
+  - batch_id
+  - record_hash
+  - is_deleted
+  - created_by
+  - created_at
+  - updated_by
+  - updated_at
+  - silver_id
+  - is_active
+
+# Source-system controlled values already in use for claims (mapping workbooks):
+source_system_values: [FIDELIS_NY, UHC_OPTUM_NY, D0284, MSSP]
+
+entities:
+  - entity: claim_header
+    table: claim_header
+    grain: "one row per claim per adjudication version per source system"
+    primary_key: [source_system, source_claim_id]
+    fields:
+      - { name: source_claim_id, type: string, phi: false, means: "Payer-native claim control identifier (837 CLM01, internal claim number); unique with source_system" }
+      - { name: claim_type, type: string, phi: false, means: "Claim setting: IP, OP, PROF, DENTAL, VISION. Never RX on this table", allowed: [IP, OP, PROF, DENTAL, VISION] }
+      - { name: source_resource_id, type: string, phi: false, means: "FHIR logical id of the ExplanationOfBenefit/Claim when the feed is FHIR (BCDA)" }
+      - { name: source_resource_type, type: string, phi: false, means: "FHIR resource type string (ExplanationOfBenefit vs Claim)" }
+      - { name: source_format, type: string, phi: false, means: "Technical payload format for traceability", allowed: [FHIR_R4_JSON, X12_837I, X12_837P, X12_835, CSV, JSON] }
+      - { name: patient_id, type: string, phi: true, means: "Logical FK to patient.patient_id; may reference a stub member when eligibility lags the claim" }
+      - { name: admission_date, type: date, phi: true, means: "Institutional admission date; required for IP" }
+      - { name: discharge_date, type: date, phi: true, means: "Institutional discharge date; required for IP" }
+      - { name: statement_from, type: date, phi: true, means: "Start of the billing statement period (UB-04)" }
+      - { name: statement_through, type: date, phi: true, means: "End of the billing statement period (UB-04)" }
+      - { name: paid_date, type: date, phi: false, means: "Date the payer posted payment or finalised the claim" }
+      - { name: claim_effective_date, type: date, phi: false, means: "Coverage/benefit effective anchor when supplied separately" }
+      - { name: claim_received_date, type: date, phi: false, means: "Date the payer received the claim (BCDA: EOB.created)" }
+      - { name: claim_version_num, type: int, phi: false, means: "Version counter for resubmitted/corrected claims; picks latest snapshot in dedup" }
+      - { name: replaced_claim_id, type: string, phi: false, means: "Prior claim id in a void/replace chain" }
+      - { name: drg_code, type: string, phi: false, means: "DRG on inpatient institutional claims (IP/OP only)" }
+      - { name: drg_code_system, type: string, phi: false, means: "DRG grouper/version literal (e.g. MS-DRG FY, APR-DRG)" }
+      - { name: bill_type, type: string, phi: false, means: "UB-04 type of bill (facility type + classification + frequency)" }
+      - { name: admission_type, type: string, phi: false, means: "UB-04 priority/type of admission code" }
+      - { name: admission_source, type: string, phi: false, means: "UB-04 point of origin / admission source code" }
+      - { name: discharge_status, type: string, phi: false, means: "UB-04 patient discharge status (disposition) code" }
+      - { name: claim_adjustment_type_cd, type: string, phi: false, means: "Claim lifecycle state", allowed: [original, void, replacement, reversal] }
+      - { name: claim_status, type: string, phi: false, means: "High-level adjudication state", allowed: [submitted, paid, denied, pended, partial] }
+
+  - entity: claim_line
+    table: claim_line
+    grain: "one row per service line within a claim"
+    primary_key: [source_system, source_claim_id, line_number]
+    fields:
+      - { name: source_claim_id, type: string, phi: false, means: "Parent claim id; must match claim_header" }
+      - { name: line_number, type: int, phi: false, means: "Sequential line number (837 LX / UB revenue line order)" }
+      - { name: source_line_id, type: string, phi: false, means: "Payer-native line id; synthesised from line_number when absent" }
+      - { name: service_date, type: date, phi: true, means: "Primary date of service for the line" }
+      - { name: service_end_date, type: date, phi: true, means: "End date for span-based services" }
+      - { name: procedure_code, type: string, phi: false, means: "Procedure/revenue code as submitted (CPT, HCPCS, ICD-10-PCS)" }
+      - { name: source_code_system, type: string, phi: false, means: "Coding system literal for procedure_code" }
+      - { name: procedure_code_version, type: string, phi: false, means: "Code set version/table year when supplied" }
+      - { name: revenue_code, type: string, phi: false, means: "UB-04 revenue center code (4 digits)" }
+      - { name: revenue_code_system, type: string, phi: false, means: "Coding system metadata for revenue_code" }
+      - { name: place_of_service, type: string, phi: false, means: "CMS two-digit place of service code" }
+      - { name: billed_units, type: decimal, phi: false, means: "Billable units as submitted" }
+      - { name: modifier_1, type: string, phi: false, means: "CPT/HCPCS modifier 1" }
+      - { name: modifier_2, type: string, phi: false, means: "CPT/HCPCS modifier 2" }
+      - { name: modifier_3, type: string, phi: false, means: "CPT/HCPCS modifier 3" }
+      - { name: modifier_4, type: string, phi: false, means: "CPT/HCPCS modifier 4" }
+      - { name: modifier_5, type: string, phi: false, means: "CPT/HCPCS modifier 5" }
+
+  - entity: claim_diagnosis
+    table: claim_diagnosis
+    grain: "one row per diagnosis per claim"
+    primary_key: [source_system, source_claim_id, diagnosis_sequence]
+    fields:
+      - { name: source_claim_id, type: string, phi: false, means: "Parent claim id" }
+      - { name: source_diagnosis_code, type: string, phi: true, means: "Diagnosis code exactly as submitted (ICD-10-CM), before normalisation" }
+      - { name: source_diagnosis_code_system, type: string, phi: false, means: "Coding system literal for the diagnosis code" }
+      - { name: diagnosis_sequence, type: int, phi: false, means: "Ordinal position; preserves principal/admitting/secondary ordering" }
+      - { name: diagnosis_type, type: string, phi: false, means: "Diagnosis role", allowed: [principal, admitting, secondary, external cause] }
+      - { name: poa_flag, type: string, phi: false, means: "Present-on-admission indicator", allowed: [Y, N, U, W] }
+
+  - entity: claim_procedure
+    table: claim_procedure
+    grain: "one row per header-level procedure per claim"
+    primary_key: [source_system, source_claim_id, procedure_sequence]
+    fields:
+      - { name: source_claim_id, type: string, phi: false, means: "Parent claim id" }
+      - { name: procedure_sequence, type: int, phi: false, means: "Ordinal position of the procedure on the claim" }
+      - { name: source_procedure_code, type: string, phi: false, means: "Procedure code as submitted (ICD-10-PCS, CPT, HCPCS)" }
+      - { name: source_procedure_code_system, type: string, phi: false, means: "Coding system literal for the procedure code" }
+      - { name: procedure_type, type: string, phi: false, means: "Procedure role (primary, secondary) where supplied" }
+      - { name: procedure_date, type: date, phi: true, means: "Date the procedure was performed" }
+
+  - entity: claim_provider
+    table: claim_provider
+    grain: "one row per provider role per claim (or per line when provider_scope = LINE)"
+    primary_key: [source_system, source_claim_id, provider_sequence, provider_role_code]
+    fields:
+      - { name: source_claim_id, type: string, phi: false, means: "Parent claim id" }
+      - { name: provider_sequence, type: int, phi: false, means: "careTeam sequence linking providers to lines" }
+      - { name: provider_role_code, type: string, phi: false, means: "Provider role on the claim", allowed: [BILLING, RENDERING, ATTENDING, OPERATING, REFERRING, FACILITY] }
+      - { name: provider_role_system, type: string, phi: false, means: "Role code system", allowed: [FHIR, X12, internal] }
+      - { name: provider_identifier_system, type: string, phi: false, means: "Identifier system for provider_identifier_value (NPI, OSCAR/CCN, internal)" }
+      - { name: provider_identifier_value, type: string, phi: false, means: "Provider identifier as supplied" }
+      - { name: source_line_id, type: string, phi: false, means: "Line id when the role is line-scoped" }
+      - { name: provider_scope, type: string, phi: false, means: "HEADER or LINE", allowed: [HEADER, LINE] }
+      - { name: npi, type: string, phi: false, means: "National Provider Identifier (10 digits)" }
+      - { name: servicing_facility_name, type: string, phi: false, means: "Servicing facility name" }
+      - { name: servicing_facility_category, type: string, phi: false, means: "Servicing facility category" }
+      - { name: tin, type: string, phi: false, means: "Billing entity Tax Identification Number" }
+
+  - entity: claim_adjudication
+    table: claim_adjudication
+    grain: "one row per header-level adjudication amount per claim"
+    primary_key: [source_system, source_claim_id, adjudication_type, adjudication_category_code, adjudication_reason_code]
+    fields:
+      - { name: source_claim_id, type: string, phi: false, means: "Parent claim id" }
+      - { name: adjudication_type, type: string, phi: false, means: "X12 835 adjustment group (PR, CO, OA, PI); null for FHIR" }
+      - { name: adjudication_category_code, type: string, phi: false, means: "submitted, allowed, paid/benefit, copay, deductible, coinsurance" }
+      - { name: adjudication_category_system, type: string, phi: false, means: "e.g. http://terminology.hl7.org/CodeSystem/adjudication" }
+      - { name: adjudication_reason_code, type: string, phi: false, means: "CARC/RARC reason code" }
+      - { name: adjudication_reason_system, type: string, phi: false, means: "CARC or RARC system URL" }
+      - { name: amount, type: decimal, phi: false, means: "Dollar amount, positive or negative" }
+      - { name: currency, type: string, phi: false, means: "ISO currency code (USD)" }
+      - { name: value, type: string, phi: false, means: "Non-monetary adjudication value" }
+
+  - entity: claim_line_adjudication
+    table: claim_line_adjudication
+    grain: "one row per adjudication amount per claim line"
+    primary_key: [source_system, source_claim_id, source_line_id, adjudication_type, adjudication_category_code, adjudication_reason_code]
+    fields:
+      - { name: source_claim_id, type: string, phi: false, means: "Parent claim id" }
+      - { name: source_line_id, type: string, phi: false, means: "Line id the amount applies to" }
+      - { name: adjudication_type, type: string, phi: false, means: "X12 835 adjustment group (PR, CO, OA, PI); null for FHIR" }
+      - { name: adjudication_category_code, type: string, phi: false, means: "submitted, allowed, paid/benefit, copay, deductible, coinsurance" }
+      - { name: adjudication_category_system, type: string, phi: false, means: "Adjudication category code system" }
+      - { name: adjudication_reason_code, type: string, phi: false, means: "CARC/RARC reason code" }
+      - { name: adjudication_reason_system, type: string, phi: false, means: "CARC or RARC system URL" }
+      - { name: amount, type: decimal, phi: false, means: "Dollar amount, positive or negative" }
+      - { name: currency, type: string, phi: false, means: "ISO currency code (USD)" }
+      - { name: value, type: string, phi: false, means: "Non-monetary adjudication value" }
+
+  - entity: pharmacy_claim
+    table: pharmacy_claim
+    grain: "one row per dispense line per pharmacy claim"
+    primary_key: [source_system, source_claim_id, line_number]
+    fields:
+      - { name: source_claim_id, type: string, phi: false, means: "PBM/payer pharmacy claim number" }
+      - { name: external_claim_id, type: string, phi: false, means: "Alternate id from switch/rebate/carve-out vendor" }
+      - { name: patient_id, type: string, phi: true, means: "Logical FK to patient.patient_id" }
+      - { name: source_member_id, type: string, phi: true, means: "Member id as carried on the pharmacy claim (added 2026-07)" }
+      - { name: primary_payer_id, type: string, phi: false, means: "Responsible PBM or plan id" }
+      - { name: primary_payer, type: string, phi: false, means: "Primary payer name (added 2026-07)" }
+      - { name: product, type: string, phi: false, means: "Payer product / line of business (added 2026-07)" }
+      - { name: claim_effective_date, type: date, phi: false, means: "Coverage effective anchor for the claim" }
+      - { name: claim_received_date, type: date, phi: false, means: "Date received by the payer (added 2026-07)" }
+      - { name: claim_status, type: string, phi: false, means: "Pharmacy adjudication status (paid, rejected, reversed)" }
+      - { name: claim_adjustment_type_cd, type: string, phi: false, means: "Lifecycle state (original, void, replacement, reversal) - NOT claim_status" }
+      - { name: replaced_claim_id, type: string, phi: false, means: "Prior claim id in a reversal/replace chain (added 2026-07)" }
+      - { name: denial_reason, type: string, phi: false, means: "Primary rejection/denial reason from the PBM" }
+      - { name: line_number, type: int, phi: false, means: "Sequential dispense line" }
+      - { name: claim_type, type: string, phi: false, means: "Always RX on this table", allowed: [RX] }
+      - { name: prescription_date, type: date, phi: true, means: "Date written/authorised" }
+      - { name: filled_date, type: date, phi: true, means: "Date dispensed; anchors adherence windows" }
+      - { name: service_date, type: date, phi: true, means: "Primary analytic date, normally = filled_date" }
+      - { name: ndc_code, type: string, phi: false, means: "National Drug Code as printed (10 or 11 digit)" }
+      - { name: source_drug_code, type: string, phi: false, means: "Alternate drug id (GPI, formulary key)" }
+      - { name: source_code_system, type: string, phi: false, means: "Coding system for ndc_code / source_drug_code (NDC11, proprietary)" }
+      - { name: quantity, type: decimal, phi: false, means: "Dispensed quantity" }
+      - { name: quantity_units, type: string, phi: false, means: "Units of the quantity (added 2026-07)" }
+      - { name: days_supply, type: int, phi: false, means: "Days supply; feeds PDC adherence" }
+      - { name: prescriber_id, type: string, phi: false, means: "Payer-native prescriber id" }
+      - { name: prescriber_npi, type: string, phi: false, means: "Prescriber NPI" }
+      - { name: dispensing_facility_id, type: string, phi: false, means: "Pharmacy identifier (NCPDP/NPI/internal)" }
+      - { name: line_charge, type: decimal, phi: false, means: "Submitted ingredient + dispensing fee" }
+      - { name: allowed_amount, type: decimal, phi: false, means: "PBM-allowed dollars" }
+      - { name: plan_paid_amount, type: decimal, phi: false, means: "Net plan paid" }
+      - { name: member_responsibility, type: decimal, phi: false, means: "Member out-of-pocket (deductible + copay + coinsurance)" }
+
+  - entity: patient
+    table: patient
+    grain: "one row per member per source system as carried on claims/beneficiary files"
+    primary_key: [source_system, source_member_id]
+    fields:
+      - { name: source_member_id, type: string, phi: true, means: "Payer subscriber/member identifier; not unique across sources" }
+      - { name: mbi_id, type: string, phi: true, means: "Medicare Beneficiary Identifier; prefer the current MBI" }
+      - { name: hicn, type: string, phi: true, means: "Legacy Medicare HICN (deprecated, still present in history)" }
+      - { name: first_name, type: string, phi: true, means: "Given name" }
+      - { name: middle_name, type: string, phi: true, means: "Middle name" }
+      - { name: last_name, type: string, phi: true, means: "Family name" }
+      - { name: date_of_birth, type: date, phi: true, means: "Date of birth" }
+      - { name: deceased_date, type: date, phi: true, means: "Date of death; preferred over the boolean" }
+      - { name: death_indicator, type: bool, phi: true, means: "Deceased flag; derivable from deceased_date" }
+      - { name: gender, type: string, phi: true, means: "Administrative gender", allowed: [MALE, FEMALE, OTHER, UNKNOWN] }
+      - { name: race_code, type: string, phi: true, means: "Race code (Blue Button race preferred, US Core fallback)" }
+      - { name: ethnicity_code, type: string, phi: true, means: "Ethnicity code" }
+      - { name: address_line1, type: string, phi: true, means: "Address line 1" }
+      - { name: address_line2, type: string, phi: true, means: "Address line 2" }
+      - { name: address_line3, type: string, phi: true, means: "Address line 3 (CCLF BENE_LINE_3_ADR)" }
+      - { name: address_line4, type: string, phi: true, means: "Address line 4 (CCLF)" }
+      - { name: address_line5, type: string, phi: true, means: "Address line 5 (CCLF)" }
+      - { name: address_line6, type: string, phi: true, means: "Address line 6 (CCLF)" }
+      - { name: city, type: string, phi: true, means: "City" }
+      - { name: state, type: string, phi: false, means: "USPS state code after normalisation" }
+      - { name: zip_code, type: string, phi: true, means: "ZIP or ZIP+4 as supplied" }
+      - { name: zip5, type: string, phi: true, means: "Normalised 5-digit ZIP" }
+      - { name: zip4, type: string, phi: true, means: "ZIP+4 extension" }
+      - { name: country, type: string, phi: false, means: "Country" }
+      - { name: county_fips_code, type: string, phi: false, means: "County FIPS code (enriched from ZIP-to-county reference)" }
+      - { name: state_fips_code, type: string, phi: false, means: "State FIPS code" }
+      - { name: mdcr_status_code, type: string, phi: false, means: "Medicare status code (BENE_MDCR_STUS_CD)" }
+      - { name: dual_status_code, type: string, phi: false, means: "CMS dual eligibility status code (BENE_DUAL_STUS_CD)" }
+      - { name: original_entitlement_reason_code, type: string, phi: false, means: "Original reason for Medicare entitlement (OREC)" }
+      - { name: entitlement_buyin_indicator, type: string, phi: false, means: "Medicare buy-in indicator" }
+      - { name: part_a_enrollment_begin_date, type: date, phi: false, means: "Part A enrollment begin date" }
+      - { name: part_b_enrollment_begin_date, type: date, phi: false, means: "Part B enrollment begin date" }
+      - { name: bene_rng_bgn_dt, type: date, phi: false, means: "Beneficiary range begin date (CCLF period)" }
+      - { name: bene_rng_end_dt, type: date, phi: false, means: "Beneficiary range end date (CCLF period)" }
+
+# ODS-only or spreadsheet-only names that this Silver Raw model does NOT declare. Not legal
+# targets. Surfaced so the analyst sees the gap instead of the model guessing.
+contested_fields:
+  - field: claim_id_sk
+    seen_in: "claims-model-final-raw.xlsx sheet 'Claims Silver ODS'"
+    note: "ODS surrogate key, minted downstream. Never mapped."
+  - field: source_billing_org_id
+    seen_in: "Claims Silver ODS sheet; mapping__ACO_to_SilverRaw_Mapping maps CLM_NCH_PRMRY_PYR_CD here"
+    note: "Declared on the ODS claim_header, not on Silver Raw claim_header."
+  - field: source_rendering_org_id
+    seen_in: "Claims Silver ODS sheet"
+    note: "ODS-only."
+  - field: billing_provider_npi
+    seen_in: "mapping__ACO_to_SilverRaw_Mapping (FAC_PRVDR_NPI_NUM)"
+    note: "Silver Raw carries provider NPIs on claim_provider rows (role BILLING/FACILITY), not as a header column."
+  - field: attending_provider_npi
+    seen_in: "mapping__ACO_to_SilverRaw_Mapping (ATNDG_PRVDR_NPI_NUM)"
+    note: "Same: land as a claim_provider row with provider_role_code = ATTENDING."
+  - field: drg_code_desc
+    seen_in: "Claims Silver ODS sheet"
+    note: "Populated via reference-table enrichment in ODS, never from a feed."
+  - field: parent_claim_id
+    seen_in: "BCDA_Handling_Claim_Adjustments_and_Claim_Status.docx §10 (recommended ODS additions)"
+    note: "Recommended lineage column; not yet in either model."
+  - field: normalized_payment_amount
+    seen_in: "BCDA_Handling_Claim_Adjustments_and_Claim_Status.docx §10"
+    note: "Recommended derived column; not yet declared."
+
+equivalences:
+  - spreadsheet_term: Adjustment_claim_indicator
+    canonical_field: claim_adjustment_type_cd
+    evidence: "Three mapping workbooks (Fidelis, UHC/Optum NY, DataLake_to_CinqDB) correct the legacy target from claim_status to claim_adjustment_type_cd."
+  - spreadsheet_term: Patient_status
+    canonical_field: discharge_status
+    evidence: "Legacy CinqDB Claim_IPHeader.Patient_status is the UB-04 patient discharge status."
+  - spreadsheet_term: Type_of_bill
+    canonical_field: bill_type
+    evidence: "Legacy CinqDB Claim_IPHeader/Claim_OPHeader.Type_of_bill."
+  - spreadsheet_term: BENE_PTNT_STUS_CD
+    canonical_field: discharge_status
+    evidence: "CCLF/ACO mapping workbooks."
+  - spreadsheet_term: CUR_CLM_UNIQ_ID
+    canonical_field: source_claim_id
+    evidence: "CCLF/ACO mapping workbooks."

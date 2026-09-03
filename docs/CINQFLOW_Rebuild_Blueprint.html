@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>:root{color-scheme:light dark}body{margin:0}img{max-width:100%}</style>
+<title>CINQFLOW Rebuild Blueprint</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #F5F7F8;
+    --surface: #FFFFFF;
+    --ink: #1B2733;
+    --muted: #5A6B7A;
+    --line: #D9E1E7;
+    --accent: #0E7B84;
+    --accent-soft: #E3F0F1;
+    --ai: #6B4FBB;
+    --ai-soft: #EEEAF9;
+    --landing-c: #54718C;
+    --landing-bg: #EAF0F5;
+    --bronze-c: #A96A21;
+    --bronze-bg: #F6EDDF;
+    --silver-c: #75838F;
+    --silver-bg: #EDF0F2;
+    --gate: #B3541E;
+    --code-bg: #EDF1F3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0F171E;
+      --surface: #16212B;
+      --ink: #E5ECF2;
+      --muted: #93A3B1;
+      --line: #2B3A47;
+      --accent: #46B2BB;
+      --accent-soft: #123A3E;
+      --ai: #A18BE8;
+      --ai-soft: #2A2344;
+      --landing-c: #7E9DBB;
+      --landing-bg: #1B2937;
+      --bronze-c: #D69A4E;
+      --bronze-bg: #33270F;
+      --silver-c: #9AA8B4;
+      --silver-bg: #222D36;
+      --gate: #E08A55;
+      --code-bg: #1E2A35;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0F171E;
+    --surface: #16212B;
+    --ink: #E5ECF2;
+    --muted: #93A3B1;
+    --line: #2B3A47;
+    --accent: #46B2BB;
+    --accent-soft: #123A3E;
+    --ai: #A18BE8;
+    --ai-soft: #2A2344;
+    --landing-c: #7E9DBB;
+    --landing-bg: #1B2937;
+    --bronze-c: #D69A4E;
+    --bronze-bg: #33270F;
+    --silver-c: #9AA8B4;
+    --silver-bg: #222D36;
+    --gate: #E08A55;
+    --code-bg: #1E2A35;
+  }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.6;
+    margin: 0;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 48px 28px 80px; }
+  header.masthead { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 40px; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 10px;
+  }
+  h1 {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-size: clamp(30px, 4.5vw, 44px); font-weight: 700; letter-spacing: -0.015em;
+    line-height: 1.08; margin: 0 0 14px; text-wrap: balance;
+  }
+  .standfirst { max-width: 62ch; color: var(--muted); font-size: 17px; margin: 0; }
+  .standfirst strong { color: var(--ink); font-weight: 600; }
+  .kept-dropped { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  .kd {
+    font-family: "IBM Plex Mono", monospace; font-size: 12.5px;
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px;
+    background: var(--surface);
+  }
+  .kd b { font-weight: 500; color: var(--accent); }
+  .kd.drop b { color: var(--gate); }
+  h2 {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-size: 24px; font-weight: 700; letter-spacing: -0.01em;
+    margin: 56px 0 6px; text-wrap: balance;
+  }
+  .sect-note { color: var(--muted); max-width: 68ch; margin: 0 0 22px; }
+  h2 .no {
+    font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 400;
+    color: var(--accent); vertical-align: 6px; margin-right: 10px; letter-spacing: .08em;
+  }
+  p { max-width: 68ch; }
+  figure { margin: 0 0 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px 16px 10px; }
+  .scroller { overflow-x: auto; }
+  figure svg { display: block; min-width: 900px; max-width: 100%; height: auto; margin: 0 auto; }
+  figcaption { font-size: 13px; color: var(--muted); padding: 10px 8px 6px; border-top: 1px dashed var(--line); margin-top: 12px; }
+  code, .mono { font-family: "IBM Plex Mono", monospace; font-size: 0.92em; }
+  code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; background: var(--surface); }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  th {
+    text-align: left; font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 12px;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+  .layerchip {
+    display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 12.5px;
+    border-radius: 6px; padding: 2px 9px; border: 1px solid;
+  }
+  .lc-landing { color: var(--landing-c); border-color: var(--landing-c); background: var(--landing-bg); }
+  .lc-bronze { color: var(--bronze-c); border-color: var(--bronze-c); background: var(--bronze-bg); }
+  .lc-silver { color: var(--silver-c); border-color: var(--silver-c); background: var(--silver-bg); }
+  .rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin: 20px 0; }
+  .rule { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .rule h3 { font-family: Archivo, sans-serif; font-size: 15.5px; margin: 0 0 6px; }
+  .rule p { font-size: 14px; color: var(--muted); margin: 0; }
+  .gatechip {
+    display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 12px;
+    color: var(--gate); border: 1px solid var(--gate); border-radius: 4px; padding: 1px 8px;
+  }
+  footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); }
+  @media (prefers-reduced-motion: no-preference) {
+    header.masthead { animation: rise .5s ease-out both; }
+    @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">CINQFLOW · Fresh build · 2026-09-02</p>
+  <h1>One data plane, a new control plane</h1>
+  <p class="standfirst">The rebuild keeps exactly one thing from the existing system: the <strong>data-plane contract</strong> — the landing, Bronze and Silver layers and the read/write semantics cinqcare already depends on, which Postgres renders today and Databricks can render later. Everything above it is designed fresh: a thin FastAPI control plane, a queue, one AI reasoning runtime that proposes, and one deterministic engine that executes. Every promotion between layers passes an analyst approval gate.</p>
+  <div class="kept-dropped">
+    <span class="kd"><b>kept</b> landing / bronze / silver contract — Postgres renders it today</span>
+    <span class="kd"><b>kept</b> Databricks as a second rendering of the same contract</span>
+    <span class="kd drop"><b>dropped</b> chip architecture / plug-play connectors</span>
+    <span class="kd drop"><b>dropped</b> the old control-plane code — new flow, ideated clean</span>
+  </div>
+</header>
+
+<h2><span class="no">01</span>The shape of the system</h2>
+<p class="sect-note">Five tiers, one hard boundary. Deterministic code always runs first — profiling, parsing, statistics — and the AI runtime reasons over those persisted facts plus small samples, never bulk data, writing structured proposals. The deterministic engine is the only thing that moves rows. Both meet storage at a single data-plane port: a logical contract, not a database dialect.</p>
+
+<figure>
+  <div class="scroller">
+  <svg viewBox="0 0 1160 640" role="img" aria-label="Layered architecture: analyst workspace over a FastAPI control plane with a Postgres workflow store of first-class artifacts, dispatching jobs to an AI reasoning worker and a deterministic pipeline engine, both meeting a single logical data-plane port over two physical stores — a landing file store and the Postgres medallion tables — with Databricks as a later rendering of the same contract." style="color: var(--ink)">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+      </marker>
+      <marker id="arr-ai" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--ai)"/>
+      </marker>
+    </defs>
+
+    <!-- Analyst workspace -->
+    <rect x="40" y="16" width="1080" height="70" rx="10" fill="var(--surface)" stroke="currentColor" stroke-width="1.2"/>
+    <text x="64" y="45" font-size="14" font-weight="600" fill="currentColor">Analyst workspace — Next.js</text>
+    <text x="64" y="67" font-size="12" fill="var(--muted)">Upload · Profile review · Mapping studio · Preview · Approvals</text>
+    <text x="1096" y="45" font-size="11" fill="var(--muted)" text-anchor="end">people decide</text>
+
+    <line x1="580" y1="86" x2="580" y2="122" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)"/>
+    <text x="592" y="108" font-size="11" fill="var(--muted)">HTTPS · JSON</text>
+
+    <!-- Control plane -->
+    <rect x="40" y="126" width="760" height="96" rx="10" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.4"/>
+    <text x="64" y="155" font-size="14" font-weight="600" fill="currentColor">Control plane — FastAPI services</text>
+    <text x="64" y="177" font-size="12" fill="var(--muted)">uploads · profiles · mappings · previews · approvals · runs</text>
+    <text x="64" y="197" font-size="12" fill="var(--muted)">thin handlers: validate, persist state, enqueue — never ingest inline</text>
+
+    <rect x="836" y="126" width="284" height="96" rx="10" fill="var(--surface)" stroke="currentColor" stroke-width="1.2"/>
+    <text x="856" y="150" font-size="13.5" font-weight="600" fill="currentColor">Workflow store — Postgres</text>
+    <text x="856" y="170" font-size="10.5" fill="var(--muted)">every artifact first-class: id · version · state</text>
+    <text x="856" y="187" font-size="10.5" fill="var(--muted)">uploads · profiles · interpretations · proposals</text>
+    <text x="856" y="204" font-size="10.5" fill="var(--muted)">mapping vN · approvals · previews · runs · lineage</text>
+    <line x1="800" y1="174" x2="836" y2="174" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)" marker-start="url(#arr)"/>
+
+    <!-- enqueue arrows -->
+    <line x1="280" y1="222" x2="280" y2="268" stroke="var(--ai)" stroke-width="1.2" marker-end="url(#arr-ai)"/>
+    <text x="292" y="250" font-size="11" fill="var(--muted)">enqueue: interpret · analyze · recommend</text>
+    <line x1="860" y1="222" x2="860" y2="268" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)"/>
+    <text x="872" y="250" font-size="11" fill="var(--muted)">enqueue: profile · land · preview · promote</text>
+
+    <!-- Workers -->
+    <rect x="40" y="272" width="520" height="118" rx="10" fill="var(--ai-soft)" stroke="var(--ai)" stroke-width="1.4"/>
+    <text x="64" y="301" font-size="14" font-weight="600" fill="currentColor">AI reasoning worker — LangGraph runtime</text>
+    <text x="64" y="323" font-size="12" fill="var(--muted)">file interpreter · bronze analyst · mapping recommender</text>
+    <text x="64" y="343" font-size="12" fill="var(--muted)">reasons over deterministic profiles + small samples — never bulk rows</text>
+    <text x="64" y="363" font-size="12" fill="var(--muted)">output: structured, persisted proposals with confidence + evidence</text>
+
+    <rect x="600" y="272" width="520" height="118" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+    <text x="624" y="301" font-size="14" font-weight="600" fill="currentColor">Deterministic engine — pipeline runner</text>
+    <text x="624" y="323" font-size="12" fill="var(--muted)">profiler · file lander · bronze writer · mapping executor · preview</text>
+    <text x="624" y="343" font-size="12" fill="var(--muted)">plain Python + SQL — every row is moved by code, not the model</text>
+    <text x="624" y="363" font-size="12" fill="var(--muted)">executes only approved, versioned mappings</text>
+
+    <!-- proposes / executes note -->
+    <line x1="560" y1="331" x2="600" y2="331" stroke="var(--ai)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arr-ai)"/>
+    <text x="580" y="318" font-size="10.5" fill="var(--ai)" text-anchor="middle">proposes</text>
+
+    <!-- arrows to port -->
+    <line x1="280" y1="390" x2="280" y2="436" stroke="var(--ai)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arr-ai)"/>
+    <text x="292" y="418" font-size="11" fill="var(--muted)">reads samples + metadata only</text>
+    <line x1="860" y1="390" x2="860" y2="436" stroke="currentColor" stroke-width="1.4" marker-end="url(#arr)"/>
+    <text x="872" y="418" font-size="11" fill="var(--muted)">reads &amp; writes full data</text>
+
+    <!-- Data plane port -->
+    <rect x="40" y="440" width="1080" height="46" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="7 5"/>
+    <text x="580" y="460" font-size="13" font-weight="600" text-anchor="middle" fill="currentColor">Data-plane port — a logical contract, not a SQL dialect</text>
+    <text x="580" y="478" font-size="11" text-anchor="middle" fill="var(--muted)">layers · batch semantics · audit columns · append-only rules — declared once, rendered per engine</text>
+
+    <line x1="170" y1="486" x2="170" y2="514" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)"/>
+    <line x1="580" y1="486" x2="580" y2="514" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)"/>
+    <line x1="1000" y1="486" x2="1000" y2="514" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+
+    <!-- physical stores -->
+    <rect x="40" y="518" width="260" height="104" rx="10" fill="var(--surface)" stroke="currentColor" stroke-width="1.2"/>
+    <text x="60" y="545" font-size="13.5" font-weight="600" fill="currentColor">File store — landing zone</text>
+    <rect x="60" y="558" width="220" height="48" rx="7" fill="var(--landing-bg)" stroke="var(--landing-c)" stroke-width="1.3"/>
+    <text x="170" y="578" font-size="12.5" font-weight="600" text-anchor="middle" fill="var(--landing-c)">landing</text>
+    <text x="170" y="595" font-size="11" text-anchor="middle" fill="var(--muted)">immutable originals · FS → object store</text>
+
+    <rect x="320" y="518" width="520" height="104" rx="10" fill="var(--surface)" stroke="currentColor" stroke-width="1.2"/>
+    <text x="340" y="545" font-size="13.5" font-weight="600" fill="currentColor">Relational medallion — PostgreSQL today</text>
+    <rect x="340" y="558" width="228" height="48" rx="7" fill="var(--bronze-bg)" stroke="var(--bronze-c)" stroke-width="1.3"/>
+    <text x="454" y="578" font-size="12.5" font-weight="600" text-anchor="middle" fill="var(--bronze-c)">bronze</text>
+    <text x="454" y="595" font-size="11" text-anchor="middle" fill="var(--muted)">1:1 typed + batch metadata</text>
+    <line x1="568" y1="582" x2="590" y2="582" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)"/>
+    <rect x="594" y="558" width="226" height="48" rx="7" fill="var(--silver-bg)" stroke="var(--silver-c)" stroke-width="1.3"/>
+    <text x="707" y="578" font-size="12.5" font-weight="600" text-anchor="middle" fill="var(--silver-c)">silver_raw</text>
+    <text x="707" y="595" font-size="11" text-anchor="middle" fill="var(--muted)">mapped, canonical-aligned</text>
+
+    <!-- Databricks later -->
+    <rect x="880" y="518" width="240" height="104" rx="10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="7 5"/>
+    <text x="1000" y="556" font-size="13" font-weight="600" text-anchor="middle" fill="var(--muted)">Databricks — later</text>
+    <text x="1000" y="578" font-size="11" text-anchor="middle" fill="var(--muted)">same contract, second rendering:</text>
+    <text x="1000" y="595" font-size="11" text-anchor="middle" fill="var(--muted)">Volumes + Delta tables</text>
+  </svg>
+  </div>
+  <figcaption>The AI lane (violet, dashed) only reads profiles and samples and writes proposals; the deterministic lane (teal, solid) is the sole writer of data. Both address storage through one <em>logical</em> port over two physical stores — a file store for landing and the relational medallion Postgres renders today. Databricks becomes a second rendering of the same contract (Volumes + Delta), not a translation of Postgres.</figcaption>
+</figure>
+
+<h2><span class="no">02</span>One feed, end to end</h2>
+<p class="sect-note">The vertical slice an analyst experiences: six stages, two approval gates. Nothing is promoted to a deeper layer without a human decision, and nothing the AI says becomes the system of record — its findings persist as structured rows the analyst reviews, edits and approves.</p>
+
+<figure>
+  <div class="scroller">
+  <svg viewBox="0 0 1250 540" role="img" aria-label="Swimlane flow across six stages: upload, approve to Bronze, Bronze intelligence, mapping, preview, approve to Silver Raw — across four lanes: analyst, deterministic engine, AI reasoning, and the Postgres data plane, with approval gates before Bronze and before Silver Raw." style="color: var(--ink)">
+    <defs>
+      <marker id="sarr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+      </marker>
+      <marker id="sarr-ai" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--ai)"/>
+      </marker>
+    </defs>
+
+    <!-- stage titles -->
+    <text x="224" y="30" font-size="12" font-weight="600" text-anchor="middle" fill="currentColor">1 · Upload</text>
+    <text x="408" y="30" font-size="12" font-weight="600" text-anchor="middle" fill="currentColor">2 · Approve → Bronze</text>
+    <text x="592" y="30" font-size="12" font-weight="600" text-anchor="middle" fill="currentColor">3 · Bronze intelligence</text>
+    <text x="776" y="30" font-size="12" font-weight="600" text-anchor="middle" fill="currentColor">4 · Mapping</text>
+    <text x="960" y="30" font-size="12" font-weight="600" text-anchor="middle" fill="currentColor">5 · Preview</text>
+    <text x="1144" y="30" font-size="12" font-weight="600" text-anchor="middle" fill="currentColor">6 · Approve → Silver</text>
+
+    <!-- stage separators -->
+    <line x1="320" y1="44" x2="320" y2="496" stroke="var(--line)" stroke-dasharray="3 5"/>
+    <line x1="504" y1="44" x2="504" y2="496" stroke="var(--line)" stroke-dasharray="3 5"/>
+    <line x1="688" y1="44" x2="688" y2="496" stroke="var(--line)" stroke-dasharray="3 5"/>
+    <line x1="872" y1="44" x2="872" y2="496" stroke="var(--line)" stroke-dasharray="3 5"/>
+    <line x1="1056" y1="44" x2="1056" y2="496" stroke="var(--line)" stroke-dasharray="3 5"/>
+
+    <!-- lane bands -->
+    <rect x="136" y="52" width="1106" height="112" fill="currentColor" opacity="0.03"/>
+    <rect x="136" y="172" width="1106" height="100" fill="var(--accent)" opacity="0.05"/>
+    <rect x="136" y="280" width="1106" height="100" fill="var(--ai)" opacity="0.05"/>
+    <rect x="136" y="388" width="1106" height="104" fill="var(--bronze-c)" opacity="0.05"/>
+
+    <!-- lane labels -->
+    <text x="10" y="102" font-size="12" font-weight="600" fill="currentColor">Analyst</text>
+    <text x="10" y="119" font-size="10.5" fill="var(--muted)">decides at gates</text>
+    <text x="10" y="216" font-size="12" font-weight="600" fill="var(--accent)">Deterministic</text>
+    <text x="10" y="232" font-size="12" font-weight="600" fill="var(--accent)">engine</text>
+    <text x="10" y="249" font-size="10.5" fill="var(--muted)">pipeline runner</text>
+    <text x="10" y="326" font-size="12" font-weight="600" fill="var(--ai)">AI reasoning</text>
+    <text x="10" y="343" font-size="10.5" fill="var(--muted)">LangGraph runtime</text>
+    <text x="10" y="434" font-size="12" font-weight="600" fill="var(--bronze-c)">Data plane</text>
+    <text x="10" y="451" font-size="10.5" fill="var(--muted)">PostgreSQL</text>
+
+    <!-- S1 nodes -->
+    <rect x="144" y="72" width="160" height="40" rx="8" fill="var(--surface)" stroke="currentColor" stroke-width="1.2"/>
+    <text x="224" y="96" font-size="11.5" font-weight="600" text-anchor="middle" fill="currentColor">Upload CSV / XLSX</text>
+
+    <rect x="144" y="186" width="160" height="56" rx="8" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.2"/>
+    <text x="224" y="204" font-size="11" font-weight="600" text-anchor="middle" fill="currentColor">Persist + profile (code)</text>
+    <text x="224" y="219" font-size="10.5" text-anchor="middle" fill="var(--muted)">checksum · size · uploader</text>
+    <text x="224" y="233" font-size="10.5" text-anchor="middle" fill="var(--muted)">columns · types · nulls · keys</text>
+
+    <rect x="144" y="294" width="160" height="64" rx="8" fill="var(--surface)" stroke="var(--ai)" stroke-width="1.2"/>
+    <text x="224" y="312" font-size="11" font-weight="600" text-anchor="middle" fill="var(--ai)">AI interpretation</text>
+    <text x="224" y="327" font-size="10.5" text-anchor="middle" fill="var(--muted)">reasons over the profile</text>
+    <text x="224" y="340" font-size="10.5" text-anchor="middle" fill="var(--muted)">domain · grain · PHI flags</text>
+    <text x="224" y="353" font-size="10.5" text-anchor="middle" fill="var(--muted)">confidence + evidence</text>
+
+    <line x1="224" y1="112" x2="224" y2="184" stroke="currentColor" stroke-width="1.2" marker-end="url(#sarr)"/>
+    <text x="232" y="152" font-size="10" fill="var(--muted)">POST /uploads</text>
+    <line x1="224" y1="242" x2="224" y2="292" stroke="var(--ai)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#sarr-ai)"/>
+    <text x="232" y="272" font-size="10" fill="var(--muted)">profile facts</text>
+
+    <!-- S1 -> S2 gate -->
+    <path d="M304,326 H408 V114" fill="none" stroke="var(--ai)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#sarr-ai)"/>
+    <text x="330" y="318" font-size="10" fill="var(--muted)">interpretation</text>
+
+    <!-- S2 gate -->
+    <polygon points="408,76 428,94 408,112 388,94" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.5"/>
+    <text x="408" y="98" font-size="10" font-weight="600" text-anchor="middle" fill="var(--gate)">G1</text>
+    <text x="408" y="130" font-size="10.5" text-anchor="middle" fill="currentColor">review + approve</text>
+    <text x="408" y="143" font-size="10.5" text-anchor="middle" fill="currentColor">interpretation</text>
+
+    <rect x="328" y="186" width="160" height="64" rx="8" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.2"/>
+    <text x="408" y="204" font-size="11" font-weight="600" text-anchor="middle" fill="currentColor">Land + write Bronze</text>
+    <text x="408" y="219" font-size="10.5" text-anchor="middle" fill="var(--muted)">original preserved · 1:1 typed</text>
+    <text x="408" y="232" font-size="10.5" text-anchor="middle" fill="var(--muted)">batch_id · load metadata</text>
+    <text x="408" y="245" font-size="10.5" text-anchor="middle" fill="var(--muted)">no semantic mapping yet</text>
+
+    <line x1="408" y1="150" x2="408" y2="184" stroke="currentColor" stroke-width="1.2" marker-end="url(#sarr)"/>
+
+    <rect x="328" y="404" width="72" height="30" rx="6" fill="var(--landing-bg)" stroke="var(--landing-c)" stroke-width="1.2"/>
+    <text x="364" y="423" font-size="11" font-weight="600" text-anchor="middle" fill="var(--landing-c)">landing</text>
+    <rect x="416" y="404" width="72" height="30" rx="6" fill="var(--bronze-bg)" stroke="var(--bronze-c)" stroke-width="1.2"/>
+    <text x="452" y="423" font-size="11" font-weight="600" text-anchor="middle" fill="var(--bronze-c)">bronze</text>
+
+    <line x1="364" y1="250" x2="364" y2="402" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#sarr)"/>
+    <line x1="452" y1="250" x2="452" y2="402" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#sarr)"/>
+
+    <!-- S3 -->
+    <rect x="512" y="294" width="160" height="64" rx="8" fill="var(--surface)" stroke="var(--ai)" stroke-width="1.2"/>
+    <text x="592" y="312" font-size="11" font-weight="600" text-anchor="middle" fill="var(--ai)">Bronze intelligence</text>
+    <text x="592" y="327" font-size="10.5" text-anchor="middle" fill="var(--muted)">source → target proposals</text>
+    <text x="592" y="340" font-size="10.5" text-anchor="middle" fill="var(--muted)">confidence · evidence</text>
+    <text x="592" y="353" font-size="10.5" text-anchor="middle" fill="var(--muted)">unknowns flagged</text>
+
+    <rect x="512" y="404" width="160" height="30" rx="6" fill="var(--silver-bg)" stroke="var(--silver-c)" stroke-width="1.2"/>
+    <text x="592" y="423" font-size="10.5" font-weight="600" text-anchor="middle" fill="var(--silver-c)">canonical targets</text>
+
+    <path d="M492,419 H548 V360" fill="none" stroke="var(--ai)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#sarr-ai)"/>
+    <text x="500" y="392" font-size="10" fill="var(--muted)">sample</text>
+    <line x1="628" y1="404" x2="628" y2="360" stroke="var(--ai)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#sarr-ai)"/>
+
+    <!-- S3 -> S4 -->
+    <path d="M672,326 H776 V132" fill="none" stroke="var(--ai)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#sarr-ai)"/>
+    <text x="698" y="318" font-size="10" fill="var(--muted)">proposal</text>
+
+    <!-- S4 -->
+    <rect x="696" y="66" width="160" height="64" rx="8" fill="var(--surface)" stroke="currentColor" stroke-width="1.2"/>
+    <text x="776" y="84" font-size="11" font-weight="600" text-anchor="middle" fill="currentColor">Mapping studio</text>
+    <text x="776" y="99" font-size="10.5" text-anchor="middle" fill="var(--muted)">edit fields · types · defaults</text>
+    <text x="776" y="112" font-size="10.5" text-anchor="middle" fill="var(--muted)">value maps · transforms</text>
+    <text x="776" y="125" font-size="10.5" text-anchor="middle" fill="var(--muted)">saved as version vN</text>
+
+    <!-- S4 -> S5 -->
+    <path d="M856,90 H920 V184" fill="none" stroke="currentColor" stroke-width="1.2" marker-end="url(#sarr)"/>
+    <text x="864" y="82" font-size="10" fill="var(--muted)">run preview</text>
+
+    <!-- S5 -->
+    <rect x="880" y="186" width="160" height="56" rx="8" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.2"/>
+    <text x="960" y="204" font-size="11" font-weight="600" text-anchor="middle" fill="currentColor">Preview run — vN on sample</text>
+    <text x="960" y="219" font-size="10.5" text-anchor="middle" fill="var(--muted)">mapped values · failures</text>
+    <text x="960" y="232" font-size="10.5" text-anchor="middle" fill="var(--muted)">nulls · affected counts</text>
+
+    <rect x="880" y="66" width="160" height="52" rx="8" fill="var(--surface)" stroke="currentColor" stroke-width="1.2"/>
+    <text x="960" y="86" font-size="11" font-weight="600" text-anchor="middle" fill="currentColor">Review preview</text>
+    <text x="960" y="102" font-size="10.5" text-anchor="middle" fill="var(--muted)">revise → v(N+1), or approve</text>
+
+    <line x1="988" y1="186" x2="988" y2="120" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#sarr)"/>
+    <text x="996" y="158" font-size="10" fill="var(--muted)">results</text>
+    <path d="M880,86 H858 V98 H856" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="4 4" marker-end="url(#sarr)"/>
+    <text x="868" y="76" font-size="10" fill="var(--muted)" text-anchor="end">revise</text>
+
+    <!-- S5 -> S6 gate -->
+    <line x1="1040" y1="92" x2="1122" y2="92" stroke="currentColor" stroke-width="1.2" marker-end="url(#sarr)"/>
+    <polygon points="1144,74 1164,92 1144,110 1124,92" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.5"/>
+    <text x="1144" y="96" font-size="10" font-weight="600" text-anchor="middle" fill="var(--gate)">G2</text>
+    <text x="1144" y="128" font-size="10.5" text-anchor="middle" fill="currentColor">approve mapping vN</text>
+
+    <!-- S6 -->
+    <rect x="1064" y="186" width="160" height="56" rx="8" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.2"/>
+    <text x="1144" y="204" font-size="11" font-weight="600" text-anchor="middle" fill="currentColor">Execute vN — full run</text>
+    <text x="1144" y="219" font-size="10.5" text-anchor="middle" fill="var(--muted)">deterministic · no LLM</text>
+    <text x="1144" y="232" font-size="10.5" text-anchor="middle" fill="var(--muted)">idempotent by batch</text>
+
+    <line x1="1144" y1="136" x2="1144" y2="184" stroke="currentColor" stroke-width="1.2" marker-end="url(#sarr)"/>
+
+    <rect x="1064" y="404" width="160" height="30" rx="6" fill="var(--silver-bg)" stroke="var(--silver-c)" stroke-width="1.2"/>
+    <text x="1144" y="423" font-size="11" font-weight="600" text-anchor="middle" fill="var(--silver-c)">silver_raw</text>
+
+    <line x1="1144" y1="242" x2="1144" y2="402" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#sarr)"/>
+    <text x="1152" y="330" font-size="10" fill="var(--muted)">write Silver Raw</text>
+
+    <text x="1144" y="456" font-size="10" text-anchor="middle" fill="var(--muted)">lineage: file → batch → bronze</text>
+    <text x="1144" y="469" font-size="10" text-anchor="middle" fill="var(--muted)">→ mapping vN → silver_raw</text>
+
+    <!-- legend -->
+    <polygon points="146,512 158,522 146,532 134,522" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.3"/>
+    <text x="168" y="526" font-size="10.5" fill="var(--muted)">approval gate — analyst decision required</text>
+    <line x1="430" y1="522" x2="470" y2="522" stroke="var(--ai)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#sarr-ai)"/>
+    <text x="480" y="526" font-size="10.5" fill="var(--muted)">AI proposal path (profiles + samples)</text>
+    <line x1="740" y1="522" x2="780" y2="522" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#sarr)"/>
+    <text x="790" y="526" font-size="10.5" fill="var(--muted)">deterministic data movement</text>
+  </svg>
+  </div>
+  <figcaption>Six stages, two gates. The AI never writes to the data plane — its dashed paths end at the analyst, whose approval releases the deterministic engine's solid paths into <span class="mono">landing</span>, <span class="mono">bronze</span> and <span class="mono">silver_raw</span>.</figcaption>
+</figure>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Stage</th><th>Who acts</th><th>What persists</th></tr></thead>
+  <tbody>
+    <tr><td>1 · Upload</td><td>Analyst → engine → AI</td><td>Original file (immutable) · upload record (checksum, size, uploader, status) · <strong>deterministic profile computed by code</strong> (columns, types, nulls, distincts, candidate keys, duplicates) · AI interpretation <em>over that profile</em> (domain, grain, PHI, quality observations) with confidence and evidence — never free-form LLM text as record.</td></tr>
+    <tr><td>2 · <span class="gatechip">G1</span> → Bronze</td><td>Analyst approves; engine executes</td><td>File landed to <span class="layerchip lc-landing">landing</span> · batch registered · <span class="layerchip lc-bronze">bronze</span> written 1:1 with technical metadata only — no semantic mapping at Bronze.</td></tr>
+    <tr><td>3 · Bronze intelligence</td><td>AI</td><td>Mapping proposal rows: source→target candidates, datatype conversions, confidence, evidence, explicit unknowns.</td></tr>
+    <tr><td>4 · Mapping</td><td>Analyst</td><td>Versioned mapping vN — field maps, type conversions, null/default handling, value maps. Approved versions are immutable; edits create v(N+1).</td></tr>
+    <tr><td>5 · Preview</td><td>Engine (deterministic)</td><td>Preview result set: source vs mapped values, transformation failures, invalid/null records, affected counts.</td></tr>
+    <tr><td>6 · <span class="gatechip">G2</span> → Silver</td><td>Analyst approves; engine executes</td><td><span class="layerchip lc-silver">silver_raw</span> rows + full lineage: source file → batch → bronze → mapping vN → silver_raw.</td></tr>
+  </tbody>
+</table></div>
+
+<h2><span class="no">03</span>Workflow state is first-class</h2>
+<p class="sect-note">Everything the flow produces is a persisted entity with an id, a version and an explicit state — nothing lives only in a response body, a log line or an LLM transcript. If a screen shows it or a gate approves it, it is one of these artifacts in the workflow store.</p>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Artifact</th><th>Identity</th><th>Lifecycle</th><th>Written by</th></tr></thead>
+  <tbody>
+    <tr><td>Upload</td><td><code>upload_id</code> + file fingerprint (<code>sha256-…</code>, unique)</td><td>received → profiled → interpreted → awaiting <span class="gatechip">G1</span> → approved | rejected</td><td>Control plane + workers</td></tr>
+    <tr><td>Deterministic profile</td><td><code>profile_id</code> = hash of the computed facts</td><td>Immutable — same file, same facts, same id</td><td>Profiler (code, no model)</td></tr>
+    <tr><td>AI interpretation</td><td>Versioned against one profile</td><td>draft → superseded</td><td>AI worker</td></tr>
+    <tr><td>Mapping proposal</td><td><code>proposal_id</code></td><td>proposed → folded into draft | dismissed</td><td>AI worker</td></tr>
+    <tr><td>Mapping version</td><td><code>(feed_id, vN)</code></td><td>draft → previewed → approved (immutable) → superseded by v(N+1)</td><td>Analyst edits</td></tr>
+    <tr><td>Preview result</td><td><code>(mapping vN, sample ref)</code></td><td>Immutable</td><td>Deterministic engine</td></tr>
+    <tr><td>Approval decision</td><td><code>(artifact, version, approver, decided_ts)</code></td><td>Append-only — decisions are never edited</td><td>Analyst at <span class="gatechip">G1</span> / <span class="gatechip">G2</span></td></tr>
+    <tr><td>Run / batch</td><td><code>batch_id</code></td><td>received → in_progress → completed | failed (must balance)</td><td>Deterministic engine</td></tr>
+    <tr><td>Lineage record</td><td>file → batch → bronze → mapping vN → silver_raw</td><td>Append-only</td><td>Deterministic engine</td></tr>
+  </tbody>
+</table></div>
+
+<h2><span class="no">04</span>The data plane is the contract</h2>
+<p class="sect-note">Compatibility with cinqcare is defined here and only here — and it is a <strong>logical</strong> contract: layers, identities, audit columns and batch semantics, declared engine-neutrally and verified against the existing implementation's schema definitions. Postgres is today's rendering of that declaration; Databricks (Delta tables + Volumes) renders the same declaration later. Compatibility means preserving these semantics, not reproducing PostgreSQL literally.</p>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Layer</th><th>Contract (PG rendering today)</th><th>Write rule</th><th>Read rule</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="layerchip lc-landing">landing</span></td>
+      <td><strong>File storage, not tables</strong> — a zone laid out <code>{domain}/{source_system}/{feed}/{folder}/{business_date}/{filename}</code> with folders <code>incoming · processed · rejected · archive · parked</code> (local FS now, object storage / Volumes later), plus a registry row per arrival in <code>control.input_registry</code>, which lives with workflow state — not in the warehouse.</td>
+      <td>Place once, then only move between folders. <code>UNIQUE(fingerprint)</code> on the registry (<code>sha256-…</code>) is the exactly-once / replay-refusal mechanism.</td>
+      <td>Replay + audit. Any batch can be reprocessed from its landed original.</td>
+    </tr>
+    <tr>
+      <td><span class="layerchip lc-bronze">bronze</span></td>
+      <td>One table per feed — e.g. <code>bronze.members_raw</code>: <code>bronze_id</code> · <code>feed_id</code> · <code>row_number</code> · <code>raw_row JSONB</code> + the audit columns; indexed on <code>batch_id</code>.</td>
+      <td>Append-only, enforced in the database (mutation-reject trigger + <code>REVOKE UPDATE, DELETE, TRUNCATE</code>). Source rows land 1:1, semantically untouched.</td>
+      <td>AI reads samples + column metadata; the engine reads full batches for Silver runs. Bronze is never rewritten on reprocess.</td>
+    </tr>
+    <tr>
+      <td><span class="layerchip lc-silver">silver_raw</span></td>
+      <td>Canonical table per domain — e.g. <code>silver_raw.members</code> with <code>UNIQUE(batch_id, feed_id, source_member_id)</code> + the audit columns.</td>
+      <td>Written only by an approved mapping version. Re-runs rebuild their own batch: Silver + quarantine rows for that <code>batch_id</code> are cleared and re-derived from Bronze.</td>
+      <td>Downstream cinqcare consumers — identity resolution, Silver ODS, reconciliation.</td>
+    </tr>
+  </tbody>
+</table></div>
+
+<div class="rules">
+  <div class="rule"><h3>Audit columns on every data row</h3><p><code>source_system</code> · <code>ingestion_ts</code> · <code>batch_id</code> · <code>record_hash</code> · <code>created_ts</code> · <code>updated_ts</code>. <code>record_hash</code> is content-derived, so a re-derived row after reprocess hashes the same.</p></div>
+  <div class="rule"><h3>One join key: batch_id</h3><p>A short hex id threads arrival, execution, failure and reconciliation across <code>control.batch_control</code>, <code>batch_stage_status</code>, <code>error_log</code>, <code>quarantine.quarantined_rows</code> and <code>recon.recon_history</code>.</p></div>
+  <div class="rule"><h3>The balance equation</h3><p>Per stage, <code>records_in = records_out + quarantined + attributed_drops</code> — recorded in <code>batch_stage_status</code>. A batch that doesn't balance is FAILED, not "mostly fine".</p></div>
+  <div class="rule"><h3>Split DSNs, no foreign keys</h3><p>Control/platform state and the medallion live on separate connections, and the data-plane tables carry no FK constraints — identities are UUIDs and hashes minted in code. Both properties are what make the plane portable to a warehouse.</p></div>
+</div>
+
+<h2><span class="no">05</span>Deliberately different this time</h2>
+<p class="sect-note">Decisions made against the first build's experience, stated so nobody re-litigates them mid-implementation.</p>
+
+<div class="rules">
+  <div class="rule"><h3>No chip architecture, no plug-play connectors</h3><p>The first build's port-pin registry, socket-ladder profiles, conformance modes and per-feed connector routes are not carried forward — under all of it, only two doors ever actually existed: an HTTP upload and a folder drop. The rebuild keeps exactly those as plain, explicit endpoints; SFTP or API pulls are added later as ordinary code, not plugins.</p></div>
+  <div class="rule"><h3>AI proposes, code disposes</h3><p>Deterministic code always runs first: profiling and statistics are computed, persisted facts. LangGraph reasons over those profiles plus small samples and writes structured proposals. It never moves bulk data, never writes to the data plane, and its output is never the system of record without analyst approval.</p></div>
+  <div class="rule"><h3>The API never ingests inline</h3><p>FastAPI handlers validate, persist state and enqueue. All profiling, landing, preview and promotion runs in workers, so a 2&nbsp;GB roster never blocks a request thread.</p></div>
+  <div class="rule"><h3>Approved means immutable</h3><p>Mapping versions are append-only. An approved vN is never edited in place; changes produce v(N+1) and re-enter the preview → approval loop.</p></div>
+  <div class="rule"><h3>Everything replays</h3><p>Originals are preserved in landing and Bronze writes are idempotent by batch, so any layer can be rebuilt from the layer above it — the recovery story is re-run, not restore.</p></div>
+  <div class="rule"><h3>The old code is not the spec</h3><p>Only the data plane's read/write contract is inherited. The control plane, flow and UI are ideated fresh from the requirement set, not ported.</p></div>
+</div>
+
+<h2><span class="no">06</span>Build order</h2>
+<p class="sect-note">Six thin vertical stages, each shippable and testable before the next begins — matching the staged implementation prompts.</p>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Stage</th><th>Delivers</th><th>Proves</th></tr></thead>
+  <tbody>
+    <tr><td>Stage 1</td><td>Upload + persisted upload record + AI profiling, surfaced in the workspace.</td><td>The queue/worker spine and the AI-proposes/structured-persist pattern.</td></tr>
+    <tr><td>Stage 2</td><td>G1 approval → landing + Bronze write with batch metadata.</td><td>The data-plane port speaks cinqcare's conventions; idempotent batches.</td></tr>
+    <tr><td>Stage 3</td><td>Bronze intelligence → persisted mapping proposal.</td><td>AI can ground proposals in canonical targets with confidence + evidence.</td></tr>
+    <tr><td>Stage 4</td><td>Versioned, editable mapping store + studio UI.</td><td>Immutable approvals; edit-creates-new-version.</td></tr>
+    <tr><td>Stage 5</td><td>Deterministic preview on sample data.</td><td>Mapping execution is code, inspectable before it touches Silver.</td></tr>
+    <tr><td>Stage 6</td><td>G2 approval → Silver Raw + end-to-end lineage.</td><td>The full slice: one real roster file from upload to silver_raw, auditable.</td></tr>
+  </tbody>
+</table></div>
+
+<footer>CINQFLOW rebuild · architecture blueprint · 2026-09-02 · data-plane contract in §04 verified against the cinqcare implementation's schema definitions and treated as a logical contract, engine-neutral; everything above the data-plane port is a fresh design.</footer>
+
+</div>
+</html>

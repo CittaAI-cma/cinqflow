@@ -1,0 +1,27 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cinqflow / requirements/databricks.txt          RUNG 2 AND ABOVE ONLY
+#
+# NEVER installed in the rung 0.5 / rung 1 image. That is deliberate: if the
+# package is not in the environment, core/ cannot import it even by accident.
+# The lint catches intent; absence catches the accident.
+#
+# Installed by exactly two jobs:
+#   • the nightly `conformance-databricks-free` CI job (rung 2, from Wave 0)
+#   • the client DEV/PROD images (rungs 3–4)
+# ─────────────────────────────────────────────────────────────────────────────
+
+-r base.txt
+
+databricks-sdk>=0.133              # compute_job pin (Jobs API), catalog pin (Unity Catalog)
+databricks-sql-connector>=4.4,<5.0     # sql_query pin (Serverless SQL Warehouse); returns Arrow,
+                                  # which is why the cross-engine golden comparison is a
+                                  # table-to-table diff and not a serialisation argument
+
+# ── OPTIONAL: local Spark + Delta, rung 1 format-fidelity spikes only ────────
+# Deliberately NOT default. It puts a JVM in the twin and still does not remove
+# the need for cross-engine goldens — Databricks Free (rung 2) does that job
+# nightly, at zero cost, on the real engine. Uncomment only for a specific
+# format-fidelity investigation, and never as a substitute for rung 2.
+#
+# pyspark>=3.5,<4.0
+# delta-spark>=3.2

@@ -1,0 +1,214 @@
+version: 1
+updated: "2026-09-03"
+kind: organization_registry
+
+# Who CINQCARE is, who its payers are, and what each contract is worth in lives and risk.
+# This is the context that makes a row count meaningful: a roster of 28,333 members is only
+# "right" against the contract it serves.
+#
+# GROUNDED IN (client corpus):
+#   docs/05_business_logic_and_domain_rules/CINQCARE_VBC_Contract_MindMap.html  (lives, risk type, wave)
+#   docs/01_requirements_and_objectives/Team_by_Payors_and_functionalities.xlsx (priority, owners)
+#   docs/07_client_technical_and_infra_design/Technical_Architecture_Document_CinqCare_v2.docx (source inventory)
+# GROUNDED IN (public, accessed 2026-09-03; see `citation` per fact):
+#   CMS REACH ACO participant file PY2024, CMS ACO REACH Financial & Quality Results PUF PY2024,
+#   NPPES NPI Registry, cinq.care, PR Newswire.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/CINQCARE_VBC_Contract_MindMap.html"
+  - "docs/01_requirements_and_objectives/Team_by_Payors_and_functionalities.xlsx"
+  - "docs/07_client_technical_and_infra_design/Technical_Architecture_Document_CinqCare_v2.docx"
+  - "https://data.cms.gov/sites/default/files/2024-02/29fcff38-b487-47c8-85db-850f0935053f/ACO_REACH_Dataset_01_18_2024.csv"
+  - "https://npiregistry.cms.hhs.gov/api/ (organization_name=CINQ*)"
+
+tenant:
+  name: CINQCARE
+  tagline: "Care, Where You Live"
+  confidence: authoritative
+  founder_ceo: "Tony (Anthony) Welters, Founder and CEO"
+  headquarters: "Washington, DC (2300 N Street NW, Suite 200, Washington DC 20037)"
+  founded: "2021 (Valeas Capital minority investment December 2021; the company's own about page says 2022 - treat the exact year as unresolved)"
+  model: >
+    Physician-led, value-based, in-home and community-based care for underserved
+    Black and Brown communities. Patients are called "Family Members". Service lines:
+    Grace at Home (in-home, virtual and community care incl. Active Aging and dementia),
+    Care Medical Practice (in-person primary care), CINQCARE for Moms (maternal care through
+    18 months postpartum), CINQCARE Health Home (NYS-designated Health Home, Buffalo).
+  regions: [Northeast, Central, Southern, Mid-Atlantic]
+  states_operating: [NY, GA, IL, MD, DC, MI, NJ, TN, CA, VA]
+  legal_entities:
+    - { name: "CINQCARE ACO REACH LLC", role: "ACO REACH entity D0284" }
+    - { name: "CINQ-NY-IPA LLC", npi: "1851049134", state: NY }
+    - { name: "CINQ-NY HEALTH HOME IPA, LLC", npi: "1679236756", state: NY, note: "NYS-designated Health Home, Buffalo" }
+    - { name: "CINQCARE-GA IPA LLC", npi: "1669153177", state: GA }
+    - { name: "CINQCARE IL IPA LLC", npi: "1588494553", state: IL }
+    - { name: "CINQCARE AT HOME PC", npi: "1235736067" }
+    - { name: "CINQCARE AT HOME PLLC", npi: "1578302584", state: IL }
+    - { name: "CINQCARE AT HOME TX PLLC", npi: "1457224032", note: "enumerated 2025-09-29; TX operations unverified" }
+  affiliates:
+    - { name: "G-Health Enterprises / GBUAHN / Urban Family Practice (Buffalo)", note: "acquired December 2021; GBUAHN is a NYS Health Home" }
+    - { name: "Cherokee Health Systems (TN FQHC)", note: "ACO REACH partner announced 2024-08-14" }
+  total_attributed_lives: "~151,400 across 10 contract rows, tracked operationally as 12 populations"
+
+# One row per contracted population. `lives` and `wave` are the client's own figures and are
+# volatile; re-read the mind map and the priority tracker before quoting them.
+contracts:
+  - id: fidelis_ny
+    payer: "Fidelis Care (New York)"
+    payer_parent: "Centene Corporation (acquired Fidelis assets 2018-07-01)"
+    populations: [CINQUpstate, CINQDownstate]
+    lines_of_business: ["Medicaid Managed Care", "Essential Plan", "HARP", "Child Health Plus"]
+    risk_arrangement: "Full Risk"
+    lives: 64201
+    wave: "Wave 1 - LIVE"
+    priority: 1
+    owners: { analyst: Karthik, engineer: "Khaja/Vinay", uat: "Jonathan/David" }
+    feeds: ["member roster (upstate, downstate)", "claims - 26 file patterns", "Fidelis UM ADT"]
+    partnership_public: false
+    note: "The public record does not name a CINQCARE-Fidelis agreement; the contract is known from the client corpus only."
+
+  - id: cms_aco_reach_d0284
+    payer: "CMS (Center for Medicare and Medicaid Innovation)"
+    programme: "ACO REACH"
+    aco_id: D0284
+    legal_name: "CINQCARE ACO REACH LLC"
+    aco_type: "Standard ACO"
+    risk_arrangement: "Global (100% shared savings and losses)"
+    payment_mechanism: "Primary Care Capitation with the Advanced Payment Option; Enhanced PCC elected at 7%"
+    alignment: "Prospective Plus Alignment (claims-based plus voluntary, refreshed quarterly)"
+    first_performance_year: 2023
+    service_areas_py2024: [CA, DC, GA, IL, MD, MI, NJ, NY, TN, VA]
+    lives: 6973
+    lives_public_py2024: 10607
+    lives_note: "The client tracker says 6,973; the CMS PY2024 results PUF reports BENE_CNT 10,607. Different vintages and definitions - do not reconcile silently."
+    wave: "Wave 1 - LIVE"
+    priority: 2
+    owners: { analyst: Karthik, engineer: "Khaja/Vinay", uat: Christine, claims_cclf: Syed, claims_bcda: "Ashwin/Saanie" }
+    feeds: ["D0284 alignment roster", "CMS CCLF flat files", "CMS BCDA FHIR EOBs", "reference reports MEXPR, PALMR, RAP"]
+    py2024_results:
+      final_benchmark: 150054231.40
+      total_cost_of_care: 150474686.20
+      gross_savings: 5417367.66
+      norm_risk_score: 1.17563887
+      quality_score: 0.52
+      citation: "CMS ACO REACH Financial and Quality Results PUF PY2024"
+    model_end: "2026-12-31 - ACO REACH ends after PY2026; benchmark, attribution and feeds all discontinue"
+    volatile: true
+    review_by: "2027-01-31"
+
+  - id: cms_mssp
+    payer: "CMS"
+    programme: "Medicare Shared Savings Program"
+    risk_arrangement: "Shared Savings"
+    lives: 5363
+    wave: "Wave 1 - LIVE"
+    priority: 3
+    owners: { analyst: Raveena, engineer: Khaja, claims_cclf: Syed, claims_bcda: Saanie }
+    feeds: ["ALR assignment list", "CMS CCLF", "CMS BCDA"]
+    aco_id: "not found in the CMS PY2025 MSSP organizations file"
+    note: "No CINQ-named ACO appears in the public PY2025 MSSP list. The client corpus carries an MSSP seed mapping (cms_mssp.mssp._roster_alignment), so participation may be through an affiliate or a later year. Treat the ACO id as unknown."
+
+  - id: optum_ny
+    payer: "Optum / UnitedHealthcare (New York)"
+    populations: ["CINQCare_Elig"]
+    lines_of_business: ["Medicare Advantage", "D-SNP (dual eligible)"]
+    risk_arrangement: "Full Risk"
+    lives: 6939
+    wave: "Wave 2 - seq 5"
+    priority: 4
+    owners: { analyst: Karthik, engineer: Vinay, uat: "David and Jonathan", claims_analyst: Ashwin }
+    feeds: ["eligibility spans (manual)", "claims", "Optum UM ADT"]
+
+  - id: uhc_md
+    payer: "UnitedHealthcare (Maryland, plus West Virginia operationally)"
+    risk_arrangement: "Full Risk - new contract"
+    lives: 14000
+    wave: "Wave 2 - seq 4"
+    priority: 5
+    owners: { analyst: Raveena, engineer: Khaja, uat: Nick }
+    feeds: [enrollment, claims]
+    sample_available: false
+
+  - id: centene_il
+    payer: "Centene Illinois (Meridian / Wellcare of Illinois)"
+    populations: ["Member_Roster_Preview_IL0201633"]
+    lines_of_business: ["Medicaid", "Medicaid Expansion", "SSI Non-Dual", "SSI Kids"]
+    risk_arrangement: "Full Risk"
+    lives: 25779
+    wave: "Wave 2 (August 2026) - seq 6"
+    priority: 7
+    owners: { analyst: Raveena, engineer: Khaja, uat: "David and Jonathan", claims_analyst: Syed }
+    feeds: ["member roster preview", "4 claim types"]
+
+  - id: centene_ga
+    payer: "Centene Georgia (Peach State Health Plan / Wellcare of Georgia)"
+    populations: ["Medicaid MWOV", "Medicare MWOV"]
+    lines_of_business: ["Medicaid (Georgia Families)", "Medicare Advantage"]
+    risk_arrangement: "MSO with partial risk - approximately 300 lives at risk, the rest MSO"
+    lives: 15423
+    wave: "Wave 3 (September 2026)"
+    priority: 9
+    owners: { analyst: Raveena, engineer: Khaja, uat: TBD, claims_analyst: Syed }
+    feeds: ["Medicaid roster", "Medicare roster", "AES risk file"]
+
+  - id: molina_ny
+    payer: "Molina Healthcare of New York"
+    populations: ["NYCINQ Down HARP", "NYCINQ Down MEDICAID", "NYCINQ Up MEDICAID", "NYCINQUpstate HARP"]
+    lines_of_business: ["Medicaid Managed Care", "HARP"]
+    risk_arrangement: "Gain Share"
+    lives: 6463
+    wave: "Wave 3 - last"
+    priority: 11
+    owners: { analyst: Raveena, engineer: Khaja, uat: TBD, claims_analyst: Ashwin }
+    feeds: ["member enrollment history", "claims"]
+
+  - id: optum_ga
+    payer: "Optum (UnitedHealthcare) - HouseCalls, Georgia"
+    populations: ["CINQ_HouseCalls_GA"]
+    lines_of_business: ["Medicare Advantage", "D-SNP"]
+    risk_arrangement: "Engagement only"
+    lives: 3747
+    wave: "Wave 3"
+    priority: 8
+    owners: { analyst: Karthik, engineer: Vinay, uat: Ana }
+    feeds: ["HouseCalls engagement roster"]
+    note: "HouseCalls is Optum's annual in-home clinical assessment programme. The roster is an outreach worklist, not a payer eligibility file, so eligibility and PCP rules do not apply the same way."
+
+  - id: wellpoint_dc
+    payer: "Wellpoint (District of Columbia)"
+    risk_arrangement: "Engagement only"
+    lives: 2553
+    wave: "Wave 3"
+    priority: 10
+    owners: { analyst: Karthik, engineer: Khaja, uat: Ana }
+    feeds: [enrollment]
+    sample_available: false
+
+  - id: humana_ny
+    payer: "Humana (New York)"
+    risk_arrangement: "In-home care services agreement"
+    announced: "2023-11-30"
+    note: "Publicly announced partnership for Humana Medicare Advantage members statewide in NY. Not present in the client's contract tracker or feed inventory; recorded because it is the only payer relationship CINQCARE has announced publicly."
+    confidence: authoritative
+    feeds: []
+
+# Cross-cutting feeds that are not tied to one contract.
+cross_cutting:
+  adt:
+    description: "ADT flows across every population and is the only feed fast enough to drive care-management intervention."
+    sources:
+      hl7_hie_via_mirth: [BronxRHIO, HiBridge, HealthIX, HealtheLink, HealtheConnections, "PCC National", "PCC IL"]
+      api: [ParticleHealth]
+      flat_file: ["Garage daily ADT", "Fidelis UM", "Optum UM"]
+  enhanced_roster:
+    vendor: Clinigence
+    populations: ["Fidelis NY", "Molina NY", "Optum NY", "Centene IL"]
+  practice_systems:
+    - { name: "MEDENT (CMP_1598, CAH_152)", description: "Practice-management / EHR patient demographics exports from CINQ-affiliated practices; multi-payer, used for identity crosswalk and attribution." }
+    - { name: "Athena", description: "Named in the technical architecture enrolment source list; no sample in the corpus." }
+
+risk_arrangement_semantics:
+  Full Risk: "CINQCARE bears the total cost of care against a benchmark. A missing member changes the denominator of the metric that determines settlement."
+  Shared Savings: "Upside only or two-sided against a CMS benchmark (MSSP BASIC/ENHANCED tracks)."
+  Gain Share: "Upside participation in savings, typically without downside."
+  MSO with partial risk: "Management services with a small at-risk subset; most lives are administrative."
+  Engagement only: "Outreach and assessment; no financial risk. Eligibility and attribution rules are weaker by design."

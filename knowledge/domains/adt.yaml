@@ -1,0 +1,78 @@
+version: 1
+updated: "2026-09-03"
+kind: domain_knowledge
+domain: adt
+
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/02_source_landscape.yaml"
+  - "docs/03_data_source_schemas/adt/"
+  - "docs/05_business_logic_and_domain_rules/ADT_Data_Model_Open_Items.docx"
+
+what_it_answers: >
+  Who is in hospital right now, who just left, and who needs follow-up. ADT is the only feed
+  fast enough to drive care-management intervention, which makes latency part of its value and
+  a late ADT message a clinical problem rather than a data problem.
+
+event_model:
+  principle: "ADT is event-sourced. The correct Bronze and Silver Raw model is an append-only event log; stay construction is a downstream activity with explicit rules for unmatched events."
+  hl7_events:
+    A01: "Admit / visit notification"
+    A02: "Transfer (Phase 2 at CINQCARE - Mirth does not capture it yet)"
+    A03: "Discharge / end visit"
+    A04: "Register a patient, typically ED or outpatient"
+    A05: "Pre-admit"
+    A06: "Change an outpatient to an inpatient"
+    A07: "Change an inpatient to an outpatient"
+    A08: "Update patient information"
+    A11: "Cancel admit (cancels A01 or A04)"
+    A12: "Cancel transfer"
+    A13: "Cancel discharge"
+  patient_class:
+    I: Inpatient
+    E: Emergency
+    O: Outpatient
+    V: Observation
+    R: Recurring
+    note: "HL7 table 0004 also defines B obstetrics, C commercial account, N not applicable, P preadmit, U unknown."
+
+pathologies_to_assume:
+  - "Duplicate messages for the same event arriving by different routes with different message control ids. Deduplicate on facility plus patient plus event type plus event datetime within a tolerance window, and the window is a governed constant."
+  - "A08 updates arriving after A03 that change the discharge disposition."
+  - "Cancellations that must reverse a prior event rather than append."
+  - "Missing discharge messages, leaving stays open forever. Fidelis UM never sends a discharge at all - the member simply drops off the next file."
+  - "Facility identifiers that are local codes rather than NPIs or CCNs."
+  - "Patient identifiers that are facility MRNs with no payer identifier attached."
+
+source_variation:
+  principle: "Nine sources land in one table, and almost every field is extracted differently per source. The variation is documented per column and must never be assumed away."
+  examples:
+    - "The CINQ member id sits in PID-3 under assigning authority CINQ for most sources, CINQCARE for HealtheLINK, PID-4 for Healthix, and comes from a lookup for ParticleHealth."
+    - "Facility name is PV1-3.4 for the RHIO feeds, MSH-4.1 for HeC and HealtheLINK, and PV1-3.1 for the PCC feeds."
+    - "Message date is Mirth's received time everywhere except HeC, which uses MSH-7."
+    - "Admit and discharge datetimes arrive without separators and in four different lengths (8, 12, 14, 17), so the parse format is dispatched on string length."
+    - "BronxRhio spells the discharge disposition JSON key Discharge_Diposition."
+    - "ParticleHealth is not HL7 at all: it is a JSON Transitions API where the event type is derived from setting, status and the presence of a discharge date."
+    - "Attending NPI is absent from four of the eight HL7 sources, and PCP NPI is absent from every one of them - only the Optum and Fidelis payer files carry it."
+
+stay_construction:
+  principle: "Pairing admits to discharges is a Silver ODS activity, not a Silver Raw one."
+  grouping_key: "encounter_group_id = member id plus visit number, or member id plus admission date when the visit number is absent."
+  current_view: "silver_ods.encounter_current filters to the latest non-duplicate event per group; downstream consumers read the view, never the event table."
+  quality_flags: [is_duplicate, has_conflict, conflict_detail, sequence_valid, is_current]
+
+analysis_semantics:
+  - "ADT-derived and claims-derived utilisation will never agree, and both are correct. Never report them side by side without labelling the source: ADT captures events that never generate a claim in your data."
+  - "Discharge disposition drives readmission exclusions, so nulls in that field distort the readmission rate in both directions."
+  - "A readmission may occur at a facility outside your network visibility, so an organisation with partial visibility systematically undercounts."
+  - "Care-management workflow fields (PHN contact, MD visit, medication reconciliation, transition of care, DME, SDOH) come from the CINQ application, not from any ADT source. They belong to the encounter extension, not the event."
+
+failure_modes:
+  - id: unpaired_stays
+    description: "Admissions never closed because the discharge message did not arrive or arrived from a source that does not send them."
+    detection: "Age open stays and alert past a governed window; Fidelis UM is a known exception."
+  - id: silent_duplicate_inflation
+    description: "The same clinical event from two routes counted twice inflates admits per 1,000."
+    detection: "Duplicate flags at ODS with a collapse count; a change in the collapse rate is a leading indicator of a source-side change."
+  - id: out_of_order_events
+    description: "A discharge arriving before its admission."
+    detection: "sequence_valid flag; quarantine rather than correct."

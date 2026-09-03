@@ -1,0 +1,275 @@
+file: 01_domain_ontology.yaml
+purpose: "Shared vocabulary. If the agent misunderstands one of these, every downstream inference is wrong."
+
+nodes:
+
+  - id: KB-ONT-001
+    title: "What is value-based healthcare actually measuring?"
+    kind: concept
+    layer: cross
+    domain_tags: [foundational]
+    confidence: conventional
+    volatile: false
+    body: >
+      VBHC pays for outcomes and total cost of care rather than service volume. Every VBHC
+      analytics question reduces to four quantities measured over an attributed population for a
+      defined period: who was mine (attribution), how sick were they (risk), what did they cost
+      (total cost of care), and did they get good care (quality). Contract settlement is a
+      comparison of actual cost against a risk-adjusted benchmark, gated by quality performance.
+      This is why a data analyst in VBHC is unusually paranoid about denominators: in
+      fee-for-service a missing claim costs you one row, in VBHC a missing member changes the
+      denominator of the metric that determines shared savings.
+    depends_on: []
+
+  - id: KB-ONT-002
+    title: "Core entities and their grain"
+    kind: concept
+    layer: cross
+    domain_tags: [foundational, modelling]
+    confidence: conventional
+    volatile: false
+    body: |
+      The canonical entity set and the grain each is stored at. Grain confusion is the single
+      largest source of wrong numbers in this domain.
+        member / beneficiary   -> one row per person per source system per identifier era
+        enrollment / coverage  -> one row per person per plan per contiguous span (start, end)
+        attribution            -> one row per person per program per performance year per period
+        claim header           -> one row per adjudicated claim (billing event)
+        claim line             -> one row per service line within a claim
+        encounter              -> one row per clinical episode of care (may span many claims)
+        provider               -> individual (NPI type 1) vs organisation (NPI type 2)
+        provider affiliation   -> one row per provider per TIN per effective span
+        member month           -> one row per member per calendar month of eligible coverage
+        gap / measure event    -> one row per member per measure per measurement period
+      A claim is a billing artifact, not a clinical fact. An encounter is a clinical fact, not a
+      payment. Analysts who conflate them produce utilisation rates that no clinician recognises.
+    depends_on: []
+
+  - id: KB-ONT-003
+    title: "Attribution: the denominator that decides everything"
+    kind: concept
+    layer: cross
+    domain_tags: [attribution, foundational]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Attribution assigns a patient to a provider or entity accountable for their cost and
+      quality. Methods differ by program and the difference is material. Prospective attribution
+      names the population before the year starts (predictable, but you manage people who may
+      leave). Retrospective attribution assigns after the fact based on where care was actually
+      delivered (accurate, but you spent the year managing the wrong list). Plurality
+      attribution assigns based on the greatest share of qualifying primary care services,
+      usually by allowed amount or visit count, with a specialist fallback tier. Voluntary
+      alignment lets the beneficiary designate a practitioner and typically overrides claims
+      logic. Critical analyst rule: attribution lists are versioned and restated quarterly. Any
+      metric computed against "current attribution" is not comparable to the same metric computed
+      last quarter unless you pin the attribution version. Always store attribution as an
+      effective-dated fact, never as a column on the member.
+    depends_on: [KB-ONT-002]
+
+  - id: KB-ONT-004
+    title: "Risk adjustment and RAF"
+    kind: concept
+    layer: cross
+    domain_tags: [risk_adjustment]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Risk adjustment converts a population's documented clinical complexity into a relative cost
+      expectation. Diagnoses from qualifying encounters map to Hierarchical Condition Categories
+      (HCCs); HCC coefficients plus demographic factors sum to a Risk Adjustment Factor (RAF),
+      normalised so 1.0 is an average beneficiary. Two structural properties matter for pipeline
+      design. First, hierarchies mean only the most severe condition in a family scores, so
+      naive counting of diagnosis codes overstates risk. Second, most models reset annually:
+      a chronic condition documented last year earns nothing this year unless it is documented
+      again in the current collection period. That reset is why "suspecting" and gap-closure
+      analytics exist, and why the analyst must always know which dates of service fall in the
+      current sweep. Diagnoses must come from acceptable sources (face-to-face qualifying
+      encounters); pipeline logic that pulls diagnoses from any claim type will inflate RAF and
+      create audit exposure.
+    depends_on: [KB-ONT-002]
+
+  - id: KB-ONT-005
+    title: "Regulatory anchor: CMS-HCC model version in force"
+    kind: concept
+    layer: cross
+    domain_tags: [risk_adjustment, regulatory]
+    confidence: authoritative
+    volatile: true
+    review_by: "2027-04-30"
+    body: >
+      Payment year 2026 is the first year Medicare Advantage risk scores run entirely on
+      CMS-HCC V28; the three-year V24/V28 blend (33% V28 in 2024, 67% in 2025) is complete and
+      V24 is retired for payment. V28 carries 115 payment HCC categories against V24's 86, is
+      built natively on ICD-10 rather than an ICD-9 legacy crosswalk, cuts roughly 2,000 net
+      diagnosis codes from the risk-adjustable set, and adds constraining, where related HCCs
+      share a coefficient. Pipeline consequences: any HCC mapping table, RAF calculation, or
+      suspecting model still referencing V24 categories produces wrong revenue projections;
+      HCC numbering is not stable across versions, so a stored HCC number without a model version
+      is meaningless; and historical trend of RAF across 2023-2026 is not like-for-like without
+      restating under a single model version. CMS has proposed further V28 recalibration in the
+      CY2027 Advance Notice, so treat coefficient sets as annually versioned reference data, never
+      as constants in code.
+    depends_on: [KB-ONT-004]
+
+  - id: KB-ONT-006
+    title: "Regulatory anchor: Medicare accountable care programme landscape"
+    kind: concept
+    layer: cross
+    domain_tags: [programs, regulatory, attribution]
+    confidence: authoritative
+    volatile: true
+    review_by: "2027-03-31"
+    body: >
+      The Medicare Shared Savings Program (MSSP) is the permanent, statutory ACO programme.
+      ACO REACH, the CMMI capitated model, ends December 31, 2026 and does not automatically
+      continue. Its intended successor is the Long-term Enhanced ACO Design (LEAD) Model, a
+      ten-year CMMI model beginning in 2027 with TIN-based participation like MSSP, a reformulated
+      benchmark methodology, and CMS-Administered Risk Arrangements for specialists; the first
+      application window closed May 17, 2026 with further cohorts expected. Analyst consequence:
+      any data platform serving a REACH participant faces a hard 2026 year-end discontinuity in
+      benchmark methodology, attribution rules, and data feeds. Do not model programme rules as
+      immutable dimensions. Programme, performance year, and rule version belong together as a
+      composite key on every financial and attribution fact, so PY2026 REACH results and PY2027
+      LEAD or MSSP results can coexist without silently blending.
+    depends_on: [KB-ONT-003]
+
+  - id: KB-ONT-007
+    title: "Quality measurement: HEDIS, Stars, and the digital transition"
+    kind: concept
+    layer: cross
+    domain_tags: [quality, regulatory]
+    confidence: authoritative
+    volatile: true
+    review_by: "2027-06-30"
+    body: >
+      Quality gates payout in nearly every VBC contract. HEDIS (NCQA) supplies most measure logic;
+      CMS Star Ratings aggregate measures into a plan-level rating driving MA revenue. For
+      Measurement Year 2026 NCQA restructured the technical specifications to align with the FHIR
+      measure resource: "eligible population" is now initial population, "measurement year" is now
+      measurement period, and "required exclusions" are denominator exclusions. MY2026 adds seven
+      measures, retires two, and moves four more into ECDS reporting; source-system-of-record
+      reporting is no longer required for ECDS. The Hybrid (chart-chase) method is on a published
+      path to removal by MY2029. Pipeline consequences: measure logic must be treated as versioned
+      by measurement period, value sets must be pulled from the authoritative terminology release
+      for that period rather than hand-maintained, and supplemental clinical data pipelines
+      (EHR, HIE, registry) shift from optional enrichment to the primary compliance path as
+      measures go ECDS-only.
+    depends_on: []
+
+  - id: KB-ONT-008
+    title: "Code systems an analyst must not confuse"
+    kind: concept
+    layer: cross
+    domain_tags: [terminology, foundational]
+    confidence: authoritative
+    volatile: false
+    body: |
+      ICD-10-CM    diagnoses. Drives risk adjustment and measure denominators. Decimal placement
+                   varies by source; store the code both raw and normalised (no decimal).
+      ICD-10-PCS   inpatient procedures only. Not used on professional claims.
+      CPT / HCPCS  professional and outpatient procedures, plus HCPCS Level II for supplies,
+                   drugs, and many care-management services.
+      DRG          inpatient payment grouping. MS-DRG for Medicare; APR-DRG common in Medicaid.
+      Revenue code institutional billing category (UB-04). Essential for identifying ED, ICU,
+                   observation, and SNF stays; the claim type alone will not tell you.
+      NDC          drug product at package level. Eleven digits, but sources ship 10-digit
+                   formats with different segment padding. Normalise on ingest.
+      LOINC        lab and clinical observations, including screening instruments. Central to
+                   ECDS quality reporting.
+      SNOMED CT    clinical findings in EHR/FHIR data. Requires mapping to ICD-10 for claims-based
+                   logic; the mapping is lossy and must be governed, not improvised.
+      Place of service / bill type / claim type together determine care setting. Setting is
+      inferred, never given, and the inference rule is a governed artifact.
+    depends_on: []
+
+  - id: KB-ONT-009
+    title: "Identifier taxonomy and its instability"
+    kind: concept
+    layer: cross
+    domain_tags: [identity, foundational]
+    confidence: authoritative
+    volatile: false
+    body: |
+      MBI    Medicare Beneficiary Identifier. Replaced the SSN-based HICN. Can be reissued
+             (fraud, compromise, beneficiary request), so a person may have several MBIs over
+             time and historical files carry the old one. Never a stable primary key.
+      HICN   legacy Medicare identifier. Still appears in historical extracts.
+      NPI    provider identifier. Type 1 individual, Type 2 organisation. Does not change with
+             employment, so NPI alone does not tell you where a provider practised on a date.
+      TIN    tax identification number. The unit of participation in MSSP and LEAD. The
+             provider-TIN relationship is effective-dated and changes constantly.
+      CCN    CMS Certification Number for facilities.
+      Member ID / Subscriber ID  payer-assigned; changes on plan change, group change, and
+             sometimes on renewal. Subscriber vs dependent distinction matters for family logic.
+      The operative rule: every external identifier is a versioned attribute of a person or
+      organisation, never the identity itself. The platform mints its own immutable surrogate
+      keys in the Identity layer and everything downstream joins on those.
+    depends_on: [KB-ONT-002]
+
+  - id: KB-ONT-010
+    title: "Financial vocabulary: the terms that get silently redefined"
+    kind: concept
+    layer: cross
+    domain_tags: [finance, metrics]
+    confidence: conventional
+    volatile: false
+    body: |
+      Billed / charged     provider's list price. Analytically almost meaningless; never trend it.
+      Allowed amount       contractually permitted amount. The correct basis for cost analytics.
+      Paid amount          what the payer actually paid. Allowed minus member cost share, minus
+                           coordination of benefits. Use for plan liability, not for cost of care.
+      Member cost share    deductible + copay + coinsurance. Allowed = paid + cost share.
+      TCOC                 total cost of care: all allowed amounts for an attributed population
+                           over a period, usually normalised per member per month.
+      PMPM                 dollars divided by member months, not by members. See KB-MET-002.
+      Benchmark            the risk-adjusted expected spend the contract compares actual against.
+      IBNR                 incurred but not reported: care delivered but not yet in your claims.
+                           Every recent period is understated until claims complete.
+      MLR                  medical loss ratio: medical spend over premium revenue.
+      Capitation / PMPM payment  fixed prepayment; produces encounters, not paid claims, so
+                           cost analytics on capitated services requires shadow pricing.
+      The most common analytical error in the domain is trending paid amounts across a period in
+      which benefit design changed, which moves cost share and therefore paid without any change
+      in underlying cost of care.
+    depends_on: []
+
+  - id: KB-ONT-011
+    title: "Claims lag and completeness"
+    kind: concept
+    layer: cross
+    domain_tags: [claims, finance, foundational]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Claims arrive over months, not days. Professional claims complete faster than institutional;
+      inpatient and SNF are the slowest; behavioural health and out-of-network are slower still.
+      Consequence: the most recent three to six months of any cost or utilisation metric are
+      understated, and the understatement decays in a predictable curve. Analysts handle this in
+      one of three ways and must declare which: report on a closed period only (paid-through
+      date at least N months after service), apply completion factors to estimate the mature
+      value, or report incurred-and-paid consistently and label it as such. The failure mode the
+      agent must detect: a dashboard showing cost "declining" in recent months when it is only
+      immature. Every cost fact must carry both a date of service and a paid-through / run-out
+      date, and no cost metric may be served without the paid-through date attached.
+    depends_on: [KB-ONT-010]
+
+  - id: KB-ONT-012
+    title: "The analyst / data engineer boundary this platform is dissolving"
+    kind: concept
+    layer: cross
+    domain_tags: [foundational, agent_design]
+    confidence: conventional
+    volatile: false
+    body: >
+      The traditional split: engineers own movement, schema, and reliability; analysts own
+      meaning, measure logic, and interpretation. The friction is that almost every real defect
+      lives on the boundary. An engineer sees a nullable column populate at 4%; only an analyst
+      knows that column is a discharge disposition and that 4% nulls silently drops readmissions.
+      An analyst sees admits/1000 jump; only an engineer knows a new facility feed onboarded last
+      Tuesday. The agent's job is to hold both contexts simultaneously: attach clinical and
+      financial meaning to every structural change, and attach structural provenance to every
+      metric movement. Practically, that means every pipeline event the agent emits must answer
+      "what does this do to a number someone reports?" and every metric anomaly must be tested
+      against the pipeline change log before a clinical explanation is offered.
+    depends_on: []

@@ -1,0 +1,17 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: optum_ga
+organization:
+  payer: "Optum, part of UnitedHealth Group"
+  programme: "HouseCalls, an annual in-home or virtual clinical preventive assessment for Medicare Advantage members, delivered by advanced practice clinicians"
+  what_the_visit_is: "A roughly hour-long head-to-toe assessment covering medication reconciliation, screenings, social needs and a personalised plan. Its commercial purpose is closing Star and risk-adjustment gaps."
+contract: { id: optum_ga, risk_arrangement: "Engagement only", lives: 3747, wave: "Wave 3", priority: 8 }
+ownership: { analyst: Karthik, engineer: Vinay, business_uat: Ana }
+silver_raw_source_system: Optum
+semantics:
+  what_it_is: "An outreach worklist, not a payer eligibility file. Each row is a member to be contacted and the state of that contact."
+  consequence: >
+    Rules written for a risk-bearing eligibility roster do not apply. There is no financial risk,
+    the PCP is usually absent, and the columns that matter operationally (call status, substatus,
+    appointment slot, visit type) have no home in the enrollment canonical model.

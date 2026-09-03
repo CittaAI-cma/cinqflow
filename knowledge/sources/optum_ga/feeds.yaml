@@ -1,0 +1,6 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: optum_ga
+feeds:
+  - { feed: housecalls_roster, domain: enrollments, status: registered, contract_file: "sources/optum_ga__housecalls_roster.yaml", grain: "one row per member on the outreach list", cadence: monthly, delivery: manual_upload, columns: 30, natural_key: [Member_Client_ID] }

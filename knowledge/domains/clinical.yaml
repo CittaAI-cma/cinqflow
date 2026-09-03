@@ -1,0 +1,49 @@
+version: 1
+updated: "2026-09-03"
+kind: domain_knowledge
+domain: clinical
+
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/02_source_landscape.yaml"
+  - "docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx"
+
+status_at_cinqcare: >
+  There is no dedicated clinical or EHR feed in the Phase 1 scope, which is deliberately limited
+  to ADT, claims and eligibility rosters. Clinical content reaches the platform in three thin
+  forms: diagnosis lists carried on ADT messages, a practice-management demographics export
+  (CMP_1598), and the care-management fields the CINQ application writes against an encounter.
+  This file records what clinical data means so that a future feed is interpreted correctly, and
+  is explicit that the platform does not have it today.
+
+what_it_would_answer: >
+  Results rather than the fact that a test was ordered. Clinical data is the only source of the
+  numerators many quality measures now require: blood pressure values, A1c results, screening
+  instruments.
+
+shapes:
+  fhir_r4: "Patient, Encounter, Condition, Observation, Procedure, MedicationRequest, Immunization, DocumentReference."
+  hl7_v2_results: "ORU result messages, alongside the ADT event messages already received."
+  vendor_extracts: "Flat files with local codes and no terminology system."
+
+pathologies:
+  principle: "The pathologies of clinical data are the inverse of claims: rich but inconsistent."
+  expect:
+    - "Free text in coded fields."
+    - "Local codes with no terminology system URI."
+    - "Vital signs with missing or wrong units."
+    - "The same observation duplicated across interfaces."
+    - "Conditions on a problem list with no onset or resolution date, which makes 'active condition' a modelling decision rather than a fact."
+    - "Result status matters: a corrected result supersedes a final, which supersedes a preliminary."
+
+hard_rule:
+  risk_adjustment: >
+    Never treat an EHR Condition as equivalent to a claims diagnosis for risk adjustment. The
+    acceptable-source rules differ and conflating them creates audit exposure.
+
+diagnosis_on_adt:
+  format: "Pipe-delimited code, description and type from DG1 segments; ParticleHealth supplies admitting and discharge codes only; four of the eight HL7 sources send nothing."
+  handling: "Preserve the list verbatim in Silver Raw; derive a primary code in ODS. Do not use ADT diagnoses for risk adjustment."
+
+sdoh:
+  note: "Z-codes on claims are heavily under-coded. LOINC-coded screening instruments from clinical sources carry far more signal. Treat absence as unknown, never as negative."
+  at_cinqcare: "SDOH screening state exists as care-management workflow fields on the ADT working table, entirely unpopulated in the sample."

@@ -1,0 +1,39 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: fidelis_ny_upstate
+
+feeds:
+  - feed: member_roster
+    domain: enrollments
+    status: registered
+    contract_file: "sources/fidelis_ny_upstate__member_roster.yaml"
+    grain: "one row per member per monthly roster delivery"
+    cadence: monthly
+    delivery: manual_upload
+    columns: 45
+    sample_rows: 28333
+    natural_key: [member_id]
+    note: "The only Fidelis feed with a de-identified sample in the corpus."
+
+  # Claims feeds are registered in the claims source detail workbook but have no sample.
+  # All are full monthly loads delivered as pipe-or-comma text under claims/fidelis_upstate/.
+  - { feed: ip_claim_header, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_IPClaimHeader_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/IP/", size_band: "28-37 MB" }
+  - { feed: ip_claim_line, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_IPClaimLine_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/IP/", size_band: "17-24 MB" }
+  - { feed: op_claim_header, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_OPClaimHeader_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/OP/" }
+  - { feed: op_claim_line, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_OPClaimLine_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/OP/" }
+  - { feed: prof_claim_header, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_ProfHeader_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/Prof/" }
+  - { feed: prof_claim_line, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_ProfLine_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/Prof/" }
+  - { feed: dental_claim_header, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_DentalHeader_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/Dental/", size_band: "15-21 MB" }
+  - { feed: dental_claim_line, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_DentalLine_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/Dental/", size_band: "23-30 MB" }
+  - { feed: vision_claim_header, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_VisionHeader_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/Vision/" }
+  - { feed: vision_claim_line, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_VisionLine_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/Vision/" }
+  - { feed: pharmacy_claim, domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_Pharmacy_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/Pharmacy/" }
+  - { feed: membership, domain: enrollments, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_Membership_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/Membership/" }
+  - { feed: member_pcp, domain: enrollments, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_MemberPCP_FULL_CINQUPSTATE_.*.txt", landing: "claims/fidelis_upstate/Member_pcp/" }
+
+multi_file_feeds:
+  note: >
+    Claims arrive as header and line pairs per setting. The pair is one logical delivery: both
+    files must arrive and reconcile on the claim identifier before either is promoted.
+  pairs: [[ip_claim_header, ip_claim_line], [op_claim_header, op_claim_line], [prof_claim_header, prof_claim_line], [dental_claim_header, dental_claim_line], [vision_claim_header, vision_claim_line]]

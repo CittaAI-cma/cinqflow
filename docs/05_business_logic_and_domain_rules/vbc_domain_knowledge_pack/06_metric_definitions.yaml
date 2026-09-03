@@ -1,0 +1,214 @@
+file: 06_metric_definitions.yaml
+purpose: >
+  Semantic definitions the agent must use verbatim. Each carries the pitfall that makes it wrong
+  in practice, because the definition alone is never the hard part.
+
+nodes:
+
+  - id: KB-MET-001
+    title: "Member months"
+    kind: metric
+    layer: silver_ods
+    domain_tags: [metrics, eligibility]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Definition: the sum, across members, of months of eligible coverage in the period. The
+      denominator of nearly every VBHC rate. Grain: member, month, programme, product. Compute
+      from effective-dated enrollment spans, never from a member list. Pitfalls: partial months
+      require a stated convention (mid-month enrollment counted as a whole month, or prorated by
+      days) and the convention must match whatever the contract or programme specifies rather than
+      whatever is convenient; overlapping spans from multiple sources double-count and must be
+      resolved at the ODS; retroactive enrollment changes restate prior periods, so member months
+      for a closed period are not immutable and must be versioned; and members with coverage but
+      excluded from the programme population (hospice, ESRD, out-of-area, depending on programme
+      rules) may need exclusion from the denominator while remaining in enrollment.
+    depends_on: [KB-ODS-002]
+
+  - id: KB-MET-002
+    title: "PMPM — per member per month cost"
+    kind: metric
+    layer: serving
+    domain_tags: [metrics, finance]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Definition: total allowed amount for the population and period divided by member months for
+      the same population and period. Not total cost divided by member count. Pitfalls: numerator
+      and denominator must cover an identical population and period definition, which fails
+      routinely when the numerator uses claims for anyone attributed at any point and the
+      denominator uses only currently attributed members; the amount basis must be stated
+      (allowed is standard for cost of care, paid measures plan liability only); capitated
+      services produce encounters without dollars and must be shadow-priced or the metric
+      understates; carve-outs (behavioural health, pharmacy, dental) must be explicitly in or out
+      and labelled; and every PMPM must carry its paid-through date because immature periods look
+      cheap. Report PMPM decomposed into unit cost and utilisation whenever it is used to draw a
+      conclusion, since the two lead to entirely different interventions.
+    depends_on: [KB-MET-001, KB-ONT-011]
+
+  - id: KB-MET-003
+    title: "Utilisation per 1,000 (admits/1000, ED visits/1000, SNF days/1000)"
+    kind: metric
+    layer: serving
+    domain_tags: [metrics, utilization]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Definition: (count of events / member months) × 12,000, giving an annualised rate per 1,000
+      members. The 12,000 factor is the annualisation and is the single most common arithmetic
+      error in the domain. Pitfalls: event identification is a rules decision, not a lookup — an
+      inpatient admission is identified from claim type, bill type, and revenue codes together;
+      observation stays are outpatient by billing and inpatient by experience and must be reported
+      separately; a transfer between facilities is one episode but two claims and double-counts
+      unless stays are merged; ED visits that result in admission are conventionally excluded from
+      ED counts and included in admits, and whichever convention is used must be consistent across
+      every report; and claims-derived and ADT-derived rates will differ, legitimately, because
+      ADT captures events that never generate a claim in your data.
+    depends_on: [KB-MET-001, KB-SRC-003]
+
+  - id: KB-MET-004
+    title: "30-day all-cause readmission"
+    kind: metric
+    layer: serving
+    domain_tags: [metrics, utilization, quality]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Definition: of eligible index acute inpatient discharges, the proportion followed by an
+      acute inpatient admission within 30 days. Grain: index discharge. Pitfalls: index eligibility
+      excludes discharges to hospice, deaths, transfers, and typically planned readmissions
+      (chemotherapy, staged procedures) using a published planned-admission classification;
+      discharge disposition drives most of these exclusions, so nulls in that field distort the
+      metric in both directions; the readmission may occur at a different facility, so the metric
+      is only valid where you have cross-facility visibility, and an ACO with partial network
+      visibility systematically undercounts; the 30-day window must be complete, so the most
+      recent month of any readmission report is structurally incomplete; and an index admission
+      can itself be a readmission of a prior index, requiring an explicit chaining rule. Always
+      report with the denominator visible.
+    depends_on: [KB-MET-003, KB-PLY-007]
+
+  - id: KB-MET-005
+    title: "RAF — average risk score"
+    kind: metric
+    layer: serving
+    domain_tags: [metrics, risk_adjustment]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Definition: the member-weighted average Risk Adjustment Factor for the population, from
+      demographic factors plus hierarchy-resolved HCC coefficients under a named model version and
+      payment year. Never store or report a risk score without the model version and payment year
+      attached. Pitfalls: hierarchies mean HCCs cannot be summed naively; the annual reset means
+      partial-year capture understates until the sweep completes; diagnoses must come from
+      acceptable sources; new members dilute the average without any clinical meaning; and
+      cross-year comparisons spanning the V24-to-V28 transition are invalid unless restated under
+      one model. Present RAF alongside the capture completeness for the current period, or the
+      number invites a wrong conclusion every time.
+    depends_on: [KB-ONT-004, KB-ONT-005]
+
+  - id: KB-MET-006
+    title: "Quality gap closure rate"
+    kind: metric
+    layer: serving
+    domain_tags: [metrics, quality]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Definition: numerator compliant members divided by the initial population less denominator
+      exclusions, for a named measure and measurement period, per the specification version in
+      force. Use the specification's own terminology and logic rather than an approximation; a
+      locally invented version of a HEDIS measure is not that measure and must never be labelled
+      as one. Pitfalls: value sets are versioned by measurement period and must be pulled from the
+      authoritative terminology release; supplemental data eligibility rules differ by measure and
+      by reporting method, and as measures move to ECDS-only the chart-chase path disappears so
+      clinical feeds become the compliance path; continuous enrollment and anchor date rules
+      exclude members whose absence is easy to miss; and administrative-only calculation
+      understates any measure whose numerator is commonly captured clinically. Always report
+      compliant, eligible, and excluded counts, not the rate alone.
+    depends_on: [KB-ONT-007]
+
+  - id: KB-MET-007
+    title: "Total cost of care and benchmark variance"
+    kind: metric
+    layer: serving
+    domain_tags: [metrics, finance]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Definition: all allowed amounts for the attributed population over the performance period,
+      normalised per member per month and compared against the programme benchmark. Pitfalls: the
+      benchmark methodology is programme-specific and changes with programme rules, so a
+      variance computed under one programme's methodology is meaningless under another — directly
+      relevant where a REACH participant moves to LEAD or MSSP for 2027 (KB-ONT-006); truncation
+      of high-cost outliers is part of most methodologies and omitting it overstates variance;
+      risk adjustment is applied to the benchmark, so a change in RAF changes variance without any
+      change in spend; and the settlement view uses a defined run-out period, so in-year variance
+      is always provisional. Any in-year TCOC variance shown to a decision maker must be labelled
+      provisional with its run-out assumption stated.
+    depends_on: [KB-MET-002, KB-ONT-006]
+
+  - id: KB-MET-008
+    title: "IBNR and completion factors"
+    kind: metric
+    layer: serving
+    domain_tags: [metrics, finance]
+    confidence: conventional
+    volatile: false
+    body: >
+      Definition: an estimate of care incurred but not yet reflected in received claims, produced
+      by applying completion factors derived from historical lag triangles to immature service
+      months. This is actuarial territory and the analyst's job is usually to supply clean
+      triangles rather than to set reserves. Pitfalls: lag patterns differ by service category,
+      payer, and network status and must be triangulated separately; a change in claims processing
+      at the source shifts the entire lag curve and invalidates historical factors, which is why a
+      sudden apparent cost change must always be checked against completion assumptions; and
+      completed estimates must never be blended into the same field as actual paid amounts without
+      an explicit flag, because someone will eventually sum a column that mixes them. Where the
+      platform publishes completed figures, actual and estimated components must be separately
+      addressable.
+    depends_on: [KB-ONT-011]
+
+  - id: KB-MET-009
+    title: "Attributed member count"
+    kind: metric
+    layer: silver_ods
+    domain_tags: [metrics, attribution]
+    confidence: authoritative
+    volatile: false
+    body: >
+      Definition: distinct members assigned to the entity for a named programme, performance year,
+      and attribution version. Sounds trivial, is not. Pitfalls: prospective and retrospective
+      counts for the same period differ and both are correct in their own frame; quarterly
+      restatement means the count for a past period changes, so any stored count must carry its
+      attribution version; voluntary alignment overrides claims-based assignment and arrives on a
+      different cadence; members can be attributed to more than one entity across programmes and
+      must not be deduplicated across them; and a member attributed mid-year contributes partial
+      member months, so headcount and member months tell different stories. Where the programme
+      supplies an authoritative roster, the platform's count must match it exactly and any
+      difference is escalated rather than reconciled away.
+    depends_on: [KB-ONT-003, KB-MET-001]
+
+  - id: KB-MET-010
+    title: "Metric definition governance"
+    kind: contract
+    layer: serving
+    domain_tags: [governance]
+    decision_type: define
+    confidence: conventional
+    volatile: false
+    body: |
+      Every metric served by the platform carries a machine-readable definition record:
+        metric_id, version, owner, effective_from
+        numerator_logic, denominator_logic, exclusions, grain
+        source_tables and required layer
+        period_basis (service or paid), maturity_requirement
+        population_definition (programme, attribution version, continuity rule)
+        reference_data_versions used
+        known_limitations and bias_direction
+      Two rules make this worth the effort. First, no metric may be published without a definition
+      record, which forces the ambiguity out before rather than after it reaches an executive.
+      Second, changing a definition creates a new version and the platform retains the ability to
+      compute both, because "the number changed" and "the definition changed" must never be
+      indistinguishable to a consumer. The agent reads these records rather than inferring metric
+      logic from SQL, and must refuse to answer a metric question where the record is missing.
+    depends_on: []

@@ -1,0 +1,41 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: fidelis_ny_downstate
+
+date_formats: >
+  member_dob arrives as YYYY-MM-DD; every other date column arrives as YYYY-MM-DD HH:MM:SS with a padded hour, because the workbook stores dates as text.
+
+flag_vocabulary:
+  note: "Fidelis flags are word-or-blank or phrase-or-blank, never Y/N. Blank means unknown, not false."
+  values:
+    in_care_management_with_fidelis: "Yes, or blank"
+    primary_coverage_not_with_fidelis: "Yes, or blank"
+    harp_eligible: "the phrase 'HARP Eligible', or blank"
+    health_homes_plus_eligible: "the phrase 'Health Homes Plus Eligible', or blank"
+    ep_assignment_flag: "the token 'Attributed_PCP_Group', or blank"
+    health_home_status: "E for enrolled, or A"
+    pcp_assignment_type: "Manual or Auto"
+
+identifier_conventions:
+  member_id: >
+    The Fidelis member identifier arrives with the plan code appended after a hyphen. Medicaid
+    members carry an FCNY suffix and Essential Plan members carry an EPP suffix, and the count
+    of EPP-shaped identifiers matches exactly the count of rows flagged Attributed_PCP_Group.
+    Keep the whole value; the suffix is not a separate column.
+  medicaid_id: "The New York Medicaid Client Identification Number: two letters, five digits, one letter. A minority of rows carry an eight-digit numeric instead."
+  vbp_id: "The population label, not an identifier. One distinct value per file."
+
+multi_value_columns:
+  high_need_status: "A comma-joined list such as 'COMPLEX_NEED, HOMELESSNESS, HH+ Eligible'. Preserve verbatim; splitting it is a modelling decision."
+
+known_exceptions:
+  - "The canonical enrollment model has no home for enrollment_date, coverage_end_date, the recertification dates, harp_eligible, health_homes_plus_eligible, high_need_status, member_status, last_awv_date, pcp_assignment_type or the primary-coverage columns. All are surfaced as unknown rather than forced into an adjacent field."
+  - "Guardian name, phone and email have no canonical home at all."
+  - "member_age is derived from date of birth and is deliberately not stored; expect it to be dropped rather than mapped."
+  - "members_addresses, members_phones and members_emails all require a type as part of the primary key, and the roster supplies none. The analyst sets a constant."
+
+sample_caveats:
+  - "vbp_id is listed as hashed in the profile report but the value is the plain population label."
+  - "member_age was kept from the real date of birth while the date of birth itself was faked, so the two disagree in the sample."
+  - "Sparse operational flags are expected: the Health Home and HARP columns are more than 97% empty by design, not by defect."

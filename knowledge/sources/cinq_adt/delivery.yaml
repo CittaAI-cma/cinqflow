@@ -1,0 +1,14 @@
+version: 1
+updated: "2026-09-03"
+kind: delivery_convention
+source_system: cinq_adt
+file_naming: { observed: "ADT data for Payors.csv", caution: "No date token at all. Two extracts are distinguished only by their contents." }
+business_date: { source: "columns", event: "EventDate as YYYY-MM-DD", created: "CreateDate as YYYY-MM-DD" }
+delivery: { cadence: continuous, method: extract }
+format:
+  container: "comma-separated values"
+  quoting: "minimal, used for group names and the comma-joined diagnosis list"
+  header: "row 1"
+  line_terminator: CRLF
+  null_representation: "inconsistent: empty string, the literal NULL, a full stop, MISSING, NA, None, and 0 used both as false and as unknown"
+arrival_archetype: append_only_event_stream

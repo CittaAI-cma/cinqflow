@@ -1,0 +1,47 @@
+version: 1
+updated: "2026-09-03"
+kind: prompt_spec
+prompt: interpret_file
+prompt_version: 1
+screen: file_understanding
+
+purpose: >
+  Tell the analyst what just landed: domain, dataset, grain, source family, population,
+  arrival archetype, business date, identifier types, format anomalies and PHI exposure,
+  with every claim tied to a profile fact or a cited knowledge file.
+
+inputs:
+  observations: "ProfileFacts minus sample_rows: file name, size, delimiter, header, row count, per-column name/type/null/distinct/example values (bounded, PHI-scrubbed)."
+  context:
+    source:      "sources/<source_system>__<feed>.yaml when the upload is registered (domain, population, expected_columns, formats, phi_columns)."
+    glossary:    "glossary.yaml terms whose term/alias matches an observed column."
+    # Planned additions (not yet wired in ContextBuilder.for_interpretation):
+    healthcare:  "healthcare/identifiers.yaml shapes; healthcare/data_types.yaml formats"
+    domain:      "domains/<likely_domain>.yaml vocabulary and grain rules"
+    delivery:    "sources/<source>/delivery.yaml filename conventions"
+
+context_flow: "file profile + source/feed + healthcare terminology + domain knowledge -> interpret_file@1 -> LangGraph -> claims/risks/unknowns"
+
+output_contract:
+  claims: "kind, field, value, confidence, evidence[]  (see intelligence/insight_types.yaml file_understanding fields)"
+  risks: "data-quality or interpretation risks, plain language"
+  unknowns: "what could not be established"
+
+must:
+  - "Include likely_domain, likely_dataset, likely_grain."
+  - "Mark kind=governed_knowledge only when the value comes from context, observed_fact only from observations."
+  - "State the business date source: filename token, column, or none."
+  - "List format anomalies as observed facts (extension mismatch, quoting, empty trailing columns, null tokens)."
+  - "Name de-identification artefacts when the source is a sample."
+must_not:
+  - "Guess a domain to fill a field."
+  - "Quote values from PHI columns."
+  - "Propose mappings (that is the mapping screen)."
+
+worked_examples:
+  - feed: "Fidelis NY member roster (45 columns, vbp_id single value)"
+    expected: "domain enrollments (governed, from source), dataset member_roster, grain one row per member per monthly roster, archetype full_snapshot, population from vbp_id, business date from filename MM_DD_YYYY, identifiers CIN + Fidelis member id with plan suffix, flags word-or-blank."
+  - feed: "Molina NY MemEnrollHist (60 columns, pipe, 12 trailing empties)"
+    expected: "domain enrollments, grain member-month, archetype restated_history (period start fixed), key (Member_ID, Member_Month, Ratecode), business dates from filename period/extract tokens, risk: Member_Date_Of_Death 0% null is a de-id artefact."
+  - feed: "D0284_AlignmentRoster.xlsx that is CSV (111 columns)"
+    expected: "domain enrollments (ACO alignment), grain beneficiary x yr_mo per filedate, archetype restated_history, identifiers MBI with MBI_original/MBI_previous crosswalk, format anomaly: extension mismatch, 40-space blanks, ',,' shift artefact, 4 exact duplicates."

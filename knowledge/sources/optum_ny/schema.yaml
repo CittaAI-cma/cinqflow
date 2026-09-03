@@ -1,0 +1,11 @@
+version: 1
+updated: "2026-09-03"
+kind: schema_pointer
+source_system: optum_ny
+contract_file: "sources/optum_ny__eligibility.yaml"
+field_semantics:
+  identity: { SBSCR_NBR: "Subscriber number, natural key with the span start", SOURCE_PATIENT_ID: "Optum source system patient identifier", EMPI: "Enterprise master patient index identifier", CURR_MBI: "Current Medicare Beneficiary Identifier" }
+  span: { RECORD_START_DT: "Coverage span start", RECORD_END_DT: "Coverage span end" }
+  plan: { CONTR_CURR_PLN_NM: "Plan name", CONTR_NBR: "Contract number", CONTR_PBP: "Plan benefit package", CONTR_NBR_PBP: "Combined contract and package" }
+  attribution: { ASSIGNED_PROVIDER_NPI: "Assigned provider", ASSIGNED_TIN: "Assigned tax identification number" }
+  lifecycle: { DTH_DT: "Date of death", MBR_DO_NOT_CNTC_FLG: "Do not contact" }

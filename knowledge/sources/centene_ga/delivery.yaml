@@ -1,0 +1,20 @@
+version: 1
+updated: "2026-09-03"
+kind: delivery_convention
+source_system: centene_ga
+file_naming:
+  observed: "<LOB> MWOV Members - YYYY-MM-DD.txt"
+  examples: ["Medicaid MWOV Members - 2026-03-10.txt", "Medicare MWOV Members - 2026-03-10.txt"]
+  regex: "^(Medicaid|Medicare) MWOV Members - \\d{4}-\\d{2}-\\d{2}\\.txt$"
+  caution: "The name contains spaces and a spaced hyphen separator. MWOV is not defined anywhere in the corpus or in public Centene material and must be treated as an opaque token."
+business_date: { source: "file name suffix after the spaced hyphen", format: "YYYY-MM-DD", meaning: "extract date", corroboration: "the latest eligibility start date in the Medicaid file is two days before the name date" }
+delivery: { cadence: monthly, method: sftp, both_rosters_same_date: true }
+format:
+  container: "comma-separated values carried in a .txt file"
+  quoting: "every field and every header cell is double-quoted"
+  header: "row 1"
+  line_terminator: CRLF
+  encoding: "ASCII, no BOM"
+  empty_value: 'an empty quoted field'
+  caution: "The .txt extension does not mean fixed width or pipe delimited here. A reader configured from the extension alone will be wrong."
+arrival_archetype: full_snapshot

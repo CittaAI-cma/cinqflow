@@ -1,0 +1,74 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+
+# Utilisation metric definitions and the pitfalls that make them wrong in practice. The
+# definition is never the hard part.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/06_metric_definitions.yaml"
+  - "NCQA HEDIS utilisation measure descriptions (PCR, AHU, EDU)"
+  - "docs/03_data_source_schemas/lakehouse_and_layers/Data_lake_data_model.xlsx (DQ-103 expected ranges)"
+
+metrics:
+  - id: member_months
+    definition: "The sum across members of months of eligible coverage in the period."
+    grain: "member, month, programme, product"
+    computed_from: "effective-dated enrollment spans, never a member list"
+    pitfalls:
+      - "Partial months need a stated convention, and the convention must match the contract rather than what is convenient."
+      - "Overlapping spans from multiple sources double count and must be resolved at the operational data store."
+      - "Retroactive enrollment changes restate prior periods, so member months for a closed period are not immutable and must be versioned."
+      - "Members with coverage but excluded from the programme population may need exclusion from the denominator while remaining in enrollment."
+
+  - id: utilisation_per_1000
+    definition: "(count of events divided by member months) multiplied by 12,000, giving an annualised rate per 1,000 members."
+    pitfalls:
+      - "The 12,000 factor is the annualisation and is the single most common arithmetic error in the domain."
+      - "Event identification is a rules decision, not a lookup: an inpatient admission is identified from claim type, bill type and revenue codes together."
+      - "Observation stays are outpatient by billing and inpatient by experience, and must be reported separately."
+      - "A transfer between facilities is one episode but two claims, and double counts unless stays are merged."
+      - "ED visits leading to admission are conventionally excluded from ED counts and included in admissions; whichever convention is used must be consistent across every report."
+      - "Claims-derived and ADT-derived rates differ legitimately, because ADT captures events that never generate a claim in your data."
+    expected_range: "The client's own rule expects 150 to 400 inpatient admissions per 1,000 for Medicare populations."
+
+  - id: readmission_30_day
+    definition: "Of eligible index acute inpatient discharges, the proportion followed by an acute inpatient admission within 30 days."
+    grain: "index discharge"
+    pitfalls:
+      - "Index eligibility excludes discharges to hospice, deaths, transfers and typically planned readmissions, using a published planned-admission classification."
+      - "Discharge disposition drives most exclusions, so nulls in that field distort the metric in both directions."
+      - "The readmission may occur at another facility, so the metric is valid only with cross-facility visibility; partial network visibility systematically undercounts."
+      - "The 30-day window must be complete, so the most recent month of any readmission report is structurally incomplete."
+      - "An index admission can itself be a readmission of a prior index, requiring an explicit chaining rule."
+    always: "Report with the denominator visible."
+
+  - id: average_length_of_stay
+    definition: "Total inpatient days divided by the number of discharges over the period."
+    pitfalls:
+      - "Day cases are conventionally excluded."
+      - "Interim bills split a single stay across claims; merge before counting."
+      - "An open stay has no length until it closes, so including current inpatients understates."
+
+  - id: ed_visits_per_1000
+    definition: "Emergency department visits per 1,000 members, annualised."
+    identification: "Revenue codes in the 045X range, place of service 23, or an ADT event of ED registration or discharge."
+    pitfalls:
+      - "The same visit appears in claims and in ADT; pick one source per report and label it."
+      - "Whether admitted-through-ED counts as an ED visit is a convention that must be stated."
+
+  - id: days_at_home
+    definition: "Days in the period not spent in an acute, post-acute or institutional setting. An ACO REACH measure for High Needs ACOs."
+    pitfalls:
+      - "Requires complete visibility of institutional stays; a missing SNF feed inflates the measure."
+
+adt_specific:
+  note: >
+    CINQCARE's ADT feeds carry readmission flags at 7, 15 and 30 days computed upstream. These
+    are the source's calculation, not the platform's, and must be labelled as such. The client's
+    own rule requires them to be logically nested: a 7-day readmission is also a 15-day and a
+    30-day readmission.
+
+reporting_rules:
+  - "Decompose a rate into numerator and denominator before drawing any conclusion; a rate change with a stable numerator is a population problem, not a clinical one."
+  - "Compare a movement against the metric's own historical volatility, not against zero."
+  - "State the maturity of the period: the most recent months of any claims-derived utilisation metric are understated."

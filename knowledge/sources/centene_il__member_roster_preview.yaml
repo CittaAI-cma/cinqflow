@@ -1,0 +1,205 @@
+version: 1
+updated: "2026-09-03"
+
+# Loader-facing feed contract. YamlKnowledgeProvider.get_source() reads this exact path;
+# ContextBuilder injects it whole at file understanding and mapping. Richer organisational
+# knowledge for this source is in sources/centene_il/.
+#
+# Columns, row counts, null rates and value shapes below were read from the de-identified
+# sample and its profile report, not inferred.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/7.Centene IL/"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/7.Centene IL/Centene IL  Member_Roster_Preview_ Profile Report.pdf"
+
+source_system: centene_il
+feed: member_roster_preview
+domain: enrollments
+payer: Centene Illinois (Meridian / Wellcare of Illinois)
+population: IL0201633
+contract: centene_il
+line_of_business: HealthChoice Illinois Medicaid (LINE OF BUSINESS = MEDICAID on every row)
+file_pattern: "^Member_Roster_Preview_IL\\d{7}_\\d{6}\\.csv$"
+cadence: monthly
+delivery: manual_upload
+arrival_archetype: full_snapshot
+
+format:
+  container: "comma-separated values"
+  delimiter: ","
+  quoting: none
+  header: "row 1 - column names contain spaces"
+  line_terminator: CRLF
+  encoding: "ASCII, no BOM"
+  trailer: none
+
+business_date:
+  source: file name suffix
+  format: YYYYMM
+  meaning: roster month
+  example: "Member_Roster_Preview_IL0201633_202602.csv = February 2026, consistent with MEMBER MONTHS of 2 for most members"
+
+grain: "one row per member (snapshot) with rolled-up utilisation counters for the plan year to date"
+natural_key: [AMISYS NUMBER]
+secondary_identifiers: [MEDICAID NUMBER]
+
+# Observed in the de-identified sample (26,489 rows, 45 columns).
+sample_observed:
+  rows: 26489
+  columns: 45
+  blank_rows: 0
+  rows_with_wrong_field_count: 0
+
+# The 45 columns as they actually arrive, in file order.
+expected_columns:
+  - AMISYS NUMBER
+  - MEDICAID NUMBER
+  - FIRST NAME
+  - MIDDLE NAME
+  - LAST NAME
+  - MEMBER DOB
+  - GENDER
+  - MEMBER PHONE NUMBER
+  - MEMBER ADDRESS LINE 1
+  - MEMBER ADDRESS LINE 2
+  - MEMBER CITY
+  - MEMBER STATE
+  - MEMBER ZIP
+  - MPK NAME
+  - ASSIGNED TIN NAME
+  - ASSIGNED TIN
+  - PCP FIRST NAME
+  - PCP MIDDLE NAME
+  - PCP LAST NAME
+  - PCP NPI
+  - PCP SPECIALTY
+  - MEMBER MONTHS
+  - LINE OF BUSINESS
+  - PRODUCT
+  - POPULATION HEALTH CATEGORY
+  - PRIMARY RISK CATEGORY
+  - RISK SCORE
+  - TOTAL PCP CLAIMS
+  - ALL ADMITS
+  - ACUTE ADMITS
+  - OP CLAIMS
+  - ED VISITS
+  - ED TO IP VISITS
+  - SNF ADMITS
+  - INNTWRK SPEC CLAIMS
+  - OUTNTWRK SPEC CLAIMS
+  - TOTAL BRAND RX COUNT
+  - GENERIC RX COUNT
+  - OTH CLAIMS
+  - PREVENTABLE ADMITS
+  - PREVENTABLE ED VISITS
+  - MEMBER ELIG START MONTH
+  - MEMBER MEDICAID START MONTH
+  - MEMBER TYPE
+  - EMAIL_ADDRESS
+
+# Per-column facts the profiler measured. `null_pct` counts empty strings and literal
+# null tokens. `phi` marks member-identifying columns (HIPAA Safe Harbor).
+columns:
+  - { name: AMISYS NUMBER, type: string, null_pct: 0.0, distinct: 26489, phi: true }
+  - { name: MEDICAID NUMBER, type: int, null_pct: 0.0, distinct: 26489, phi: true }
+  - { name: FIRST NAME, type: string, null_pct: 0.0, distinct: 684, phi: true }
+  - { name: MIDDLE NAME, type: string, null_pct: 100.0, distinct: 1, phi: true }
+  - { name: LAST NAME, type: string, null_pct: 0.0, distinct: 999, phi: true }
+  - { name: MEMBER DOB, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 14142, phi: true }
+  - { name: GENDER, type: string, null_pct: 0.0, distinct: 2, phi: true }
+  - { name: MEMBER PHONE NUMBER, type: string, null_pct: 0.4, distinct: 26393, phi: true }
+  - { name: MEMBER ADDRESS LINE 1, type: string, null_pct: 0.0, distinct: 26351, phi: true }
+  - { name: MEMBER ADDRESS LINE 2, type: string, null_pct: 100.0, distinct: 9, phi: true }
+  - { name: MEMBER CITY, type: string, null_pct: 0.0, distinct: 16206, phi: true }
+  - { name: MEMBER STATE, type: string, null_pct: 0.0, distinct: 8, phi: false }
+  - { name: MEMBER ZIP, type: int, null_pct: 0.0, distinct: 2263, phi: true }
+  - { name: MPK NAME, type: string, null_pct: 0.0, distinct: 150, phi: true }
+  - { name: ASSIGNED TIN NAME, type: string, null_pct: 0.0, distinct: 150, phi: false }
+  - { name: ASSIGNED TIN, type: int, null_pct: 0.0, distinct: 14, phi: false }
+  - { name: PCP FIRST NAME, type: string, null_pct: 0.0, distinct: 685, phi: false }
+  - { name: PCP MIDDLE NAME, type: string, null_pct: 68.3, distinct: 18, phi: false }
+  - { name: PCP LAST NAME, type: string, null_pct: 0.0, distinct: 1000, phi: false }
+  - { name: PCP NPI, type: int, null_pct: 0.0, distinct: 330, phi: false }
+  - { name: PCP SPECIALTY, type: string, null_pct: 0.0, distinct: 8, phi: false }
+  - { name: MEMBER MONTHS, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: LINE OF BUSINESS, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: PRODUCT, type: string, null_pct: 0.0, distinct: 4, phi: false }
+  - { name: POPULATION HEALTH CATEGORY, type: string, null_pct: 0.0, distinct: 22, phi: false }
+  - { name: PRIMARY RISK CATEGORY, type: string, null_pct: 0.0, distinct: 69, phi: false }
+  - { name: RISK SCORE, type: decimal, null_pct: 0.0, distinct: 4286, phi: false }
+  - { name: TOTAL PCP CLAIMS, type: int, null_pct: 0.0, distinct: 8, phi: false }
+  - { name: ALL ADMITS, type: int, null_pct: 0.0, distinct: 3, phi: false }
+  - { name: ACUTE ADMITS, type: int, null_pct: 0.0, distinct: 3, phi: false }
+  - { name: OP CLAIMS, type: int, null_pct: 0.0, distinct: 12, phi: false }
+  - { name: ED VISITS, type: int, null_pct: 0.0, distinct: 8, phi: false }
+  - { name: ED TO IP VISITS, type: int, null_pct: 0.0, distinct: 3, phi: false }
+  - { name: SNF ADMITS, type: int, null_pct: 0.0, distinct: 7, phi: false }
+  - { name: INNTWRK SPEC CLAIMS, type: int, null_pct: 0.0, distinct: 31, phi: false }
+  - { name: OUTNTWRK SPEC CLAIMS, type: int, null_pct: 0.0, distinct: 11, phi: false }
+  - { name: TOTAL BRAND RX COUNT, type: int, null_pct: 0.0, distinct: 12, phi: false }
+  - { name: GENERIC RX COUNT, type: int, null_pct: 0.0, distinct: 32, phi: false }
+  - { name: OTH CLAIMS, type: int, null_pct: 0.0, distinct: 24, phi: false }
+  - { name: PREVENTABLE ADMITS, type: int, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: PREVENTABLE ED VISITS, type: int, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: MEMBER ELIG START MONTH, type: int, null_pct: 0.0, distinct: 56, phi: false }
+  - { name: MEMBER MEDICAID START MONTH, type: int, null_pct: 0.0, distinct: 56, phi: true }
+  - { name: MEMBER TYPE, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: EMAIL_ADDRESS, type: string, null_pct: 59.7, distinct: 10429, phi: true }
+
+# Always empty in the sample. Emptiness here is a layout fact, not drift (DQ-B-03 must
+# not fire on these) unless the registered contract says they were populated before.
+expected_empty_columns:
+  - MIDDLE NAME
+  - MEMBER ADDRESS LINE 2
+  - MEMBER TYPE
+
+phi_columns:
+  - AMISYS NUMBER
+  - MEDICAID NUMBER
+  - FIRST NAME
+  - MIDDLE NAME
+  - LAST NAME
+  - MEMBER DOB
+  - GENDER
+  - MEMBER PHONE NUMBER
+  - MEMBER ADDRESS LINE 1
+  - MEMBER ADDRESS LINE 2
+  - MEMBER CITY
+  - MEMBER ZIP
+  - MPK NAME
+  - MEMBER MEDICAID START MONTH
+  - EMAIL_ADDRESS
+
+# Closed-domain columns and the values observed. A value outside these is DQ-B-07.
+value_domains:
+  GENDER: [F, M]
+  LINE OF BUSINESS: [MEDICAID]
+  PRODUCT: [MEDICAID, MEDICAID EXPANSION, "SSI NON - DUAL", SSI KIDS]
+  PCP SPECIALTY: [CLINIC, NURSE PRACTITIONERS, FAMILY PRACTICE, PEDIATRICS, PHYSICIAN S ASSISTANT, INTERNAL MEDICINE]
+
+formats:
+  dob: "MEMBER DOB = YYYY-MM-DD"
+  months: MEMBER ELIG START MONTH and MEMBER MEDICAID START MONTH = YYYYMM
+  phone: "999-999-9999"
+  risk_score: "RISK SCORE is a decimal with up to 5 places; 2,399 rows carry a whole number"
+  identifiers: "AMISYS NUMBER is a letter followed by 10 digits; MEDICAID NUMBER is the 9-digit Illinois Recipient Identification Number"
+  counters: "14 utilisation counters (admits, ED visits, claim counts, Rx counts) are small integers for the plan year to date"
+
+# De-identification artefacts in the SAMPLE ONLY. Never tune a rule or threshold on
+# these; the production feed has a different shape.
+deid_artifacts:
+  - "AMISYS NUMBER, MEDICAID NUMBER, ASSIGNED TIN and PCP NPI are hashed; member and PCP names, phone, address, city, ZIP, group names and email are faked; MEMBER DOB is date-faked."
+  - "The profile report lists only MEMBER TYPE as having missing data, treating every faked column as complete; EMAIL_ADDRESS is in fact 59.7% empty and PCP MIDDLE NAME 68.3%."
+
+quirks:
+  - "This roster carries analytics as well as enrolment: a risk score, a population health category, a primary risk category and 14 utilisation counters. None of these have a home in the enrollment canonical model."
+  - "MEMBER TYPE, MIDDLE NAME and MEMBER ADDRESS LINE 2 are effectively always empty."
+  - "Column names contain spaces, and EMAIL_ADDRESS is the only name that uses an underscore."
+  - "PREVENTABLE ADMITS and PREVENTABLE ED VISITS are zero on every row, which is a placeholder rather than a finding."
+
+notes: >
+  IL0201633 is a Centene-side roster identifier, most likely the contracted provider group. The
+  corpus does not define it, so it is carried as an opaque population label rather than parsed.
+  The utilisation counters make this feed useful for care-management targeting but they are
+  derived values from Centene, not raw enrolment facts, and should never be treated as CINQCARE's
+  own utilisation measurement.

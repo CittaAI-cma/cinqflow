@@ -1,0 +1,37 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: adt_hl7_sources
+principle: >
+  Nine sources land in one table and almost every field is extracted differently per source.
+  The variation is documented per column in the HL7 mapping workbook and must never be assumed
+  away. What follows are the differences that change the answer.
+member_identifier:
+  rule: "The CINQCARE member identifier sits in PID-3 under an assigning authority, and the authority label differs by source."
+  by_source: { BronxRhio: "PID-3 where authority is CINQ", Healthix: "PID-4", HiBridge: "PID-3 direct", HeC: "PID-3 first repetition", HealtheLINK: "PID-3 where authority is CINQCARE, with a demographics fallback", PCC_IL: "PID-3 where authority is CINQ", PCC_Enterprise: "PID-3 where authority is CINQ", ParticleHealth: "a system identifier lookup on the Particle patient id", Optum_UM: "the CinqID column", Fidelis_UM: "the member_id column" }
+facility_name:
+  by_source: { BronxRhio: "PV1-3.4", Healthix: "PV1-3.4", HiBridge: "PV1-3.4", HeC: "MSH-4.1", HealtheLINK: "MSH-4.1", PCC_IL: "PV1-3.1", PCC_Enterprise: "PV1-3.1", ParticleHealth: "the facility_name JSON field" }
+message_date:
+  rule: "Mirth received time everywhere except HeC, which uses MSH-7 with a length-dispatched format."
+coverage_gaps:
+  attending_npi: "Absent from BronxRhio, Healthix, HiBridge and HeC. Present for HealtheLINK, both PCC feeds and ParticleHealth."
+  pcp_npi: "Absent from every HL7 source. Only the Optum and Fidelis payer files carry it, which the ADT data model flags as a critical gap because all nine sources were believed to supply it."
+  diagnosis_list: "Absent from BronxRhio, Healthix, HiBridge and HeC. HealtheLINK may use the ZEN-27 segment instead of DG1."
+  chief_complaint: "Only HealtheLINK, ParticleHealth and the two PCC feeds."
+  discharge: "Fidelis UM never sends one."
+known_quirks:
+  - "BronxRhio spells the discharge disposition JSON key Discharge_Diposition, and the extraction must special-case it."
+  - "HealtheLINK prefixes the admission reason with the literal text 'Admit Reason: '."
+  - "Healthix reads PV1-36.2 before falling back to PV1-36.1 with a description lookup."
+  - "ParticleHealth may send a comma-separated list of attending physician identifiers, each validated against the NPI pattern, and the first valid one wins."
+  - "HiBridge and HealtheLINK truncate the date of birth to eight characters before casting."
+  - "Empty strings are stored as null throughout."
+event_derivation:
+  hl7: "MSH-9.2 carries the trigger event."
+  particlehealth: "Derived from setting, status and whether a discharge datetime is present."
+  fidelis_um: "confine_status, where DS maps to a discharge and AR to an admission or readmission."
+  optum_um: "Derived from service type."
+system_columns:
+  EncounterGroupId: "Derived as the member identifier concatenated with the admission date, which groups the events of one admission."
+  RecordHash: "An MD5 over member, admit, discharge, facility and event type, used for exact duplicate detection."
+  SourceSystemIdType: "The assigning authority literal: CINQ for most sources, CINQCARE for HealtheLINK, ParticleHealth for Particle."

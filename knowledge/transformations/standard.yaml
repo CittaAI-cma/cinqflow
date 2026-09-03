@@ -1,0 +1,77 @@
+version: 1
+updated: "2026-09-03"
+kind: transformation_catalog
+
+# The closed vocabulary of deterministic transformations a mapping may name.
+# GROUNDED IN: backend/src/cinqflow/engine/mapping_spec.py (ALLOWED_OPS, REQUIRED_ARGS,
+# ALLOWED_CASTS, CAST_FOR_TYPE, on_null / on_unmapped_value policies) and the client's
+# mapping workbooks (transformation types DIRECT / CAST / PARSE / DERIVE / LOOKUP / HARDCODE / SKIP).
+# A rule that names anything outside this list is refused at save time, never at write time.
+grounded_in:
+  - "backend/src/cinqflow/engine/mapping_spec.py"
+  - "docs/03_data_source_schemas/adt/ADT_SilverRaw_HL7_Mapping.xlsx"
+  - "docs/03_data_source_schemas/claims/mapping__CCLF_to_SilverRaw_Mapping_(1).xlsx"
+
+operations:
+  - op: parse_date
+    args: { format: "strftime pattern, required" }
+    semantics: "Parse a string into a date/timestamp using exactly one declared format. Unparseable -> null plus the raw string preserved in Bronze; never a dropped row."
+    see: transformations/dates.yaml
+  - op: trim
+    args: {}
+    semantics: "Strip leading/trailing whitespace. Safe, reversible, always allowed."
+  - op: upper
+    args: {}
+    semantics: "Upper-case. Use for state codes, sex codes, identifier normalisation."
+  - op: lower
+    args: {}
+    semantics: "Lower-case. Use for e-mail addresses."
+  - op: concat
+    args: { with: "list of other source columns or literals, required", separator: "optional" }
+    semantics: "Join several source values into one target (e.g. bill type facility + classification + frequency digits)."
+  - op: substring
+    args: { start: "0-based start, required", length: "optional" }
+    semantics: "Fixed-position extraction (e.g. first 5 characters of ZIP, first 8 of an HL7 timestamp)."
+  - op: cast
+    args: { to: "one of string|int|decimal|date|timestamp|bool, required" }
+    semantics: "Type cast with lossless fallback. Cast must be compatible with the declared canonical type (see cast_for_type)."
+
+retired_operations:
+  - op: value_map
+    replaced_by: "the field's own value_map table plus on_unmapped_value"
+    reason: "A transform named value_map validated cleanly but did nothing; the field-level table is executable."
+
+field_policies:
+  value_map: "Explicit source-value -> target-value table on the field. Closed domain only; every unmapped value follows on_unmapped_value."
+  on_unmapped_value: { allowed: [quarantine, pass, "null"], default: pass }
+  on_null: { allowed: [reject, default, pass], default: pass, note: "reject is reserved for the natural key (e.g. member_id); default requires a default value" }
+
+cast_for_type:
+  string: [string]
+  int: [int]
+  int64: [int]
+  decimal: [decimal, int]
+  date: [date]
+  timestamp: [timestamp, date]
+  bool: [bool]
+
+# The client's own workbook vocabulary and how it maps onto the executable ops.
+workbook_equivalents:
+  DIRECT: "no transform"
+  CAST: cast
+  PARSE: "parse_date, substring, or concat depending on the field"
+  SPLIT: "substring (or concat inverse); e.g. Fidelis UM member_name 'Last, First' split on comma"
+  DERIVE: "not expressible as a field transform; record as an analyst derivation (decisions/)"
+  LOOKUP: "not a field transform; reference-table enrichment happens in Silver ODS"
+  HARDCODE: "a constant, decided by the analyst; recorded in the mapping note, never inferred"
+  SKIP: "target null, status unknown or deliberately dropped"
+
+rules:
+  - id: TX-01
+    rule: "One-to-one, reversible normalisation (case, whitespace, date format, decimal removal) is safe and may be proposed by the model."
+  - id: TX-02
+    rule: "Many-to-one normalisation (collapsing race categories, mapping free-text visit type to E/I/O) destroys information and needs an analyst owner and a recorded rationale."
+  - id: TX-03
+    rule: "A transform is included only when the observed values require it to fit the target type; a transform that changes nothing is refused."
+  - id: TX-04
+    rule: "Never run generated code. A spec is data; Stage 5 executes the closed vocabulary only."

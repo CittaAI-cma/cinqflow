@@ -1,0 +1,138 @@
+kb:
+  name: vbhc_data_analyst_domain_kb
+  version: "1.0.0"
+  as_of: "2026-08-30"
+  purpose: >
+    Encoded domain expertise of a Value-Based Healthcare (VBHC) data analyst, structured so an
+    LLM agent can reason like one across a Medallion pipeline
+    (Landing -> Bronze -> Silver -> Identity -> Silver ODS). Each node is retrievable and
+    injectable as context. This KB does not contain data; it contains judgement.
+  audience: retrieval layer of a domain-expertise agent, not human documentation
+  jurisdiction: United States (Medicare / Medicaid / Commercial VBC)
+
+design_principles:
+  - id: DP-01
+    rule: "Encode the decision, not the description."
+    detail: >
+      A chunk earns its place if it changes what the agent does. "Bronze is raw data" is
+      description. "Never deduplicate in Bronze; a duplicate in Bronze is evidence about the
+      source, and removing it destroys the audit trail" is a decision.
+  - id: DP-02
+    rule: "Every rule carries its exception and its blast radius."
+    detail: >
+      Analysts are trusted because they know when a rule breaks. Chunks without failure modes
+      make the agent confidently wrong.
+  - id: DP-03
+    rule: "Separate volatile facts from stable reasoning."
+    detail: >
+      Regulatory parameters (model versions, program end dates, measure years) change annually and
+      live in `volatile: true` chunks with a `review_by` date. Reasoning patterns are stable.
+      Never embed a volatile fact inside a stable heuristic; reference it by id.
+  - id: DP-04
+    rule: "No PHI, no member identifiers, no live values in the KB or in embeddings."
+    detail: >
+      The KB is a reasoning substrate. It may describe that MBIs churn; it may never contain one.
+      This keeps the vector store outside HIPAA's designated record set.
+  - id: DP-05
+    rule: "Layer-tag everything."
+    detail: >
+      The single most common agent failure is applying a Silver rule in Bronze. Layer is a hard
+      retrieval filter, not a soft hint.
+
+chunk_metadata_schema:
+  description: >
+    Every node in files 01-08 conforms to this shape. Embed `title` + `body`; store the rest as
+    filterable metadata in the vector DB payload and mirror it in the relational metadata catalog.
+  fields:
+    id:            "Stable string key, e.g. KB-SIL-014. Never reused after retirement."
+    title:         "One line, phrased as the question an analyst would ask."
+    body:          "The reasoning. 80-250 words. Self-contained; no 'as described above'."
+    kind:          "one of: concept | contract | decision_rule | heuristic | metric | dq_rule | playbook | failure_mode | agent_spec"
+    layer:         "one of: cross | landing | bronze | silver | identity | silver_ods | serving"
+    domain_tags:   "e.g. [claims, attribution, risk_adjustment, quality, eligibility, provider, pharmacy]"
+    source_tags:   "e.g. [cclf, bcda, adt, 837, 835, 834, ehr_fhir, ncpdp, lab, roster]"
+    decision_type: "one of: promote | reject | quarantine | reconcile | interpret | escalate | define"
+    confidence:    "authoritative | conventional | shop_specific — see confidence_semantics"
+    volatile:      "boolean"
+    review_by:     "ISO date, required when volatile is true"
+    depends_on:    "list of ids this chunk assumes"
+    conflicts_with: "list of ids that give opposing guidance in other contexts"
+    human_owner:   "role accountable for the rule, e.g. lead_analyst, data_steward"
+
+confidence_semantics:
+  authoritative: >
+    Traceable to a regulator, standards body, or contract (CMS, NCQA, HL7, X12, the payer
+    agreement). The agent may assert these. Cite the anchor id.
+  conventional: >
+    Industry-standard analyst practice with no single authority. The agent should present as
+    "standard practice is X" and expose the assumption.
+  shop_specific: >
+    True only for this client's implementation. Highest operational value, highest staleness risk.
+    The agent must never generalise these to other tenants. Populate from decision records
+    (see 08_agent_specs.yaml -> decision_record_schema).
+
+retrieval_strategy:
+  embedding:
+    model_guidance: >
+      Use an embedding model with strong performance on domain jargon. Prepend the title to the
+      body before embedding; healthcare acronyms are ambiguous and the title disambiguates
+      (e.g. "MA" = Medicare Advantage here, not Massachusetts or moving average).
+    chunk_size: "One YAML node = one chunk. Do not split a node; do not merge nodes."
+    enrichment: >
+      At index time, append `layer`, `kind`, and `domain_tags` as a trailing text line to the
+      embedded string. This measurably improves recall on layer-specific queries.
+  hybrid_search:
+    required: true
+    rationale: >
+      Dense retrieval alone fails on exact-token queries that dominate this domain: "CCLF 7",
+      "HCC 37", "loop 2300", "A08", "V28". Run BM25 over the same corpus and fuse with RRF.
+  filters_before_ranking:
+    - "layer == <layer the agent is currently operating in> OR layer == 'cross'"
+    - "volatile == false OR review_by >= today"
+  reranking: >
+    Retrieve top 30 fused, rerank to top 6-8. Context beyond ~8 nodes measurably degrades the
+    agent's willingness to say "I don't know", which is the behaviour you most need to preserve.
+  freshness_guard: >
+    If any retrieved chunk has volatile == true and review_by < today, the agent must surface a
+    staleness warning in its answer rather than silently using the fact.
+
+routing_map:
+  description: "Query intent -> files to search first. Use as a metadata pre-filter."
+  routes:
+  - intent: "What does this source file/field mean?"
+    files: ["02_source_landscape.yaml", "01_domain_ontology.yaml"]
+  - intent: "Should this batch be promoted to the next layer?"
+    files: ["03_medallion_layer_contracts.yaml", "07_data_quality_rules.yaml"]
+  - intent: "Why did member/provider counts change?"
+    files: ["04_identity_resolution.yaml", "05_analyst_reasoning_playbooks.yaml"]
+  - intent: "Why did this metric move?"
+    files: ["05_analyst_reasoning_playbooks.yaml", "06_metric_definitions.yaml"]
+  - intent: "How is this metric defined / can I trust this number?"
+    files: ["06_metric_definitions.yaml", "03_medallion_layer_contracts.yaml"]
+  - intent: "This record failed validation — now what?"
+    files: ["07_data_quality_rules.yaml", "03_medallion_layer_contracts.yaml"]
+  - intent: "What should the agent do autonomously vs escalate?"
+    files: ["08_agent_specs.yaml"]
+
+files:
+  - path: 01_domain_ontology.yaml
+    covers: "VBHC concepts, entities, code systems, programs, regulatory anchors"
+  - path: 02_source_landscape.yaml
+    covers: "Source feeds, their grain, cadence, and known pathologies"
+  - path: 03_medallion_layer_contracts.yaml
+    covers: "Layer purposes, promotion contracts, and the analyst decision at each boundary"
+  - path: 04_identity_resolution.yaml
+    covers: "Member and provider identity, crosswalks, survivorship, merge/unmerge"
+  - path: 05_analyst_reasoning_playbooks.yaml
+    covers: "How an analyst triages, doubts, and concludes — the core reasoning transfer"
+  - path: 06_metric_definitions.yaml
+    covers: "Canonical measure logic with pitfalls and required layer"
+  - path: 07_data_quality_rules.yaml
+    covers: "Executable rule library by layer with severity and action"
+  - path: 08_agent_specs.yaml
+    covers: "Agent roster, tool contracts, guardrails, decision-record write-back schema"
+
+known_gaps:
+  - "Commercial payer contract terms are client-specific and intentionally absent."
+  - "State Medicaid program variation is not enumerated; treat as shop_specific."
+  - "No PHI-level matching thresholds are tuned here; 04 gives the method, not the constants."

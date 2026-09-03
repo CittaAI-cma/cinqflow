@@ -1,0 +1,25 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: cmp_1598
+date_formats: { dob: "DOB as YYYY-MM-DD", appointments: "Last Appointment and Last Transc Triage as MM/DD/YYYY" }
+phones: "Formatted as (999) 999-9999, unlike the hyphenated or bare formats elsewhere in the corpus."
+name_handling:
+  member: "First Name, Middle and Last Name arrive already separated."
+  PCP: "Arrives as 'Last, First, Credential'. This is a provider field and the client's cleanse rule explicitly excludes it from name parsing."
+identifier_conventions:
+  Account: "Practice patient account number. Not unique: a patient with more than one primary insurance appears more than once."
+  Chart: "Practice chart identifier, empty on 75.8% of rows."
+  "Primary Insurance": "The member identifier at the primary payer, in whatever shape that payer uses: nine or eleven digits, a New York CIN, or a Medicare Beneficiary Identifier."
+  "Secondary Insurance": "Usually the New York Medicaid CIN, which makes this feed a useful Medicaid crosswalk."
+multi_value_columns:
+  Race: "Comma-joined and multi-valued across 76 distinct combinations, for example 'Black / African American, Black'."
+literal_values:
+  Ethnicity: "Carries the literal string None on 277 rows, which is a value rather than a null."
+free_text:
+  Memo1_Memo2: "Operational free text with no schema, carrying transportation notes, copay notes and payer identifiers."
+known_exceptions:
+  - "The practice location, PCP, appointment dates and memo fields have no home in the canonical enrollment model."
+  - "Because coverage is practice-recorded rather than payer-recorded, this feed must not drive eligibility or member-month calculations."
+unresolved_tokens:
+  note: "CMP_1598, dmhmreport, CCS and the numeric file-name tokens are undefined in the corpus. Carry them as opaque labels."

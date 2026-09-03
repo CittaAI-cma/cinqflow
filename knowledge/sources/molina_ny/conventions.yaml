@@ -1,0 +1,28 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: molina_ny
+date_formats:
+  iso: "Member_Date_Of_Birth and Member_Date_Of_Death as YYYY-MM-DD"
+  us: "Member_Health_Plan_Enrollment_Effective_Date, _Termination_Date, Coverage_Effective_Date and Coverage_Term_Date as MM/DD/YYYY"
+  month: "Member_Month as a YYYYMM integer"
+span_behaviour: "Enrollment effective and termination dates always equal the coverage effective and term dates, and both always bracket the Member_Month. A row is therefore a month, not a span."
+flag_vocabulary: { Home_DNC_Flag: "Y or N", Mobile_DNC_Flag: "Y or N", Member_Gender: "M or F" }
+identifier_conventions:
+  Member_ID: "NYM followed by 11 digits"
+  Subscriber_ID: "Same shape. Identical to Member_ID in the HARP files; differs on some rows in the Medicaid files, which is the family and subscriber linkage."
+  Medicaid_State_ID: "The New York Client Identification Number, the cross-payer identity key"
+race_and_ethnicity:
+  note: "Race arrives twice under different code sets and must not be merged without a decision."
+  Member_Ethnicity_or_Race: "Molina's own codes, such as 2 or more races, WHITE/CAUCASIAN, BLACK/AFRICAN AMERICAN, Other Asian"
+  Member_Race: "OMB-style categories with inconsistent casing, such as SOME OTHER RACE alongside Other Race"
+  Member_Ethnicity: "NO ETHNICITY or Hispanic or Latino"
+addresses: "A mailing block and a physical block both arrive. Each becomes its own members_addresses row with a distinct address_type constant supplied by the analyst."
+known_exceptions:
+  - "Seventeen columns are always empty because the layout is Molina's generic multi-line-of-business template covering Medicare, Marketplace and coordination of benefits. Registered as expected-empty in exception EX-006 so schema drift does not fire on them."
+  - "Lines end in a run of pipes because the last twelve columns are empty. A reader that trims trailing empty fields breaks the 60-column contract."
+  - "Member_Enroll_ID is 100% empty despite being listed as a hashed identifier in the profile report."
+sample_caveats:
+  - "Member_Date_Of_Death is 0% null with 99.6% of values in year 2078. It is date-faked; production is expected to be mostly null. Exception EX-003 forbids tuning a deceased rule on this sample."
+  - "The Down-HARP profile report embeds chart images belonging to the Centene IL and Optum GA reports. Its tables are correct; its charts are not."
+  - "The Column Summary section of every Molina profile report shows 0.0% missing for faked columns that are largely empty. Use the Missing Value Analysis section instead."

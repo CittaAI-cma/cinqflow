@@ -1,0 +1,56 @@
+version: 1
+updated: "2026-09-03"
+kind: dq_rules
+domain: enrollment
+
+# GROUNDED IN: Enrollment_Domain_Level_Rules.docx (the client's cleanse and DQ rules, verbatim
+# below), Data_lake_data_model.xlsx 'Data Quality Rules' DQ-001..DQ-005, DQ-025..DQ-033, DQ-047..049,
+# DQ-062..064, DQ-089..091, DQ-101, DQ-106..110, and the profiles of the nine enrollment samples.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/Enrollment_Domain_Level_Rules.docx"
+  - "docs/03_data_source_schemas/lakehouse_and_layers/Data_lake_data_model.xlsx"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/"
+
+client_rules_verbatim:
+  cleanse:
+    - "Trim all the string columns"
+    - "Member date of birth must be converted into YYYY-MM-DD format, and if only the year is available, it should default to January 1st of that year."
+    - "Apply Name parsing to source member name field/fields. Check we may have single name field or multiple and we need to divide it accordingly. But do not take PCP Name field."
+    - "Apply Address parsing to source member address fields and do not apply this to any other address fields."
+  dq:
+    - "Member Name must be present in source data, and it cannot be null or empty string"
+    - "Member Must have PCP Assigned to him"
+
+rules:
+  - { id: DQ-E-01, legacy: DQ-001, rule: "Member identifier (source_system_id) not null", action: block, meaning: "Required to link all domains; on_null reject on the natural key" }
+  - { id: DQ-E-02, legacy: [DQ-002, DQ-003], rule: "Member first and last name present and not empty after trim (client DQ rule 1)", action: quarantine, meaning: "Identity resolution cannot proceed; 46 D0284 rows have blank demographics" }
+  - { id: DQ-E-03, legacy: DQ-004, rule: "Date of birth present", action: block, meaning: "Age-based quality measure denominators" }
+  - { id: DQ-E-04, legacy: DQ-026, rule: "DOB valid and age 0-120 at file date", action: quarantine }
+  - { id: DQ-E-05, legacy: DQ-005, rule: "Sex present", action: block, meaning: "Sex-specific measures (BCS, CCS)" }
+  - { id: DQ-E-06, legacy: DQ-027, rule: "Sex in the accepted vocabulary after value_map (F/M/U; Female/Male; female/male)", action: quarantine }
+  - { id: DQ-E-07, rule: "Member must have an assigned PCP (client DQ rule 2): pcp_npi or pcp_name present", action: warn, meaning: "Attribution and PCP-based outreach; expected exceptions: Optum GA HouseCalls 81.5% no PCP (engagement-only roster), Centene GA Medicaid 63 rows, CMP practice list 15.3%", exception_policy: "feed-level exception recorded in decisions/exceptions.yaml, not row-level reject" }
+  - { id: DQ-E-08, legacy: DQ-110, rule: "ACO REACH aligned beneficiaries have an aligned NPI/TIN", action: warn, meaning: "13.5% of D0284 rows have no aligned_tin (unaligned statuses MC/DY/MS/CO/NV/DD/AB)" }
+  - { id: DQ-E-09, legacy: DQ-025, rule: "Every active member has at least one address line 1", action: warn }
+  - { id: DQ-E-10, legacy: DQ-030, rule: "ZIP is 5 or 9 digits after trim", action: warn }
+  - { id: DQ-E-11, legacy: DQ-031, rule: "State is a valid USPS code after standardisation (legacy free text Bronx/Brooklyn/Buffalo is not)", action: warn }
+  - { id: DQ-E-12, legacy: DQ-033, rule: "Phone is 10 digits after stripping punctuation (formats seen: 999-999-9999, (999) 999-9999, bare 10 digits)", action: observe }
+  - { id: DQ-E-13, legacy: DQ-032, rule: "Email contains @ and a domain", action: observe }
+  - { id: DQ-E-14, legacy: [DQ-028, DQ-029], rule: "Race and ethnicity conform to the payer's declared code set; OMB rollup is an analyst decision", action: observe }
+  - { id: DQ-E-15, legacy: DQ-048, rule: "Dual status code in the CMS set (01-10, NA)", action: warn }
+  - { id: DQ-E-16, legacy: DQ-049, rule: "Medicare status code in the CMS set (10, 11, 20, 21, 31)", action: warn }
+  - { id: DQ-E-17, legacy: DQ-107, rule: "Coverage/enrollment start <= end; open-ended sentinels (9999-12-31) treated as null end", action: quarantine }
+  - { id: DQ-E-18, legacy: DQ-109, rule: "No overlapping spans of the same coverage type per member (Optum NY spans, Molina member-months)", action: block, layer: silver_ods }
+  - { id: DQ-E-19, legacy: DQ-062, rule: "Death date populated implies no active flags; death date after file date is invalid", action: warn, meaning: "Molina sample death dates (year 2078) are a de-id artefact - exclude from rule tuning" }
+  - { id: DQ-E-20, legacy: DQ-063, rule: "Natural key unique per delivery (member_id; Molina Member_ID+Member_Month+Ratecode; Optum NY SBSCR_NBR+RECORD_START_DT; D0284 MBI+yr_mo+filedate)", action: block, layer: silver_raw }
+  - { id: DQ-E-21, legacy: DQ-064, rule: "Same first+last+DOB+sex appearing under different ids", action: observe, meaning: "Candidate duplicates for identity review" }
+  - { id: DQ-E-22, legacy: DQ-101, rule: "Active member count within +/-10% of prior month and near the contract's attributed lives", action: warn }
+  - { id: DQ-E-23, legacy: DQ-091, rule: "No leading/trailing whitespace in names (client cleanse rule 1)", action: observe }
+  - { id: DQ-E-24, legacy: DQ-089, rule: "Risk score not older than 12 months where the feed carries one (Centene IL RISK SCORE, D0284 riskscore_*)", action: observe }
+  - { id: DQ-E-25, rule: "Population label column carries exactly one distinct value per file (vbp_id, LOB, aco_id, Program_Description family)", action: warn, meaning: "Two populations in one file means the regex matched the wrong delivery" }
+  - { id: DQ-E-26, rule: "Filename business date agrees with the data (Molina period tokens = Member_Month range; Centene IL _YYYYMM = max MEMBER ELIG START MONTH)", action: warn }
+
+name_parsing:
+  single_field_feeds: ["Centene GA MEMBER_NAME ('FIRST LAST')", "Fidelis UM member_name ('LAST, FIRST')", "CMP PCP ('Last, First, Cred' - a PCP field, excluded by the client rule)"]
+  rule: "Parse member name fields only; never parse PCP or provider name fields."
+address_parsing:
+  rule: "Parse member address fields only (line1/line2/city/state/zip); Molina supplies both mailing and physical blocks - the analyst picks address_type per block; PCP addresses (Centene GA) are never parsed."

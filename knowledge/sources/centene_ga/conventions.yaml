@@ -1,0 +1,31 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: centene_ga
+date_formats: "All dates are YYYY-MM-DD."
+open_ended_coverage:
+  sentinel: "9999-12-31"
+  meaning: "Coverage is open. Treat as null, never as a date."
+  prevalence: "96.5% of the Medicaid roster; 54% of the Medicare roster, where the remainder mostly carry the plan-year end 2026-12-31."
+  other_sentinels: "Two Medicare rows carry 2198-12-31."
+name_handling:
+  MEMBER_NAME: "A single full-name field in FIRST LAST order. The client's cleanse rule requires it to be parsed into first and last before mapping."
+  caution: "PCP_FIRST_NAME and PCP_LAST_NAME arrive already separated and must not be parsed, per the same rule."
+identifier_conventions:
+  MEMBER_KEY: "GA plus 11 digits on the Medicaid roster; QG plus 7 or 8 digits on the Medicare roster"
+  EDW_MEMBER_CK: "Centene enterprise data warehouse surrogate key, Medicaid only"
+  MEMBER_MEDICAID_ID: "12-digit Georgia Medicaid identifier"
+  MEMBER_MEDICARE_Nbr: "11-character Medicare Beneficiary Identifier, the cross-feed Medicare identity key"
+  PCP_PROV_KEY: "Composite provider key; short on the Medicaid roster, up to 40 characters on the Medicare roster"
+flag_vocabulary: { MEMBER_ACTIVE_IND: "Y on every row", WELL_VISIT: "NO on every row, Medicare only", MEMBER_SEX: "F or M" }
+phones: "Three phone columns arrive as bare 10 digits. HOME and CELL are almost always empty on the Medicaid roster."
+known_exceptions:
+  - "63 Medicaid members carry no PCP at all, which fails the client's rule that a member must have a PCP assigned. Recorded as exception EX-002 and handled as a warning with a count, not a row-level reject."
+  - "Eligibility start and end dates have no home in the canonical enrollment model."
+  - "MEMBER_REGION is a single value and is a feed identity fact rather than a data-quality finding."
+sample_caveats:
+  - "Three MEMBER_MEDICAID_ID cells hold a four-letter token rather than an identifier, most likely the literal NULL."
+  - "The Medicaid profile report embeds chart images copied from the Centene IL and Optum GA reports; only its tables are reliable. The Medicare report's charts are its own."
+  - "The Medicaid Column Summary shows MEMBER_ADDRESS_2 as 0.0% missing where the file is 96.8% empty."
+unresolved_tokens:
+  MWOV: "Appears in both file names. Not expanded in the corpus or in public material. The Medicare roster's WELL_VISIT column being NO on every row is suggestive of a members-without-a-visit worklist but is not confirmation, and the model must not assert an expansion."

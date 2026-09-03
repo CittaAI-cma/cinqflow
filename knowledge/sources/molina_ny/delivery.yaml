@@ -1,0 +1,22 @@
+version: 1
+updated: "2026-09-03"
+kind: delivery_convention
+source_system: molina_ny
+file_naming:
+  observed: "MHI_<population>_NY_MCAID_<periodstart>_to_<periodend>_<extractdate>_<NNNofNNN>_Data_MemEnrollHist.txt"
+  example: "MHI_NYCINQ- Down - HARP_NY_MCAID_20240201_to_20260131_20260223_001of001_Data_MemEnrollHist.txt"
+  regex: "^MHI_NYCINQ[ \\-_].*_NY_MCAID_\\d{8}_to_\\d{8}_\\d{8}_\\d{3}of\\d{3}_Data_MemEnrollHist\\.txt$"
+  caution: "Population labels contain spaces and hyphens in three of the four names and neither in the fourth, so the expression must tolerate both."
+tokens:
+  MHI: "sender, Molina Healthcare Inc."
+  population: "NYCINQ- Down - HARP, NYCINQ- Down - MEDICAID, NYCINQ- Up - MEDICAID, or NYCINQUpstate_HARP"
+  NY_MCAID: "state and line of business"
+  period_start_to_end: "YYYYMMDD reporting window, which matches the Member_Month range in the data exactly"
+  extract_date: "YYYYMMDD generation date"
+  part: "NNNofNNN, part N of M. All observed deliveries are 001of001, but the convention allows multi-part."
+  Data_MemEnrollHist: "content type; the Data token implies companion control files may exist"
+business_date: { source: "file name", period: "the _to_ tokens", extract: "the third date token", corroboration: "period start and end equal the minimum and maximum Member_Month" }
+delivery: { cadence: monthly, method: sftp }
+format: { container: "pipe-delimited text", delimiter: "|", quoting: none, header: "row 1", line_terminator: CRLF, encoding: "ASCII, no BOM", trailer: none }
+arrival_archetype: restated_history
+implies: "Every delivery repeats the full period from a fixed start date. Loading it as an append duplicates member-months and inflates every denominator; loading it as a snapshot loses history."

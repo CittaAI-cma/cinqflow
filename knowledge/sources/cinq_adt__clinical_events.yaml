@@ -1,0 +1,465 @@
+version: 1
+updated: "2026-09-03"
+
+# Loader-facing feed contract. YamlKnowledgeProvider.get_source() reads this exact path;
+# ContextBuilder injects it whole at file understanding and mapping. Richer organisational
+# knowledge for this source is in sources/cinq_adt/.
+#
+# Columns, row counts, null rates and value shapes below were read from the de-identified
+# sample and its profile report, not inferred.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/2-ADT/"
+  - "docs/04_source_data_samples_and_profiles/2-ADT/ADT data for Payors Profile Report.pdf"
+
+source_system: cinq_adt
+feed: clinical_events
+domain: adt
+payer: "cross-cutting - nine payer and programme populations in one extract"
+population: RecordSource identifies the population per row
+contract: cross_cutting
+line_of_business: "mixed Medicare, Medicaid and dual"
+file_pattern: ^ADT data for Payors\.csv$
+cadence: continuous
+delivery: extract
+arrival_archetype: append_only_event_stream
+
+format:
+  container: "comma-separated values"
+  delimiter: ","
+  quoting: "minimal - used for group names and the comma-joined diagnosis list"
+  header: row 1
+  line_terminator: CRLF
+  encoding: "ASCII, no BOM"
+  trailer: none
+  null_representation: "inconsistent: empty string, the literal NULL, '.', MISSING, NA, None, and 0 used both as false and as unknown"
+
+business_date:
+  source: "columns, not the file name"
+  event_date: "EventDate = YYYY-MM-DD"
+  note: The file name carries no date token.
+
+grain: "one row per ADT event already matched to a member and enriched with care-management state"
+natural_key: [ID]
+secondary_identifiers: [OurID, MemberID, MemberMedicaidNumber, InsuranceIDPrimary]
+key_note: >
+  ID is the event record key and is unique. The business event key (MemberID, EventDate, EventType) has 30 duplicate rows, which is the expected multi-route duplication rather than a defect.
+
+# Observed in the de-identified sample (437 rows, 142 columns).
+sample_observed:
+  rows: 437
+  columns: 142
+  blank_rows: 0
+  rows_with_wrong_field_count: 0
+  literal_null_tokens: ["NULL", None]
+
+# The 142 columns as they actually arrive, in file order.
+expected_columns:
+  - ID
+  - RecordSource
+  - AdmissionDate
+  - AdmissionReason
+  - AdmitTime
+  - AdmittingPhyFirstName
+  - AdmittingPhyLastName
+  - AdmittingPhyNPI
+  - AdmitType
+  - AttendingPhyFirstName
+  - AttendingPhyLastName
+  - AttendingPhyNPI
+  - ChiefComplaint
+  - CreateDate
+  - DeathIndicatorFlag
+  - DeliveryFlag
+  - DiagnosisList
+  - DischargeDate
+  - EnrollmentDate
+  - EventDate
+  - EventType
+  - Facility
+  - GroupName
+  - HarpEligibleFlag
+  - HeadInBed
+  - HealthHomeEnrolled
+  - HealthHomesPlusEligibleFlag
+  - HealthHomeStatus
+  - InsuranceIDPrimary
+  - InsuranceIDSecondary
+  - InsuranceNamePrimary
+  - InsuranceNameSecondary
+  - LastContact
+  - MedentIDGBU
+  - MemberAddress1
+  - MemberAddress2
+  - MemberCity
+  - MemberCounty
+  - MemberDateOfBirth
+  - MemberEmail
+  - MemberFirstName
+  - MemberID
+  - MemberLastName
+  - MemberMedicaidNumber
+  - MemberPhoneNumber
+  - MemberProduct
+  - MemberRaceEthnicity
+  - MemberSex
+  - MemberState
+  - MemberZipCode
+  - PatientIdentifier
+  - Practice
+  - PregnancyFlag
+  - ProviderName
+  - QuintileRankforRAWRISKSCORE
+  - RiskCat
+  - RiskCatCRG
+  - RiskCatHCC
+  - SERVCAT01
+  - SERVCAT02
+  - TermDate
+  - Top20HCC
+  - UniqueID
+  - VisitType
+  - Discharge_Date_Expected
+  - Discharge_Date_Expected_EntryID
+  - Discharge_Date_Expected_LastEdit
+  - Discharge_Date_Actual
+  - Discharge_Date_EntryID
+  - Discharge_Date_LastEdit
+  - PHN_Contact
+  - PHN_Contact_Date
+  - PHN_Contact_EntryID
+  - PHN_Contact_LastEdit
+  - MD_Visit_Scheduled
+  - MD_Visit_Scheduled_Date
+  - MD_Visit_Scheduled_EntryID
+  - MD_Visit_Scheduled_LastEdit
+  - MD_Visit_Date
+  - MD_Visit_Date_EntryID
+  - MD_Visit_Date_LastEdit
+  - Medication_Reconcilliation
+  - Med_Recon_EntryID
+  - Med_Recon_LastEdit
+  - Transition_of_Care
+  - TOC_EntryID
+  - TOC_LastEdit
+  - Disch_Summary_Medent_Upload
+  - DISCH_EntryID
+  - DISCH_LastEdit
+  - DME_Needed
+  - DME_Needed_Date
+  - DME_Needed_EntryID
+  - DME_Needed_LastEdit
+  - DME_Ordered
+  - DME_Ordered_Date
+  - DME_Ordered_EntryID
+  - DME_Ordered_LastEdit
+  - DME_Received
+  - DME_Received_Date
+  - DME_Received_EntryID
+  - DME_Received_LastEdit
+  - SDOH_Screened
+  - SDOH_Screened_Date
+  - SDOH_Screened_EntryID
+  - SDOH_Screened_LastEdit
+  - SDOH_Needed
+  - SDOH_Needed_Date
+  - SDOH_Needed_EntryID
+  - SDOH_Needed_LastEdit
+  - SDOH_Filled
+  - SDOH_Filled_Date
+  - SDOH_Filled_EntryID
+  - SDOH_Filled_LastEdit
+  - No_Visit_Reason
+  - No_Visit_Reason_EntryID
+  - No_Visit_Reason_LastEdit
+  - PHN_Assigned
+  - DischargeDispositionCode
+  - SubmittedByID
+  - SubmittedDate
+  - CurrentFileFlag
+  - Region
+  - Business_Hours
+  - IPA
+  - OurID
+  - Clinical_Pharmacy_Program
+  - MD_Scheduled_Status
+  - MD_Visit_Status
+  - Active_RxLive
+  - Active_Vesta
+  - Readmit_30
+  - Readmit_15
+  - Readmit_7
+  - POD_Assignment
+  - Manager
+  - CC_Tracking_Flag
+  - HealthEventType_Generated
+  - HealthEventType_Selected
+  - CaseAssignment_RiskType
+  - CaseAssignment_RiskCalculation
+  - rn
+
+# Per-column facts the profiler measured. `null_pct` counts empty strings and literal
+# null tokens. `phi` marks member-identifying columns (HIPAA Safe Harbor).
+columns:
+  - { name: ID, type: int, null_pct: 0.0, distinct: 437, phi: false }
+  - { name: RecordSource, type: string, null_pct: 0.0, distinct: 9, phi: false }
+  - { name: AdmissionDate, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 25, phi: false }
+  - { name: AdmissionReason, type: string, null_pct: 77.3, distinct: 86, phi: false }
+  - { name: AdmitTime, type: date:h:MMAM/PM, null_pct: 3.9, distinct: 46, phi: false }
+  - { name: AdmittingPhyFirstName, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: AdmittingPhyLastName, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: AdmittingPhyNPI, type: int, null_pct: 77.1, distinct: 1, phi: false }
+  - { name: AdmitType, type: string, null_pct: 91.5, distinct: 2, phi: false }
+  - { name: AttendingPhyFirstName, type: string, null_pct: 52.9, distinct: 140, phi: false }
+  - { name: AttendingPhyLastName, type: string, null_pct: 52.9, distinct: 163, phi: false }
+  - { name: AttendingPhyNPI, type: int, null_pct: 38.0, distinct: 149, phi: false }
+  - { name: ChiefComplaint, type: string, null_pct: 78.7, distinct: 83, phi: false }
+  - { name: CreateDate, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 42, phi: false }
+  - { name: DeathIndicatorFlag, type: empty, null_pct: 100.0, distinct: 0, phi: true }
+  - { name: DeliveryFlag, type: int, null_pct: 91.1, distinct: 2, phi: false }
+  - { name: DiagnosisList, type: string, null_pct: 52.4, distinct: 193, phi: false }
+  - { name: DischargeDate, type: date:YYYY-MM-DD, null_pct: 15.8, distinct: 35, phi: false }
+  - { name: EnrollmentDate, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: EventDate, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 36, phi: false }
+  - { name: EventType, type: string, null_pct: 0.0, distinct: 4, phi: false }
+  - { name: Facility, type: string, null_pct: 9.2, distinct: 11, phi: false }
+  - { name: GroupName, type: string, null_pct: 0.0, distinct: 100, phi: false }
+  - { name: HarpEligibleFlag, type: string, null_pct: 99.5, distinct: 1, phi: false }
+  - { name: HeadInBed, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: HealthHomeEnrolled, type: string, null_pct: 11.2, distinct: 3, phi: false }
+  - { name: HealthHomesPlusEligibleFlag, type: int, null_pct: 68.6, distinct: 1, phi: false }
+  - { name: HealthHomeStatus, type: int, null_pct: 11.4, distinct: 2, phi: false }
+  - { name: InsuranceIDPrimary, type: string, null_pct: 1.1, distinct: 358, phi: false }
+  - { name: InsuranceIDSecondary, type: string, null_pct: 3.0, distinct: 355, phi: false }
+  - { name: InsuranceNamePrimary, type: string, null_pct: 3.0, distinct: 8, phi: false }
+  - { name: InsuranceNameSecondary, type: string, null_pct: 3.0, distinct: 6, phi: false }
+  - { name: LastContact, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: MedentIDGBU, type: int, null_pct: 99.1, distinct: 4, phi: false }
+  - { name: MemberAddress1, type: string, null_pct: 0.2, distinct: 436, phi: true }
+  - { name: MemberAddress2, type: string, null_pct: 78.3, distinct: 81, phi: true }
+  - { name: MemberCity, type: string, null_pct: 0.2, distinct: 431, phi: true }
+  - { name: MemberCounty, type: string, null_pct: 73.5, distinct: 32, phi: true }
+  - { name: MemberDateOfBirth, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 432, phi: true }
+  - { name: MemberEmail, type: string, null_pct: 32.0, distinct: 297, phi: true }
+  - { name: MemberFirstName, type: string, null_pct: 0.0, distinct: 217, phi: true }
+  - { name: MemberID, type: string, null_pct: 0.0, distinct: 362, phi: true }
+  - { name: MemberLastName, type: string, null_pct: 0.0, distinct: 311, phi: true }
+  - { name: MemberMedicaidNumber, type: string, null_pct: 0.0, distinct: 362, phi: true }
+  - { name: MemberPhoneNumber, type: string, null_pct: 5.7, distinct: 412, phi: true }
+  - { name: MemberProduct, type: string, null_pct: 57.2, distinct: 17, phi: false }
+  - { name: MemberRaceEthnicity, type: string, null_pct: 31.6, distinct: 27, phi: true }
+  - { name: MemberSex, type: string, null_pct: 2.7, distinct: 2, phi: true }
+  - { name: MemberState, type: string, null_pct: 7.3, distinct: 13, phi: false }
+  - { name: MemberZipCode, type: int, null_pct: 0.0, distinct: 406, phi: true }
+  - { name: PatientIdentifier, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Practice, type: string, null_pct: 0.0, distinct: 11, phi: false }
+  - { name: PregnancyFlag, type: int, null_pct: 33.9, distinct: 2, phi: false }
+  - { name: ProviderName, type: string, null_pct: 0.2, distinct: 383, phi: false }
+  - { name: QuintileRankforRAWRISKSCORE, type: string, null_pct: 47.1, distinct: 162, phi: false }
+  - { name: RiskCat, type: string, null_pct: 19.0, distinct: 7, phi: false }
+  - { name: RiskCatCRG, type: string, null_pct: 65.7, distinct: 51, phi: false }
+  - { name: RiskCatHCC, type: string, null_pct: 53.1, distinct: 3, phi: false }
+  - { name: SERVCAT01, type: string, null_pct: 33.0, distinct: 2, phi: false }
+  - { name: SERVCAT02, type: string, null_pct: 33.0, distinct: 3, phi: false }
+  - { name: TermDate, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Top20HCC, type: string, null_pct: 42.8, distinct: 3, phi: false }
+  - { name: UniqueID, type: empty, null_pct: 100.0, distinct: 0, phi: true }
+  - { name: VisitType, type: string, null_pct: 0.0, distinct: 4, phi: false }
+  - { name: Discharge_Date_Expected, type: date:YYYY-MM-DD, null_pct: 15.6, distinct: 35, phi: false }
+  - { name: Discharge_Date_Expected_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Discharge_Date_Expected_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Discharge_Date_Actual, type: date:YYYY-MM-DD, null_pct: 15.6, distinct: 35, phi: false }
+  - { name: Discharge_Date_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Discharge_Date_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: PHN_Contact, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: PHN_Contact_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: PHN_Contact_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: PHN_Contact_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: MD_Visit_Scheduled, type: int, null_pct: 99.8, distinct: 1, phi: false }
+  - { name: MD_Visit_Scheduled_Date, type: date:MM/DD/YYYY, null_pct: 99.8, distinct: 1, phi: false }
+  - { name: MD_Visit_Scheduled_EntryID, type: int, null_pct: 99.8, distinct: 1, phi: false }
+  - { name: MD_Visit_Scheduled_LastEdit, type: string, null_pct: 98.4, distinct: 7, phi: false }
+  - { name: MD_Visit_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: MD_Visit_Date_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: MD_Visit_Date_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Medication_Reconcilliation, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Med_Recon_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Med_Recon_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Transition_of_Care, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: TOC_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: TOC_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Disch_Summary_Medent_Upload, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DISCH_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DISCH_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Needed, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Needed_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Needed_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Needed_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Ordered, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Ordered_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Ordered_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Ordered_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Received, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Received_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Received_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: DME_Received_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Screened, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Screened_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Screened_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Screened_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Needed, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Needed_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Needed_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Needed_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Filled, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Filled_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Filled_EntryID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SDOH_Filled_LastEdit, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: No_Visit_Reason, type: string, null_pct: 98.6, distinct: 1, phi: false }
+  - { name: No_Visit_Reason_EntryID, type: int, null_pct: 98.6, distinct: 1, phi: false }
+  - { name: No_Visit_Reason_LastEdit, type: string, null_pct: 98.6, distinct: 5, phi: false }
+  - { name: PHN_Assigned, type: string, null_pct: 87.2, distinct: 7, phi: false }
+  - { name: DischargeDispositionCode, type: string, null_pct: 31.8, distinct: 54, phi: false }
+  - { name: SubmittedByID, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: SubmittedDate, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: CurrentFileFlag, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Region, type: string, null_pct: 24.5, distinct: 18, phi: false }
+  - { name: Business_Hours, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: IPA, type: string, null_pct: 31.4, distinct: 5, phi: false }
+  - { name: OurID, type: int, null_pct: 0.0, distinct: 362, phi: true }
+  - { name: Clinical_Pharmacy_Program, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: MD_Scheduled_Status, type: string, null_pct: 98.6, distinct: 1, phi: false }
+  - { name: MD_Visit_Status, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Active_RxLive, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Active_Vesta, type: int, null_pct: 97.5, distinct: 1, phi: false }
+  - { name: Readmit_30, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Readmit_15, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Readmit_7, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: POD_Assignment, type: string, null_pct: 99.1, distinct: 3, phi: false }
+  - { name: Manager, type: string, null_pct: 0.0, distinct: 387, phi: false }
+  - { name: CC_Tracking_Flag, type: int, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: HealthEventType_Generated, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: HealthEventType_Selected, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: CaseAssignment_RiskType, type: string, null_pct: 16.9, distinct: 2, phi: false }
+  - { name: CaseAssignment_RiskCalculation, type: string, null_pct: 20.6, distinct: 4, phi: false }
+  - { name: rn, type: int, null_pct: 0.0, distinct: 50, phi: false }
+
+# Always empty in the sample. Emptiness here is a layout fact, not drift (DQ-B-03 must
+# not fire on these) unless the registered contract says they were populated before.
+expected_empty_columns:
+  - AdmittingPhyFirstName
+  - AdmittingPhyLastName
+  - DeathIndicatorFlag
+  - EnrollmentDate
+  - LastContact
+  - PatientIdentifier
+  - TermDate
+  - UniqueID
+  - Discharge_Date_Expected_EntryID
+  - Discharge_Date_Expected_LastEdit
+  - Discharge_Date_EntryID
+  - Discharge_Date_LastEdit
+  - PHN_Contact
+  - PHN_Contact_Date
+  - PHN_Contact_EntryID
+  - PHN_Contact_LastEdit
+  - MD_Visit_Date
+  - MD_Visit_Date_EntryID
+  - MD_Visit_Date_LastEdit
+  - Medication_Reconcilliation
+  - Med_Recon_EntryID
+  - Med_Recon_LastEdit
+  - Transition_of_Care
+  - TOC_EntryID
+  - TOC_LastEdit
+  - Disch_Summary_Medent_Upload
+  - DISCH_EntryID
+  - DISCH_LastEdit
+  - DME_Needed
+  - DME_Needed_Date
+  - DME_Needed_EntryID
+  - DME_Needed_LastEdit
+  - DME_Ordered
+  - DME_Ordered_Date
+  - DME_Ordered_EntryID
+  - DME_Ordered_LastEdit
+  - DME_Received
+  - DME_Received_Date
+  - DME_Received_EntryID
+  - DME_Received_LastEdit
+  - SDOH_Screened
+  - SDOH_Screened_Date
+  - SDOH_Screened_EntryID
+  - SDOH_Screened_LastEdit
+  - SDOH_Needed
+  - SDOH_Needed_Date
+  - SDOH_Needed_EntryID
+  - SDOH_Needed_LastEdit
+  - SDOH_Filled
+  - SDOH_Filled_Date
+  - SDOH_Filled_EntryID
+  - SDOH_Filled_LastEdit
+  - SubmittedByID
+  - SubmittedDate
+  - Business_Hours
+  - Clinical_Pharmacy_Program
+  - MD_Visit_Status
+  - HealthEventType_Generated
+  - HealthEventType_Selected
+
+phi_columns:
+  - DeathIndicatorFlag
+  - MemberAddress1
+  - MemberAddress2
+  - MemberCity
+  - MemberCounty
+  - MemberDateOfBirth
+  - MemberEmail
+  - MemberFirstName
+  - MemberID
+  - MemberLastName
+  - MemberMedicaidNumber
+  - MemberPhoneNumber
+  - MemberRaceEthnicity
+  - MemberSex
+  - MemberZipCode
+  - UniqueID
+  - OurID
+
+# Closed-domain columns and the values observed. A value outside these is DQ-B-07.
+value_domains:
+  EventType: [Emergency_Room_Discharge, Inpatient_Admission, Observation_Discharge, Inpatient_Admission_SNF]
+  VisitType: [Care Alert Discharge ER, Care Alert Discharge Inpt, Care Alert Admit Inpt, Care Alert Discharge Observation]
+  SERVCAT01: [Outpatient, Inpatient]
+  SERVCAT02: [Emergency Room, Acute, SNF]
+  MemberSex: [Female, Male]
+  RecordSource: [ACO Fidelis, ACO Molina, AH ACOREACH, AIP ACOREACH, Centene GA, Centene IL, CINQ ACOREACH, CINQ MSSP, OPTUM NY]
+  IPA: [CINQCARE, Alignment Health, BUIPA, Proactive]
+  RiskCat: [LOW, HIGH, Critical, MISSING]
+
+formats:
+  dates: "AdmissionDate, DischargeDate, EventDate, CreateDate and the discharge date columns = YYYY-MM-DD"
+  admit_time: "AdmitTime = h:MMAM or hh:MMPM, defaulting to 12:00AM on many rows"
+  audit_timestamps: "the _LastEdit columns = YYYY-MM-DD HH:MM:SS.fff"
+  md_visit: "MD_Visit_Scheduled_Date = MM/DD/YYYY, the only US-format date in the file"
+  diagnosis: "DiagnosisList is a comma-joined list of codes and descriptions up to 1,709 characters"
+
+# De-identification artefacts in the SAMPLE ONLY. Never tune a rule or threshold on
+# these; the production feed has a different shape.
+deid_artifacts:
+  - "MemberID, MemberMedicaidNumber, PatientIdentifier, InsuranceIDPrimary and Secondary, UniqueID, MedentIDGBU, OurID, SubmittedByID, AdmittingPhyNPI and AttendingPhyNPI are hashed; member and physician names, email, phone, address, city, ZIP, Manager, Facility and Practice are faked; MemberDateOfBirth is date-faked."
+  - "The column rn is a ROW_NUMBER partitioned by RecordSource running 1 to 50, so this sample is the top 50 events per payer rather than a real delivery. Row counts here say nothing about production volume."
+  - "The profile report counts only empty strings as missing, so it reports 0.0% for columns that are entirely literal NULL."
+
+quirks:
+  - "This is an extract of CINQCARE's internal ADT and care-alert working table, already joined to member and care-management fields. It is not raw HL7 and does not match the nine-source Silver Raw encounter layout column for column."
+  - "Roughly 60 care-management workflow columns are entirely NULL in the sample; they are populated by the CINQ application, not by any ADT source."
+  - "AdmittingPhyNPI is 0 rather than null on 100 rows, and AttendingPhyNPI is 0 on 78."
+  - "DischargeDispositionCode mixes UB-04 codes with free text such as 'Home or Self Care' and 'N/A' across 54 distinct values."
+  - "Region uses inconsistent casing and vocabulary (UPSTATE, Upstate, UPSTATE NY, DOWNSTATE, Downstate, CA, IL, IN)."
+
+notes: >
+  Useful for understanding what CINQCARE's care teams actually work from, and for the identity
+  crosswalk, because it carries OurID, the payer member id and the Medicaid CIN or MBI side by
+  side. It is not the ADT ingestion contract: production ADT arrives as HL7 v2 through Mirth, as
+  the ParticleHealth API, and as Optum and Fidelis flat files, and lands in the Silver Raw
+  encounter table described in canonical/encounter.yaml.

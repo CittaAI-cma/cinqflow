@@ -1,0 +1,60 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+
+# How quality measurement actually works in a pipeline: where numerators come from, why rates
+# move for non-clinical reasons, and what must be reported alongside a rate.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/06_metric_definitions.yaml"
+  - "knowledge/value_based_care/measures.yaml"
+  - "NCQA HEDIS and CMS quality methodology documentation"
+
+gap_closure_rate:
+  definition: "Numerator-compliant members divided by the initial population less denominator exclusions, for a named measure and measurement period, per the specification version in force."
+  hard_rule: "Use the specification's own terminology and logic. A locally invented version of a HEDIS measure is not that measure and must never be labelled as one."
+  always_report: "Compliant, eligible and excluded counts, not the rate alone."
+  pitfalls:
+    - "Value sets are versioned by measurement period and must be pulled from the authoritative terminology release rather than hand-maintained."
+    - "Supplemental data eligibility rules differ by measure and by reporting method."
+    - "Continuous enrollment and anchor date rules exclude members whose absence is easy to miss."
+    - "Administrative-only calculation understates any measure whose numerator is commonly captured clinically."
+
+data_sources_for_numerators:
+  claims: "Cheap and complete for procedures that are billed, blind to results. Tells you a test was ordered, not what it showed."
+  clinical_ecds: "The only source of results such as blood pressure values and A1c levels. As measures move to ECDS-only reporting this becomes the compliance path rather than optional enrichment."
+  supplemental_feeds: "Registry, health information exchange and vendor extracts. Onboarding one produces a genuine step change in a measured rate."
+  at_cinqcare: >
+    Phase 1 carries no clinical feed, so result-based and ECDS-only measures cannot be computed
+    from the platform. Claims-based measures (readmission, admissions, follow-up) can. This
+    boundary is the single most important thing to state when someone asks for a quality number.
+
+why_rates_move:
+  order_of_investigation:
+    1: "Denominator: did an eligibility or continuous enrollment rule change, did the age window shift with the measurement period rollover, did denominator exclusions begin applying that were previously missing?"
+    2: "Numerator: did a supplemental clinical feed onboard or backfill? This is the single most common cause of a genuine step change in an ECDS-reported measure."
+    3: "Value set version: did the update add codes?"
+    4: "Mapping: did a lab feed begin mapping to LOINC where it previously failed?"
+    5: "Comparison basis: a partial current year against a complete prior year always looks worse, and correcting that mid-cycle produces an apparent jump."
+    6: "Only then, a change in care."
+  interpretation_rule: >
+    A rate that improves because you finally received data you were always entitled to is a real
+    improvement in measurement, not in care. The distinction must be stated explicitly, because
+    the two lead to opposite management actions: one says keep going, the other says the
+    intervention was never the reason.
+
+small_denominators:
+  rules:
+    - "Rates on small denominators are unstable and are reported with the denominator visible or not at all. A practice at 0% on three patients is noise presented as failure."
+    - "Cell suppression applies to any output that could re-identify an individual, and stratifying by race, ethnicity or other sensitive attributes multiplies cells and therefore risk."
+    - "The smallest cohorts are usually the highest-risk and highest-cost members, so dropping small cells systematically removes the population value-based care exists to serve. Aggregate across periods or peers to reach a stable denominator instead of excluding."
+
+governance:
+  never: >
+    Never propose changes to inclusion logic, acceptable sources or exclusions in order to
+    improve a reported rate. That generates audit exposure regardless of technical
+    defensibility. Metric logic follows the specification; only the specification owner changes
+    it, and only with a recorded rationale.
+  refusal_cases: >
+    For settlement figures, regulatory submissions and clinical worklists an unavailable answer
+    is acceptable and an approximate one is not. Elsewhere an approximation with a stated bias
+    direction is fine.

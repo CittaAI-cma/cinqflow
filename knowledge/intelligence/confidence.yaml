@@ -1,0 +1,56 @@
+version: 1
+updated: "2026-09-03"
+kind: governance
+
+# How confidence numbers are produced and read. Confidence is evidence-weighted, not
+# enthusiasm; the deterministic graphs enforce ranges and evidence presence.
+grounded_in:
+  - "backend/src/cinqflow/intelligence/prompts/recommend_mapping_v1.md"
+  - "backend/src/cinqflow/intelligence/graphs/recommend_mapping.py"
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/00_kb_manifest.yaml (confidence_semantics)"
+
+scale: "0.0 - 1.0, two decimals"
+
+bands:
+  - { name: strong,   range: [0.85, 1.00], meaning: "Governed knowledge or an approved prior decision names this exact mapping/interpretation." }
+  - { name: probable, range: [0.65, 0.85], meaning: "Glossary alias or type+name match plus consistent example values." }
+  - { name: weak,     range: [0.40, 0.65], meaning: "Name similarity only, or two plausible targets (should be status ambiguous)." }
+  - { name: none,     range: [0.00, 0.40], meaning: "No defensible evidence. Prefer status unknown with target null." }
+
+evidence_weights:
+  # What may raise confidence, strongest first. Combining evidence does not exceed 1.0.
+  approved_decision_same_feed: 0.95
+  approved_decision_same_source_family: 0.85   # e.g. Fidelis downstate decision applied to Fidelis upstate
+  glossary_term_exact: 0.85
+  glossary_alias: 0.75
+  source_definition_column_listed: 0.70        # the feed YAML expects this column
+  type_and_name_match: 0.60
+  example_values_fit_target_domain: 0.10       # additive bonus only
+  name_similarity_only: 0.45
+
+penalties:
+  target_is_pk_component_without_partner: -0.15   # e.g. address1 when address_type cannot be supplied
+  observed_values_conflict_with_target_type: -0.30
+  column_100_percent_null: -0.20
+  two_plausible_targets: "cap at 0.60 and set status ambiguous"
+  deid_artifact_column: "cap at 0.50; the sample is not the production shape (e.g. faked MBI with hyphens)"
+
+knowledge_confidence:
+  # From the VBC knowledge pack. Applies to facts, not to mappings.
+  authoritative: "Traceable to CMS, NCQA, HL7, X12, a state programme or the payer agreement. May be asserted."
+  conventional: "Standard analyst practice with no single authority. Present as 'standard practice is X'."
+  shop_specific: "True only for CINQCARE. Highest value, highest staleness risk. Never generalise."
+
+thresholds:
+  auto_prefill_mapping: 0.85      # UI pre-selects the target; analyst still approves
+  show_as_suggestion: 0.60
+  surface_as_unknown_below: 0.40
+  escalate_when_governed_and_observed_disagree: true
+
+rules:
+  - id: CF-01
+    rule: "Every claim and every field needs at least one evidence entry; no evidence, no confidence (assembler drops it)."
+  - id: CF-02
+    rule: "A governed fact contradicted by an observation is reported as a conflict with confidence on the observation, never averaged."
+  - id: CF-03
+    rule: "Volatile regulatory facts past their review_by date are surfaced as stale; confidence is not assigned to them."

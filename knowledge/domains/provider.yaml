@@ -1,0 +1,46 @@
+version: 1
+updated: "2026-09-03"
+kind: domain_knowledge
+domain: provider
+
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/04_identity_resolution.yaml"
+  - "docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx"
+  - "docs/03_data_source_schemas/reference_data/Reference_Data_Data_Model.xlsx"
+
+what_it_answers: >
+  Who delivered the care, who is accountable for the panel, and under which tax entity the
+  money moves. Provider identity is harder than member identity because a provider is several
+  things at once and all of them are effective-dated.
+
+the_five_identities:
+  individual: "NPI type 1. Does not change with employment, so an NPI alone does not tell you where someone practised on a date."
+  organisation: "NPI type 2."
+  billing_entity: "TIN. The unit of participation in MSSP and the CMS accountable care models."
+  facility: "CCN, also called the OSCAR number."
+  programme_participant: "Membership of an ACO participant list for a performance year."
+
+relationships:
+  principle: "Provider to organisation to TIN is many-to-many and effective-dated. Model person, organisation and affiliation span as three distinct concepts."
+  consequence: "Storing a single specialty or a single TIN on the provider record is the most common cause of misattributed panels, and the error is invisible in aggregate while being badly wrong per practice."
+
+at_cinqcare:
+  no_provider_feed: "There is no standalone provider feed. Provider attributes arrive inline on enrollment rosters (pcp_npi, pcp_name, tin, group name) and ADT messages (attending, admitting, PCP), and are reconciled against reference CSVs."
+  reference_tables:
+    provider_ref: "Annual SharePoint CSV, deduplicated by NPI, with a source internal id fallback when the NPI is missing."
+    facility_ref: "Deduplicated by standardised facility name or facility NPI. ETL normalises inconsistent spellings before storing."
+    D0284_PARTICIPANT_LIST: "The CMS ACO REACH participant and preferred provider list, by performance year. Only participant providers count for alignment and quality scoring; preferred providers are excluded."
+  attribution_roles:
+    roster_pcp: "The payer's attributed PCP, carried on the enrollment segment."
+    aligned_npi_tin: "The CMS-aligned individual NPI and TIN on the ACO REACH roster, sourced from the PALMR provider alignment report."
+
+analysis_semantics:
+  - "Reconcile the roster against NPPES but never let NPPES override the contract: NPPES reflects registration, the roster reflects the agreement."
+  - "A provider-supplied specialty that disagrees with NPPES keeps both values, because the disagreement is a data-quality signal about the roster."
+  - "Attribution and shared savings are computed at TIN level in MSSP, so an incorrect provider-to-TIN assignment moves patients and dollars between entities."
+  - "A facility name is a weak join key. Prefer the NPI or CCN where the source supplies one; only Garage embeds a facility NPI, and it does so inside a combined name field."
+
+known_gaps:
+  - "provider_ref has no specialty column, so specialty must come from NPPES taxonomy or the payer roster and has no governed home yet."
+  - "PCP NPI is absent from every HL7 ADT source; only the Optum and Fidelis payer files carry it."
+  - "Optum GA supplies PCP TIN as a bracketed multi-value string, so a member may have several TINs and the model holds one."

@@ -1,0 +1,77 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+
+# Cost and financial metric definitions. The vocabulary here is silently redefined more often
+# than any other in the domain, which is why each term names what it is not.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/06_metric_definitions.yaml"
+  - "docs/03_data_source_schemas/claims/claims-model-final-raw.xlsx"
+  - "NQF 1604 Total Cost of Care definition; CMS medical loss ratio regulation"
+
+amount_basis:
+  billed: "Provider list price. Analytically almost meaningless; never trend it."
+  allowed: "The contractually permitted amount. The correct basis for cost of care."
+  paid: "What the payer actually paid: allowed minus member cost share minus coordination of benefits. Plan liability, not cost of care."
+  member_cost_share: "Deductible plus copay plus coinsurance."
+  identity: "allowed = paid + member cost share"
+  rule: "State the basis on every cost figure. Trending paid amounts across a period in which benefit design changed moves cost share and therefore paid, with no change in underlying cost of care. That is the most common analytical error in the domain."
+
+metrics:
+  - id: pmpm
+    definition: "Total allowed amount for the population and period, divided by member months for the same population and period."
+    not: "Total cost divided by member count."
+    pitfalls:
+      - "Numerator and denominator must cover an identical population and period definition. This fails routinely when the numerator uses claims for anyone attributed at any point and the denominator uses only currently attributed members."
+      - "Capitated services produce encounters without dollars and must be shadow-priced or the metric understates."
+      - "Carve-outs such as behavioural health, pharmacy and dental must be explicitly in or out and labelled."
+      - "Every PMPM carries its paid-through date, because immature periods look cheap."
+    always: "Decompose into unit cost and utilisation whenever PMPM is used to draw a conclusion, because the two lead to entirely different interventions."
+
+  - id: total_cost_of_care
+    definition: "All allowed amounts for the attributed population over the performance period, normalised per member per month and compared against the programme benchmark."
+    pitfalls:
+      - "Benchmark methodology is programme-specific, so a variance computed under one programme's methodology is meaningless under another. This matters directly as ACO REACH ends after performance year 2026."
+      - "Truncation of high-cost outliers is part of most methodologies; omitting it overstates variance."
+      - "Risk adjustment applies to the benchmark, so a change in risk score changes variance with no change in spend."
+      - "The settlement view uses a defined run-out period, so in-year variance is always provisional."
+    always: "Label any in-year variance shown to a decision maker as provisional, with its run-out assumption stated."
+
+  - id: ibnr
+    definition: "An estimate of care incurred but not yet reflected in received claims, produced by applying completion factors from historical lag triangles to immature service months."
+    ownership: "Actuarial. The analyst's job is usually to supply clean triangles rather than to set reserves."
+    pitfalls:
+      - "Lag patterns differ by service category, payer and network status and must be triangulated separately."
+      - "A change in claims processing at the source shifts the entire lag curve and invalidates historical factors, which is why a sudden apparent cost change must always be checked against completion assumptions."
+      - "Completed estimates must never be blended into the same field as actual paid amounts without an explicit flag, because someone will eventually sum a column that mixes them."
+
+  - id: medical_loss_ratio
+    definition: "Medical spend divided by premium revenue."
+    regulatory: "Medicare Advantage and Part D carry a statutory minimum of 85% reported at contract level. Medicaid managed care rates must be set so plans can achieve at least 85%."
+
+  - id: claims_lag_and_completeness
+    principle: "Claims arrive over months, not days. Professional completes fastest; inpatient, skilled nursing, behavioural health and out-of-network are slowest."
+    handling_options:
+      - "Report on a closed period only, with a paid-through date at least N months after service."
+      - "Apply completion factors to estimate the mature value."
+      - "Report incurred-and-paid consistently and label it as such."
+    requirement: "Declare which of the three is in use. Every cost fact carries both a date of service and a paid-through date."
+    failure_mode: "A dashboard showing cost declining in recent months when the period is only immature."
+
+adjustment_handling:
+  principle: "Net financial position sums sign-normalised payments, and the sign comes from the adjustment type, not from the raw amount."
+  normalisation: { ORIGINAL: "+", ADJUSTMENT: "+", CANCELLATION: "-" }
+  layer_rule: "Silver Raw stores the raw amount and the derived adjustment type. Sign normalisation and net position are operational data store derivations."
+  see: "transformations/amounts.yaml and domains/claims.yaml for the CCLF and FHIR derivations."
+
+reconciliation:
+  when_two_numbers_disagree:
+    order: >
+      Decompose the difference rather than defending the number, checking in this order because
+      each explains more variance than the next: different period basis (service versus paid,
+      calendar versus performance year); different paid-through date; different population
+      (attribution version, continuity requirement, product line); different amount field;
+      different exclusions; different deduplication or version resolution of adjusted claims;
+      different reference data version; and finally a genuine data difference where one side has
+      a source the other lacks.
+    output: "An itemised bridge from their number to ours with a dollar or count on each line, not a verdict. A residual above a small threshold is an open finding, not a rounding difference."

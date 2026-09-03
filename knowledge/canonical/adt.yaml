@@ -1,0 +1,169 @@
+version: 1
+updated: "2026-09-03"
+domain: adt
+
+# GROUNDED IN, and only in:
+#   docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx        (ADT Data Model v7, sheet 02_Silver_Raw(New))
+#   docs/03_data_source_schemas/adt/ADT_SilverRaw_HL7_Mapping.xlsx   (HL7 segment provenance per column)
+#   docs/03_data_source_schemas/adt/ADT_SilverRaw_Fidelis_Mapping.xlsx
+# The ADT Silver Raw layer has ONE table, silver_raw.encounter (design decision in the model):
+# one row per ADT event per source, insert-only, no dedup, no business logic. Column names
+# are PascalCase in the client's model and are kept exactly so a Silver Raw write lands.
+# The Silver ODS encounter (snake_case, surrogate keys, is_current/is_duplicate flags) is
+# derived by the platform and is recorded under contested_fields, never as a target.
+grounded_in:
+  - "docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx"
+  - "docs/03_data_source_schemas/adt/ADT_SilverRaw_HL7_Mapping.xlsx"
+  - "docs/03_data_source_schemas/adt/ADT_SilverRaw_Fidelis_Mapping.xlsx"
+  - "docs/05_business_logic_and_domain_rules/ADT_Data_Model_Open_Items.docx"
+
+system_populated:
+  - SourceSystem
+  - SourceSystemIdType
+  - FeedName
+  - ReceivedDatetime
+  - EncounterGroupId
+  - RecordHash
+  - IsDeleted
+  - CreatedBy
+  - CreatedAt
+  - UpdatedBy
+  - UpdatedAt
+  - BatchId
+
+# The nine ADT sources the model recognises (SourceSystem values).
+source_system_values:
+  - Garage
+  - HealtheLINK
+  - HeC
+  - BronxRhio
+  - ParticleHealth
+  - PCC_IL
+  - PCC_Enterprise
+  - Optum_UM
+  - Fidelis_UM
+# HL7 mapping workbook variant labels, kept for lookup: BronxRhio, Healthix, HiBridge, HeC,
+# HealtheLINK, PCC_IL, PCC_Natl, Particle.
+
+entities:
+  - entity: encounter
+    table: encounter
+    grain: "one row per ADT event per source; all nine sources land here; insert-only, no dedup"
+    primary_key: [SourceSystemId, SourceSystem, SourceMessageId]
+    fields:
+      # A - identity and join keys
+      - { name: SourceSystemId, type: string, phi: true, means: "CINQ member identifier (cinqID / CinqID / member_id). PID-3 with assigning authority CINQ or CINQCARE. NOT NULL", hl7: "PID-3" }
+      - { name: PatientID, type: string, phi: true, means: "Source system MRN, distinct from cinqID; empty string stored as NULL", hl7: "PID-3" }
+      - { name: VisitNumber, type: string, phi: true, means: "Hospital visit number; builds encounter_group_id in ODS; NULL for Optum/Fidelis", hl7: "PV1-19" }
+      - { name: SourceMessageId, type: string, phi: false, means: "HL7 message control id; exact-duplicate detection key. Fidelis: FileName", hl7: "MSH-10" }
+      # B - event data
+      - { name: EventType, type: string, phi: false, means: "ADT trigger event as received (A01, A03, A04, A08, A11, A13 or source free text e.g. 'Inpatient Discharge'). NOT NULL", hl7: "MSH-9.2 / EVN-1" }
+      - { name: PatientClass, type: string, phi: false, means: "HL7 patient class", allowed: [I, E, O, V, R], hl7: "PV1-2" }
+      - { name: VisitTypeDesc, type: string, phi: false, means: "Free-text visit/event description kept before standardisation", hl7: "PV1-2" }
+      - { name: MessageDate, type: timestamp, phi: false, means: "When the source sent the message (MSH-7) or Mirth received it; Fidelis: FileDate. NOT NULL", hl7: "MSH-7" }
+      # C - member demographics kept for raw traceability (ODS references Enrollment)
+      - { name: LastName, type: string, phi: true, means: "Patient family name", hl7: "PID-5.1" }
+      - { name: FirstName, type: string, phi: true, means: "Patient given name", hl7: "PID-5.2" }
+      - { name: MiddleName, type: string, phi: true, means: "Middle name; NULL for all HL7 sources", hl7: "PID-5.3" }
+      - { name: DateOfBirth, type: timestamp, phi: true, means: "Date of birth cast to DATE", hl7: "PID-7" }
+      - { name: Gender, type: string, phi: true, means: "Sex as received (M/F/U); raw value stored, ODS flags conflicts", hl7: "PID-8" }
+      - { name: AddressLine1, type: string, phi: true, means: "Street address", hl7: "PID-11.1" }
+      - { name: AddressLine2, type: string, phi: true, means: "Address line 2", hl7: "PID-11.2" }
+      - { name: City, type: string, phi: true, means: "City", hl7: "PID-11.3" }
+      - { name: State, type: string, phi: false, means: "Two-letter state, upper case", hl7: "PID-11.4" }
+      - { name: ZipCode, type: string, phi: true, means: "ZIP; trailing hyphen stripped", hl7: "PID-11.5" }
+      - { name: DeathIndicator, type: string, phi: true, means: "Y/N/NULL only", hl7: "PID-30" }
+      - { name: MedicaidNumber, type: string, phi: true, means: "State Medicaid id", hl7: "IN1-35" }
+      - { name: MemberHICN, type: string, phi: true, means: "Legacy Medicare HICN; Optum only", hl7: "PID-4" }
+      # D - provider fields (raw NPI joins provider_ref in ODS)
+      - { name: AttendingNPI, type: string, phi: false, means: "Attending physician NPI where PV1-7.9 == NPI", hl7: "PV1-7" }
+      - { name: AttendingLastName, type: string, phi: false, means: "Attending physician last name", hl7: "PV1-7.2" }
+      - { name: AttendingFirstName, type: string, phi: false, means: "Attending physician first name", hl7: "PV1-7.3" }
+      - { name: AdmittingNPI, type: string, phi: false, means: "Admitting physician NPI", hl7: "PV1-17" }
+      - { name: AdmittingLastName, type: string, phi: false, means: "Admitting physician last name", hl7: "PV1-17.2" }
+      - { name: AdmittingFirstName, type: string, phi: false, means: "Admitting physician first name", hl7: "PV1-17.3" }
+      - { name: PCPName, type: string, phi: false, means: "Attributed PCP name (Optum: PCPGroupName, Fidelis: member_pcp)" }
+      - { name: PCPNPI, type: string, phi: false, means: "Attributed PCP NPI; join key to provider_ref. Only Fidelis/Optum supply it today" }
+      - { name: PCPGroupName, type: string, phi: false, means: "PCP practice/group name" }
+      - { name: PCPGroupTIN, type: string, phi: false, means: "PCP group TIN" }
+      - { name: PCPPhone, type: string, phi: false, means: "PCP phone; Optum/Fidelis only" }
+      - { name: IPAName, type: string, phi: false, means: "IPA name; HL7 sources only" }
+      - { name: Region, type: string, phi: false, means: "Geographic region; Optum only" }
+      # E - facility fields
+      - { name: FacilityName, type: string, phi: false, means: "Facility name; primary join key to facility_ref (spelling standardised by ETL)", hl7: "PV1-3 / MSH-4" }
+      - { name: FacilityNPI, type: string, phi: false, means: "Facility NPI (Garage embeds it in 'Name (NPI)'; 10 digits extracted by regex)", hl7: "MSH-4" }
+      - { name: FacilityMRN, type: string, phi: true, means: "Facility-internal MRN for the patient" }
+      - { name: FacilityID, type: string, phi: false, means: "Optum internal facility id" }
+      - { name: FacilityCounty, type: string, phi: false, means: "Facility county; Fidelis only" }
+      # F - clinical event data
+      - { name: AdmitType, type: string, phi: false, means: "Admission type (Garage admit_type, Fidelis type_of_care)", hl7: "PV1-4" }
+      - { name: AdmitSource, type: string, phi: false, means: "Admission source; Garage only", hl7: "PV1-14" }
+      - { name: AdmissionDate, type: timestamp, phi: true, means: "Admit datetime. HL7 arrives yyyyMMddHHmmss (length 8/12/14/17); Optum/Fidelis date only. NOT NULL", hl7: "PV1-44" }
+      - { name: DischargeDate, type: timestamp, phi: true, means: "Discharge datetime; NULL while admitted; Fidelis never sends discharge", hl7: "PV1-45" }
+      - { name: DischargeDispositionCode, type: string, phi: false, means: "UB-04 patient status / HL7 discharge disposition code (BronxRhio JSON key typo 'Discharge_Diposition')", hl7: "PV1-36" }
+      - { name: DischargeDispositionDesc, type: string, phi: false, means: "Discharge disposition description", hl7: "PV1-36.2" }
+      - { name: AdmissionReason, type: string, phi: true, means: "Reason for visit / admit reason", hl7: "PV2-3" }
+      - { name: ChiefComplaint, type: string, phi: true, means: "Chief complaint; HealtheLINK, ParticleHealth, PCC IL, PCC Enterprise only", hl7: "PV2-3.2 / ZEN-25" }
+      - { name: DiagnosisList, type: string, phi: true, means: "Pipe-delimited 'code desc type' list from DG1 segments, preserved as received", hl7: "DG1" }
+      - { name: Payer, type: string, phi: false, means: "Payer name (payer / Payor / PayrEntprs)", hl7: "IN1-4" }
+      - { name: LOB, type: string, phi: false, means: "Line of business (LoB / LOB / member_line_of_business)", hl7: "IN1-15" }
+      - { name: InsuranceID, type: string, phi: true, means: "Insurance member id; join key to Members_EnrollmentSegments.InsuranceID", hl7: "IN1-3" }
+      # G - UM / payer fields (Optum UM and Fidelis UM only)
+      - { name: AuthID, type: string, phi: false, means: "UM authorization reference (Optum AuthorizationReferenceNumber, Fidelis auth_id)" }
+      - { name: AuthStatus, type: string, phi: false, means: "Authorization status; Optum only" }
+      - { name: AuthLOS, type: string, phi: false, means: "Authorized length of stay" }
+      - { name: RiskStratification, type: string, phi: false, means: "Risk level (Garage direct; Optum HCELEVEL1=High, 2=Moderate, 3-5=Low)" }
+      - { name: TOCCompleted, type: string, phi: false, means: "Transition of care completed; Garage only" }
+      - { name: TransitionID, type: string, phi: false, means: "ParticleHealth transition id" }
+      - { name: VbpID, type: string, phi: false, means: "Fidelis VBP contract/population id" }
+      - { name: HealthHomeID, type: string, phi: false, means: "NY Health Home id; Fidelis only" }
+      - { name: HealthHomeName, type: string, phi: false, means: "NY Health Home name; Fidelis only" }
+      - { name: HighAlert30dReadmit, type: string, phi: false, means: "30-day readmission alert; Fidelis only" }
+      - { name: DiabeticIndicator, type: string, phi: true, means: "Diabetic flag; Fidelis only" }
+      - { name: MortalityRisk, type: string, phi: true, means: "Mortality risk level; Optum only" }
+      - { name: OahDual, type: string, phi: false, means: "Dual eligibility flag; Optum only" }
+      - { name: MarketName, type: string, phi: false, means: "Optum market name" }
+      - { name: PayrEntprs, type: string, phi: false, means: "Optum payer enterprise name" }
+      - { name: ConfinementStatus, type: string, phi: false, means: "Fidelis UM census status: DS=Discharge, AR=Admission/Readmission" }
+      - { name: PlanID, type: string, phi: false, means: "Fidelis plan id" }
+      - { name: SubGroup, type: string, phi: false, means: "Fidelis sub-group" }
+      - { name: FileName, type: string, phi: false, means: "Source file name (flat-file sources)" }
+      - { name: FileDate, type: timestamp, phi: false, means: "Source file date (flat-file sources)" }
+
+# Silver ODS columns and spreadsheet names that Silver Raw does NOT declare. Not legal targets.
+contested_fields:
+  - field: encounter_id
+    seen_in: "ADT_Data_Model_Final.xlsx sheet 03_Encounter(New)"
+    note: "ODS surrogate key."
+  - field: is_duplicate
+    seen_in: "sheet 03_Encounter(New)"
+    note: "ODS data-quality flag derived from RecordHash/SourceMessageId."
+  - field: has_conflict
+    seen_in: "sheet 03_Encounter(New)"
+    note: "ODS flag; conflicting discharge datetime for the same admission."
+  - field: is_current
+    seen_in: "sheet 03_Encounter(New)"
+    note: "ODS flag; latest event per encounter_group_id, drives encounter_current view."
+  - field: event_sequence
+    seen_in: "sheet 03_Encounter(New)"
+    note: "ODS ROW_NUMBER over encounter_group_id."
+  - field: primary_diagnosis_code
+    seen_in: "sheet 03_Encounter(New)"
+    note: "ODS derivation: first code of DiagnosisList."
+  - field: HeadInBed
+    seen_in: "legacy dbo.DailyCensus (ADT_Stats.xlsx)"
+    note: "DailyCensus is decommissioned; no home in v7."
+  - field: LocationType
+    seen_in: "sheet 02_Silver_Raw(New) encounter_location_history (Phase 2)"
+    note: "Phase 2 A02 transfer capture; schema defined, not populated."
+
+equivalences:
+  - spreadsheet_term: OurID
+    canonical_field: SourceSystemId
+    evidence: "DailyCensus.OurID -> silver_ods.encounter.cinq_id; Silver Raw carries it as SourceSystemId."
+  - spreadsheet_term: confine_status
+    canonical_field: EventType
+    evidence: "ADT_SilverRaw_Fidelis_Mapping: DS -> A03 (discharge), AR -> A01 (admission/readmission)."
+  - spreadsheet_term: Patient_status
+    canonical_field: DischargeDispositionCode
+    evidence: "UB-04 patient status code is the same code set as HL7 PV1-36 discharge disposition."

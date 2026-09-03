@@ -1,0 +1,7 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: centene_il
+feeds:
+  - { feed: member_roster_preview, domain: enrollments, status: registered, contract_file: "sources/centene_il__member_roster_preview.yaml", grain: "one row per member with plan-year-to-date counters", cadence: monthly, delivery: manual_upload, columns: 45, natural_key: ["AMISYS NUMBER"] }
+  - { feed: claims, domain: claims, cadence: monthly, sample: none, note: "Four claim types per the contract tracker; no layout in the corpus." }

@@ -1,0 +1,44 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cinqflow / requirements/core.txt
+#
+# THE ALLOWLIST FOR src/cinqflow/core/.
+#
+# Law 1 (atlas FIG 03): "core imports no vendor SDK, no URL, no path, no
+# credential." Operationally we make that sharper and therefore checkable:
+#
+#         core/ PERFORMS NO I/O.
+#
+# Nothing in this file opens a socket, a file handle, or a database connection.
+# Parsers receive bytes or a file-like object handed to them by the storage
+# adapter and return an Arrow table. That is why `import-linter` can forbid
+# sqlalchemy, psycopg, httpx, fsspec and every cloud SDK inside core/ without
+# ever needing a judgement call about what counts as a "vendor" library.
+#
+# conformance/lint_core_purity.py fails the build if core/ imports anything
+# whose top-level module is not listed here or is not part of cinqflow itself.
+# ─────────────────────────────────────────────────────────────────────────────
+
+pydantic>=2.13,<3.0            # the logical plan (IR), the connection-profile schema,
+                              # every governed object, every control-table record
+
+pyarrow>=25.0                 # THE CROSS-ENGINE RECORD CONTRACT.
+                              # Parsers return pyarrow.Table; pg-compute writes it via
+                              # COPY, databricks-compute writes it via Spark. One set of
+                              # types on both planes. (Deliberately NOT pandas — see the
+                              # proposal, "What we are not adopting".)
+
+python-calamine>=0.8        # xlsx / xls / ods reader. Rust-backed, streams, and does
+                              # not evaluate formulas — which is what makes a spreadsheet
+                              # read reproducible enough to golden-test.
+
+openpyxl>=3.1.5               # xlsx WRITER for authoring golden sets, plus cell-level
+                              # inspection when a mapping workbook has to be argued about.
+
+orjson>=3.12                  # FHIR NDJSON and HL7-derived JSON, streamed line by line.
+
+jinja2>=3.1.6                 # prompt assembly templates. Prompts are registry objects
+                              # (CF-V0-E16-02); an inline prompt string is a defect class,
+                              # so the template engine belongs in core beside the registry.
+
+python-dateutil>=2.9          # the date normalizer: 19900101 and 01/01/1990 are the same
+                              # date, and that has to be true identically on both planes.

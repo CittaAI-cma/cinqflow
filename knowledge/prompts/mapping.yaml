@@ -1,0 +1,43 @@
+version: 1
+updated: "2026-09-03"
+kind: prompt_spec
+prompt: recommend_mapping
+prompt_version: 1
+screen: mapping
+
+purpose: >
+  Propose source-to-canonical field mappings for analyst review. Every legal target comes
+  from the canonical model; exemplars come from approved decisions; the model never invents
+  a target and covers every column exactly once.
+
+inputs:
+  observations: "Bronze facts: column names, inferred types, null/distinct counts, bounded example values, candidate keys."
+  context:
+    canonical:  "canonical/<domain>.yaml trimmed to table.field, type, means + system_populated + contested_fields"
+    source:     "sources/<source_system>__<feed>.yaml"
+    glossary:   "glossary.yaml terms matching observed columns (maps_toward / canonical_target: none)"
+    history:    "mappings/approved/*.yaml decision_sets for the domain (exemplars)"
+    # Planned additions:
+    patterns:   "mappings/patterns.yaml reusable patterns"
+    transforms: "transformations/standard.yaml closed vocabulary; dates.yaml formats"
+
+context_flow: "bronze observations + source schema + canonical model + glossary + approved mappings + transformation rules -> recommend_mapping@1 -> LangGraph -> MappingProposal"
+
+output_contract:
+  fields: "source, target|null, transform?, confidence, evidence[], status candidate|ambiguous|unknown"
+  notes: "mapping-level observations: canonical gaps, PK components missing, constants required"
+
+rules_in_priority_order:
+  1: "Never invent a target."
+  2: "Cover every observed column exactly once."
+  3: "ambiguous when two or more targets are plausible; name alternatives in evidence."
+  4: "Every field needs evidence."
+  5: "Transform only when values require it; only closed-vocabulary ops."
+  6: "Confidence follows evidence strength (see intelligence/confidence.yaml)."
+  7: "Say in notes when the model has no home for something the feed carries."
+
+post_validation_by_code:
+  - "target must be in legal_targets else status invalid with rejected_target recorded"
+  - "cast compatible with declared type (CAST_FOR_TYPE)"
+  - "duplicate source or duplicate target refused"
+  - "confidence range 0-1 and evidence non-empty enforced"

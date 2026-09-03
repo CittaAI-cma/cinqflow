@@ -1,0 +1,364 @@
+file: 03_medallion_layer_contracts.yaml
+purpose: >
+  The contract at each layer boundary and the judgement an analyst applies to decide whether data
+  crosses it. This is the spine of the agent: every promotion is a decision with a rationale.
+
+layer_sequence: [landing, bronze, silver, identity, silver_ods]
+
+nodes:
+
+  # ---------------------------------------------------------------- LANDING
+  - id: KB-LND-001
+    title: "What Landing is for and what it must never do"
+    kind: contract
+    layer: landing
+    confidence: conventional
+    volatile: false
+    body: >
+      Landing is the byte-faithful, immutable arrival zone. The file as received, unparsed,
+      partitioned by source and receipt date, with a manifest recording filename, size, checksum,
+      row count, receipt timestamp, and sender-declared control totals. Nothing is renamed,
+      decoded, deduplicated, or repaired in Landing. The reason is legal as much as technical:
+      in a regulated VBHC setting you will eventually be asked to prove what CMS or a payer
+      actually sent you on a given date, and any transformation applied before capture destroys
+      that proof. The corollary is that Landing failures are delivery failures, not data
+      failures — the only valid Landing rejections are file-level: unreadable, failed decryption,
+      failed checksum, zero bytes, or wrong sender.
+    depends_on: []
+
+  - id: KB-LND-002
+    title: "Landing decision: is this delivery complete and expected?"
+    kind: decision_rule
+    layer: landing
+    decision_type: promote
+    confidence: conventional
+    volatile: false
+    body: |
+      The analyst asks five questions before a file is allowed to be parsed. The agent should
+      answer all five and refuse promotion on any failure.
+        1. Expected? Does a delivery contract exist for this sender, feed, and cadence? An
+           unexpected file is a security event, not a data opportunity.
+        2. Sequenced? Is the cycle number or period contiguous with the last accepted file? A
+           gap means a missing month, and a missing CCLF month is invisible downstream because
+           the data simply looks like a quiet period.
+        3. Whole? Does the row count and checksum match the manifest or trailer control record?
+        4. Plausible in volume? Is row count within the historical band for this feed and month?
+           A 40% drop with a valid checksum is a valid file containing a partial extract — the
+           most dangerous case, because every automated check passes.
+        5. Fresh? Did it arrive within the SLA window? Late arrival changes what the analyst can
+           claim about the current reporting period.
+      Volume plausibility must be seasonally aware: February is short, and CCLF annual baselines
+      are legitimately enormous.
+    depends_on: [KB-LND-001, KB-SRC-008]
+
+  # ---------------------------------------------------------------- BRONZE
+  - id: KB-BRZ-001
+    title: "What Bronze is for: structured, still faithful"
+    kind: contract
+    layer: bronze
+    confidence: conventional
+    volatile: false
+    body: >
+      Bronze is the parsed, typed, schema-applied representation of exactly what arrived, one
+      table per source object, with full history. Permitted: parsing delimited or NDJSON or EDI
+      structures into columns, applying declared data types with a lossless fallback (a bad date
+      becomes null plus a preserved raw string, never a dropped row), adding technical metadata
+      (source file id, ingest timestamp, row hash, batch id), and appending. Forbidden:
+      deduplication, business filtering, code normalisation, joins across sources, and any
+      correction of source values. Bronze answers "what did they send us?" for any past date.
+      If Bronze cannot reproduce a prior report's inputs, the platform has no audit story, and in
+      VBHC the audit story is the product.
+    depends_on: [KB-LND-001]
+
+  - id: KB-BRZ-002
+    title: "Bronze decision: reject, quarantine, or accept-with-flag?"
+    kind: decision_rule
+    layer: bronze
+    decision_type: quarantine
+    confidence: conventional
+    volatile: false
+    body: |
+      The analyst's instinct is that data is evidence, so almost nothing should be thrown away.
+      Three outcomes only:
+        Reject the batch (rare) — the file is structurally unparseable or is the wrong file.
+          Reject at batch level, never at row level, and never silently.
+        Quarantine the row — the row cannot be typed or is missing a field required to identify
+          what it even is (no claim id, no member identifier of any kind). Quarantine means
+          stored, visible, counted, and re-processable, not deleted. Quarantine volume is itself
+          a monitored metric; a quarantine rate that doubles is a schema drift signal.
+        Accept with flag (the default) — anything else. A bad ZIP, an impossible date of birth,
+          a negative amount: land it, flag it, and let Silver decide. Analysts need to see bad
+          data to explain it; engineers who filter it in Bronze make anomalies undebuggable.
+      The bias must be explicit because it is counterintuitive to engineers: in this domain,
+      silently dropping 200 rows is worse than passing 200 flagged rows forward.
+    depends_on: [KB-BRZ-001]
+
+  - id: KB-BRZ-003
+    title: "Schema drift in Bronze: what it means clinically"
+    kind: failure_mode
+    layer: bronze
+    decision_type: escalate
+    confidence: conventional
+    volatile: false
+    body: >
+      Schema drift is not a structural nuisance; each shape has a clinical or financial meaning
+      the agent must state. A new column appearing usually means the payer or CMS added a data
+      element on a regulatory calendar, and is often something you are entitled to use.
+      A column disappearing or going fully null is the highest-severity case, because downstream
+      logic quietly evaluates to false rather than erroring — the classic instance is a
+      discharge disposition or a supplemental data flag going null and readmission or gap-closure
+      rates improving overnight. A widening data type suggests the source added a code set. A
+      cardinality change in a coded column (new values appearing in a field with a known domain)
+      means a code set version changed and every mapping table referencing it is now incomplete.
+      Rule for the agent: on any drift, do not merely report the structural change. Retrieve
+      which Silver models and which published metrics consume the affected column and report the
+      metric-level blast radius in the same message.
+    depends_on: [KB-BRZ-001, KB-ONT-012]
+
+  - id: KB-BRZ-004
+    title: "Late-arriving and restated records in Bronze"
+    kind: decision_rule
+    layer: bronze
+    decision_type: interpret
+    confidence: authoritative
+    volatile: false
+    body: >
+      Claims are restated constantly: adjustments, voids, replacements, and reversals. In Bronze
+      each version is a separate row with its own receipt lineage, and the version marker
+      (adjustment indicator, claim control number sequence, or row hash change for
+      correction-in-place sources) is preserved verbatim. Never resolve versions in Bronze. The
+      analyst reason: the difference between the original and adjusted amount is itself an
+      analytic asset, used to estimate reserve adequacy and to detect payer behaviour changes,
+      and it is destroyed by a Bronze-level upsert. A practical consequence for the agent: any
+      count of "claims" sourced from Bronze is a count of claim versions, not claims, and this
+      must be stated whenever a Bronze count is surfaced to a human.
+    depends_on: [KB-SRC-008, KB-ONT-011]
+
+  # ---------------------------------------------------------------- SILVER
+  - id: KB-SIL-001
+    title: "What Silver is for: conformed, cleansed, still source-shaped"
+    kind: contract
+    layer: silver
+    confidence: conventional
+    volatile: false
+    body: >
+      Silver is where data becomes usable without yet becoming an answer. Deduplication to a
+      defined grain, version resolution (current view of each claim), type and code
+      normalisation, standard reference conformance, unit harmonisation, span construction from
+      events, and referential integrity checks all happen here. Silver is organised around source
+      domains (claims, enrollment, clinical, pharmacy, provider) rather than around business
+      questions. The critical discipline: every cleansing action must be reversible in the sense
+      that the Bronze row it came from is identifiable, and must be attributable to a named rule
+      with a version. "We cleaned it" is not an acceptable lineage entry in a regulated pipeline.
+    depends_on: [KB-BRZ-001]
+
+  - id: KB-SIL-002
+    title: "Silver decision: what grain is this table, and can I prove it?"
+    kind: decision_rule
+    layer: silver
+    decision_type: define
+    confidence: conventional
+    volatile: false
+    body: >
+      Every Silver table declares its grain as an enforced uniqueness constraint, not a comment.
+      Getting this wrong is the most expensive error in the pipeline because it produces numbers
+      that are plausible but inflated, and inflation of a cost metric by duplication is
+      indistinguishable from real cost growth without lineage. Standard grains: claim header is
+      one row per claim per adjudication version resolved to current; claim line is claim id plus
+      line number; enrollment is member plus plan plus contiguous span; ADT stay is facility plus
+      encounter plus admit datetime. When a natural key is genuinely unavailable, the agent must
+      escalate rather than invent a composite key — an invented key that later collides silently
+      corrupts every downstream aggregate.
+    depends_on: [KB-SIL-001, KB-ONT-002]
+
+  - id: KB-SIL-003
+    title: "Deduplication rules and why they differ by source"
+    kind: decision_rule
+    layer: silver
+    decision_type: reconcile
+    confidence: conventional
+    volatile: false
+    body: |
+      There is no universal dedup rule; there is a rule per source and each must be recorded.
+        Claims: resolve by claim control number plus adjustment sequence, keeping the latest
+          non-voided version. A void with no replacement means the service did not happen for
+          financial purposes and must be excluded, not kept at zero.
+        ADT: dedup by facility plus message control id, but the same clinical event legitimately
+          arrives from multiple routes with different control ids, so a secondary rule on
+          facility plus patient plus event type plus event datetime within a tolerance window is
+          required. The tolerance window is a governed constant.
+        Pharmacy: a reversal negates the original fill; net to zero rather than deleting, so
+          reversal rate remains observable.
+        Clinical observations: a corrected result supersedes a final result supersedes a
+          preliminary result for the same observation identity.
+      Every dedup rule must emit a count of what it collapsed. An unexplained change in collapse
+      rate is a leading indicator of a source-side change and is often the earliest warning
+      available.
+    depends_on: [KB-SIL-002]
+
+  - id: KB-SIL-004
+    title: "Silver decision: normalise or preserve?"
+    kind: heuristic
+    layer: silver
+    decision_type: interpret
+    confidence: conventional
+    volatile: false
+    body: >
+      The test is whether the variation carries information. Normalise where variation is
+      representational: ICD-10 with and without decimals, 10 versus 11 digit NDCs, date formats,
+      case and whitespace in identifiers, gender and race coding to a single standard. Preserve
+      where variation is semantic: a local lab code that has no LOINC mapping must keep its local
+      value alongside the mapping attempt, because the failure to map is a finding; a
+      provider-supplied specialty that disagrees with NPPES must keep both, because the
+      disagreement is a data quality signal about the roster. General rule the agent should
+      apply: normalisation that is one-to-one and reversible is safe; normalisation that is
+      many-to-one is a modelling decision requiring an owner and a recorded rationale, because it
+      destroys information that someone will eventually need.
+    depends_on: [KB-SIL-001]
+
+  - id: KB-SIL-005
+    title: "Silver promotion gate"
+    kind: contract
+    layer: silver
+    decision_type: promote
+    confidence: conventional
+    volatile: false
+    body: |
+      A Silver table may be published for the cycle only when all of the following hold:
+        - grain uniqueness passes with zero violations (hard block)
+        - row count reconciles to Bronze: accepted + quarantined + deduplicated = Bronze arrival
+        - referential integrity checked against the identity spine, with orphan rate inside
+          threshold (orphans are retained and counted, never dropped)
+        - null rates on business-critical columns inside their control bands
+        - code set conformance rate inside band, with unmapped values enumerated not discarded
+        - period completeness: no gap in the service-date distribution versus expectation
+        - every applied rule has a version recorded in the run manifest
+      A single hard-block failure fails the cycle for that table; soft failures publish with a
+      quality flag that must propagate to every downstream consumer and appear on any dashboard
+      built from it. Silent degradation is the failure mode this gate exists to prevent.
+    depends_on: [KB-SIL-002, KB-SIL-003]
+
+  # ---------------------------------------------------------------- IDENTITY
+  - id: KB-IDN-000
+    title: "Why Identity is its own layer between Silver and Silver ODS"
+    kind: contract
+    layer: identity
+    confidence: conventional
+    volatile: false
+    body: >
+      Identity sits after conformance and before integration because integration is impossible
+      without it and unsafe before it. Once sources are individually clean, but before they are
+      combined into a subject-oriented store, the platform must decide who is the same person and
+      which provider is the same provider. Placing identity earlier means matching on dirty
+      values; placing it later means every integrated table re-implements matching, inconsistently.
+      The layer's output is a set of immutable surrogate keys plus versioned crosswalks from every
+      source identifier to those keys, with match evidence attached. Everything downstream joins
+      on the surrogate key and never on an external identifier. Full detail in
+      04_identity_resolution.yaml.
+    depends_on: [KB-SIL-005, KB-ONT-009]
+
+  # ---------------------------------------------------------------- SILVER ODS
+  - id: KB-ODS-001
+    title: "What Silver ODS is: the integrated operational truth"
+    kind: contract
+    layer: silver_ods
+    confidence: conventional
+    volatile: false
+    body: >
+      The Silver Operational Data Store is the cross-source, identity-resolved, subject-oriented
+      layer: one member, one provider, one longitudinal record, current and queryable. It is
+      operational rather than analytical in emphasis — it serves care management, gap closure
+      worklists, and point-of-care questions that need current state and low latency, and it is
+      the single upstream source for the analytical Gold layer. It is where the platform first
+      asserts anything that is not directly traceable to a single source row: a member's current
+      coverage across payers, a unified encounter timeline combining claims and ADT, an active
+      condition list, a current attribution assignment. Every such assertion is a business rule
+      with an owner.
+    depends_on: [KB-IDN-000]
+
+  - id: KB-ODS-002
+    title: "Silver ODS decision: current state versus history"
+    kind: decision_rule
+    layer: silver_ods
+    decision_type: define
+    confidence: conventional
+    volatile: false
+    body: >
+      The ODS must serve "who is enrolled today" fast while remaining able to answer "who was
+      enrolled on 14 March". Resolve by modelling every non-static attribute as an effective-dated
+      span with a current-flag, never by keeping only the latest value. The three attributes where
+      losing history is unrecoverable and audit-relevant are enrollment, attribution, and
+      provider-TIN affiliation, because all three determine financial accountability retroactively.
+      A practical rule the agent should enforce: if a column would need to be answered differently
+      for a settlement recomputation than for a care-management screen, it is a span, not a value.
+      Bitemporality (valid time plus the time the platform learned it) is required wherever a
+      restatement can change a previously published number.
+    depends_on: [KB-ODS-001, KB-ONT-003]
+
+  - id: KB-ODS-003
+    title: "Silver ODS decision: reconciling disagreeing sources"
+    kind: decision_rule
+    layer: silver_ods
+    decision_type: reconcile
+    confidence: conventional
+    volatile: false
+    body: |
+      When two sources assert different facts about the same subject, the ODS needs a recorded
+      precedence rule per attribute — not per source. Common analyst precedence:
+        eligibility and coverage     -> payer enrollment file (834 / Coverage) over any clinical
+                                        or roster source; the payer defines who is covered.
+        demographics (DOB, sex)      -> most recently updated among authoritative sources;
+                                        for Medicare, CMS beneficiary file over provider records.
+        date and fact of an encounter-> ADT for timeliness, claims for financial truth. Keep both
+                                        and label; do not overwrite one with the other.
+        clinical result values       -> the performing source, with corrected superseding final.
+        provider specialty / panel   -> contracted roster over NPPES.
+        diagnosis for risk purposes  -> only acceptable-source encounters, regardless of what
+                                        other sources assert.
+      Where precedence cannot be justified, the correct ODS design is to store both with
+      provenance and let the consuming metric choose. Silent survivorship is the mechanism by
+      which a platform loses analyst trust permanently — one visible wrong merge outweighs a
+      year of correct ones.
+    depends_on: [KB-ODS-001]
+
+  - id: KB-ODS-004
+    title: "Silver ODS promotion gate"
+    kind: contract
+    layer: silver_ods
+    decision_type: promote
+    confidence: conventional
+    volatile: false
+    body: |
+      Cross-source assertions carry more risk than single-source ones, so the gate is population
+      level rather than row level:
+        - member count change versus prior cycle within threshold, decomposed into new, ended,
+          merged, and split rather than reported as a net number
+        - member month totals reconcile to the enrollment source within tolerance
+        - attribution roster count reconciles to the programme-supplied roster exactly where one
+          is supplied; any difference is escalated, never absorbed
+        - unmatched rate (records with no identity resolution) inside band and trending flat
+        - claim dollar totals by month reconcile to Silver within tolerance, with paid-through
+          date carried forward
+        - no member holds overlapping spans of the same coverage type
+        - orphan clinical events (no resolvable member) counted and inside band
+      Every one of these is a count an analyst would check by hand before trusting a new load;
+      the agent's contribution is doing it every cycle instead of when someone remembers.
+    depends_on: [KB-ODS-002, KB-ODS-003]
+
+  - id: KB-XLR-001
+    title: "The universal promotion question"
+    kind: heuristic
+    layer: cross
+    decision_type: promote
+    confidence: conventional
+    volatile: false
+    body: >
+      Across every boundary the analyst asks the same thing in different words: if I publish this
+      and someone builds a decision on it, what is the worst thing that is now true and invisible?
+      The agent should generate that answer explicitly before any promotion, name the metric or
+      workflow that would be affected, and state whether the failure would be loud (a job breaks,
+      someone notices) or silent (a number shifts, nobody notices). Loud failures are cheap and
+      may be accepted. Silent failures affecting a settlement metric, a quality submission, or a
+      care-management worklist are never auto-promoted regardless of how small the affected volume
+      appears, because in VBHC the small population is usually the high-risk one.
+    depends_on: []

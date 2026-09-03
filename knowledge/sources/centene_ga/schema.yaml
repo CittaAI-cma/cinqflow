@@ -1,0 +1,25 @@
+version: 1
+updated: "2026-09-03"
+kind: schema_pointer
+source_system: centene_ga
+contract_files:
+  medicaid_mwov_members: "sources/centene_ga__medicaid_mwov_members.yaml"
+  medicare_mwov_members: "sources/centene_ga__medicare_mwov_members.yaml"
+field_semantics:
+  shared:
+    LOB: "MEDICAID or MEDICARE. One distinct value per file, so it identifies the roster rather than varying by member."
+    MEMBER_KEY: "Centene member identifier and the natural key."
+    MEMBER_NAME: "Single full-name field requiring parsing."
+    MEMBER_ELIG_START_DT: "Eligibility start. On the Medicare roster this is mostly the plan-year start rather than a true coverage start."
+    MEMBER_ELIG_END_DT: "Eligibility end, with 9999-12-31 meaning open."
+    MEMBER_ACTIVE_IND: "The payer's active flag as at the extract date. Not a coverage period."
+    MEMBER_REGION: "Centene service region, ATLANTA throughout."
+    PCP_IRS_NBR: "Tax identification number of the attributed PCP's billing entity."
+    PCP_IRS_NAME: "Billing entity name, which maps to the canonical member group."
+    PCP_PROV_KEY: "Centene internal provider key, distinct from the NPI."
+  medicaid_only:
+    EDW_MEMBER_CK: "Centene enterprise warehouse surrogate key."
+    MEMBER_MEDICAID_ID: "Georgia Medicaid identifier, the state identity key."
+  medicare_only:
+    MEMBER_MEDICARE_Nbr: "Medicare Beneficiary Identifier."
+    WELL_VISIT: "Wellness visit indicator, NO on every row in the sample."

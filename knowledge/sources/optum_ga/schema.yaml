@@ -1,0 +1,25 @@
+version: 1
+updated: "2026-09-03"
+kind: schema_pointer
+source_system: optum_ga
+contract_file: "sources/optum_ga__housecalls_roster.yaml"
+field_semantics:
+  identity:
+    Member_Client_ID: "Optum client member identifier and the natural key. MBI-shaped."
+    MBI: "Medicare Beneficiary Identifier."
+    Subscriber_ID: "Nine-digit subscriber number."
+    Household_Ref: "Groups members in the same household. Populated for 15.5% of rows."
+  plan:
+    Plan_Name: "The UnitedHealthcare Medicare Advantage or D-SNP plan, such as UHC Dual Complete GA-S1 (PPO D-SNP)."
+    Insured_Plan_Effective_Date: "Plan coverage start."
+    Insured_Plan_Termination_Date: "Plan coverage end, usually the open sentinel."
+  outreach:
+    Current_Status: "Where the outreach attempt stands."
+    Current_SubStatus: "Why it stands there."
+    Last_Attempted_Date: "Most recent contact attempt."
+    Slot_Start_Date: "Scheduled assessment appointment, present for 2.4% of rows."
+    Visit_Type: "In Person or Video."
+    DNC_IND: "Do not contact."
+  attribution:
+    PCP_NPI: "Attributed PCP, absent for most members."
+    PCP_TIN: "Bracketed multi-value tax identification numbers."

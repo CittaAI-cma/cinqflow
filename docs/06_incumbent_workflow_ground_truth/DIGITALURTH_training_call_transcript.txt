@@ -1,0 +1,403 @@
+[00:04] MONICA: So, for this, so what do you call? UI, this doesn't work in the other places, I think.
+[00:13] FATHULLAH: For me, it's working here.
+[00:15] MONICA: Oh, it's for you talking? Why is it not working for me?
+[00:16] FATHULLAH: Yeah.
+[00:21] MONICA: Let me try. Once, if it works for me.
+[00:27] FATHULLAH: But still, you are in video, right?
+[00:29] MONICA: Yeah, yeah, yeah, so I want to cheque it out. Oh, it's working. Wow, then I don't have to use this.
+[00:40] FATHULLAH: It's slow in VDI.
+[00:42] MONICA: Yeah, it's very slow in video. Sometimes it's very irritating also.
+[00:46] FATHULLAH: Yeah. Save it so it will always be there, yeah.
+[01:01] MONICA: So for an example, sorry.
+[01:05] FATHULLAH: English.
+[01:06] MONICA: So you just have to go to pipelines and you just have to click on ignition, okay?
+[01:08] FATHULLAH: Okay. OK.
+[01:11] MONICA: Here, after that, you can click on this add injection.
+[01:15] FATHULLAH: Mhm.
+[01:15] MONICA: You can select all your projects, or whatever you have, or like the project is same, the project, or it is, ohh, sorry, for now we are the environment itself, the production which they change start
+[01:25] FATHULLAH: Bender. Mm-hmm.
+[01:29] MONICA: right, so it's still only the environment, and you can select your.
+[01:34] FATHULLAH: Mmh.
+[01:35] MONICA: domain normally I do with ADPs, right? And group name,
+[01:37] FATHULLAH: Reddy team.
+[01:38] MONICA: it's basically whatever you give it over here, enrollment, MSSP, roster, everything is there over here, right? It's like that.
+[01:45] FATHULLAH: Okay.
+[01:47] MONICA: So I'll show you one of my examples. Okay, here is parallel list. I'll show you how it is.
+[01:52] FATHULLAH: Okay.
+[01:55] MONICA: Ashwin. So, for Federalist, normally this is how we give it, like, you know, give some description. Mine is like only CSV file, like that's only single file, right? It's not a multi-file,
+[02:05] FATHULLAH: Okay.
+[02:07] MONICA: so I didn't even click on the multi-file injection.
+[02:09] FATHULLAH: Mhm.
+[02:11] MONICA: And normally we have these nodes, but the single node V2 version 2 is like basically it is on the lease kind of programming happening over here. So while the cluster is running for the other programmes, it's kind of like,
+[02:22] FATHULLAH: Okay.
+[02:26] MONICA: you know, it gives a cluster to us on a lease kind of thing. So, you know, you the cluster doesn't have to spin all
+[02:30] FATHULLAH: Okay.
+[02:32] MONICA: over again, so normally we see that people, if you see like Vinay or Bhargavi, we keep saying, like, you know, the cluster is like spinning off, it's taking a lot of time over there,
+[02:40] FATHULLAH: Yes.
+[02:41] MONICA: so basically this will what happened is like the first cluster, the first time when the cluster is trying to run, it might take like 5 minutes or something.
+[02:49] FATHULLAH: Okay.
+[02:49] MONICA: But later, it's going to be like one, like 25 seconds or 30 seconds, and that will be done. Basically, this is useful for ADT because for every 15 minutes, the file will be coming and it has to spin, right? So for that, we are using this one.
+[03:01] FATHULLAH: Yep.
+[03:03] MONICA: And this is like file to DB, like, you know, from our landing zone to the DB mission.
+[03:09] FATHULLAH: Okay.
+[03:09] MONICA: And the flow template is constant. Databricks validate our flow,
+[03:12] FATHULLAH: Mhm.
+[03:13] MONICA: and source connexion is basically where our file is at. It's in block storage,
+[03:17] FATHULLAH: Landing.
+[03:19] MONICA: yeah, landing zone, and the target is in a sync there. So, for ODS, what happens is like we go to advance over here.
+[03:28] FATHULLAH: Mmh.
+[03:28] MONICA: So we have this bronze to silver roll, landing to bronze and everything, right?
+[03:33] FATHULLAH: Yes.
+[03:33] MONICA: So what we do is like for silver roll to silver roll, instead of auto generate later, we use like use static pipeline. And here,
+[03:40] FATHULLAH: Okay.
+[03:42] MONICA: normally we import a pipeline file, like let me show you one.
+[03:47] FATHULLAH: So for example, like, you know, now there is a break from bronze to silver raw. We are not feeding something to silver raw to audience, but once everything in production, right, if I push something from landing, it would go to raw raw to audience.
+[04:00] MONICA: Yeah.
+[04:01] FATHULLAH: But we have to choose the option there in the pipeline or what pipelines we are doing.
+[04:06] MONICA: No, no, so basically that will be already selected. So, once in production, when you send it,
+[04:09] FATHULLAH: Okay.
+[04:11] MONICA: you do this all one time thing, right? So, one time, once you do that,
+[04:13] FATHULLAH: Okay.
+[04:16] MONICA: and every time you run the flow tag, it keeps this all all these three layers will be happening, so landing to bronze, bronze to silver draw, silver to silver, yes. So, this will be half.
+[04:26] FATHULLAH: And this one more thing, right? Or is to gold.
+[04:29] MONICA: Audience to go and I'm not sure. I think they're working on that for once
+[04:33] FATHULLAH: Okay.
+[04:33] MONICA: the goal layer is fixed on something, then we'll be might be having a goal layer over here also.
+[04:39] FATHULLAH: So you're using a scripted static pipeline node what they're given.
+[04:44] MONICA: So we write in some script like this. I think Bhargavi gave me a script before.
+[04:49] FATHULLAH: Mhm.
+[04:49] MONICA: Not sure where script over in this 69. So it might be somewhere.
+[04:52] FATHULLAH: Mm.
+[04:54] MONICA: So we import that and we select that pipeline. So it automatically gets like these three will be selected. Okay. So after this,
+[04:57] FATHULLAH: Okay. Okay.
+[05:02] MONICA: you just click on update and it will take you over here like. Here, normally when you open it, it asks you for the location, like where exactly is the location and everything. So,
+[05:11] FATHULLAH: Okay.
+[05:15] MONICA: what you do at that point is like you go to the Azure Blob Azure storage, right?
+[05:19] FATHULLAH: Okay.
+[05:21] MONICA: Blob storage, so... Yeah, you can. OK, well.
+[05:33] FATHULLAH: This shows that you are not working if it's asking code.
+[05:37] MONICA: No.
+[05:38] FATHULLAH: You're not logging into Azure every day.
+[05:41] MONICA: Yeah, I don't need Azure, right? So...
+[05:44] FATHULLAH: Yeah.
+[05:46] MONICA: I was working on this seeding and everything, so I need an open Azure. So here in the BLOB.
+[05:55] FATHULLAH: Bernie.
+[05:56] MONICA: In the landing, I normally go to the, I work on it, so over here, sorry. I created a file called batch over here to have every 15 minutes the file should be coming here and that file will be processing over there. So normally when you have that file, something file like that,
+[06:13] FATHULLAH: Okay.
+[06:17] MONICA: so you go to here and click on the properties and you have this, right? A.D.T. Federalist, and this is the filing, so tell.
+[06:24] FATHULLAH: Okay.
+[06:26] MONICA: Before the file name, whatever you have, you select that that is your location, basically, so when you when you select that and...
+[06:31] FATHULLAH: Okay.
+[06:36] MONICA: Like I said, there will be a dialogue box over here to attach the location and everything. So when you attach the location over
+[06:40] FATHULLAH: Mm-hmm.
+[06:45] MONICA: there and click on OK or something like that, so it will show you what all files are there in that location. So in that,
+[06:52] FATHULLAH: Okay.
+[06:53] MONICA: you have to select what file you're working on or something like that. After you select that, you have an option called actions over
+[07:02] FATHULLAH: Mm.
+[07:02] MONICA: here and it says edit, sorry, no, no. So, configure.
+[07:10] FATHULLAH: Okay, okay.
+[07:12] MONICA: Okay, here, so basically you have to just cheque yourself if the file type is Excel or CSV. Mine was like Federalist was Excel, so I put it as Excel and has header yes and everything and these all items you
+[07:22] FATHULLAH: Mhm.
+[07:24] MONICA: have to cheque it once. the file name and everything and the file name regular expression. Basically,
+[07:29] FATHULLAH: Okay.
+[07:32] MONICA: it's like we are going to do for multiple files. It's just that the date might be different or they might have something
+[07:37] FATHULLAH: Yes.
+[07:40] MONICA: like only month or something like that. Here for me, it's basically sync upstate and down. For me,
+[07:44] FATHULLAH: Yes.
+[07:47] MONICA: these both upstate and downstate are coming in the same. folder. So I have an expression which works for
+[07:52] FATHULLAH: Yes.
+[07:53] MONICA: both upstream and downstream and the last digits are like for the date and everything. So even if you don't know how to create
+[07:59] FATHULLAH: Okay.
+[08:00] MONICA: the regular expression, I think you can click on the generate a regular expression. It will suggest you according to your file name.
+[08:07] FATHULLAH: Okay.
+[08:08] MONICA: So this is one thing and next after this you have to go to advanced feed options. Wait. OK, sorry, not that one. OK, after this is the reader part where you have to do all of these things, OK? And then in the writer part,
+[08:23] FATHULLAH: Yeah.
+[08:26] MONICA: you have to give the schema name. So the first thing from here, like from this landing zone to the next one we are going is to the bronze layer,
+[08:34] FATHULLAH: Raj, yes.
+[08:35] MONICA: right? So give the bronze schema name over here and the like what you can create the table name of. your own sum, it's the first thing, right? The first thing you do,
+[08:42] FATHULLAH: Yes.
+[08:44] MONICA: so you create a table name like Federalist ADD or anything you wish to.
+[08:45] FATHULLAH: Okay.
+[08:48] MONICA: So normally this is what we do for CSV files and everything, CSV files, Excel files, text files and everything. So when it comes to NDJSON files, right?
+[08:57] FATHULLAH: Mhm.
+[08:57] MONICA: So in the 1st place where I was showing you in the configuration and everything, right? So...
+[09:05] FATHULLAH: There, instead of CSV or Excel, you give ND JSON.
+[09:08] MONICA: Yes, you normally give it as ND Jason over here.
+[09:12] FATHULLAH: Yep.
+[09:12] MONICA: Except for everything is CSV full pipeline, OK?
+[09:15] FATHULLAH: Okay.
+[09:16] MONICA: So, after you select that, and when you select the adjacent file, also in the reader options, normally here we excel right here we have a raw raw text, but whenever whenever it is an adjacent
+[09:26] FATHULLAH: Okay.
+[09:28] MONICA: file selected as raw text, OK?
+[09:29] FATHULLAH: No text.
+[09:30] MONICA: So, and after that, in the writer section, you do this, and normally what Bhargavi and they are doing, they are creating a view from the ND JSON files over there, right?
+[09:39] FATHULLAH: Okay.
+[09:41] MONICA: So if it is not a CSV file, so what, like I can show you my DJSON file. So for this, what I did is like I gave it or I need to create a view, right? So I gave in the post. OK,
+[09:57] FATHULLAH: Mhm.
+[09:59] MONICA: there is no post. Oh, ****. OK, garage is also CSV, my bank. So, normally, we give the post SQL, like, if I'm not wrong, if Bhargavi showed you any post SQL SQL or something like that, or should I?
+[10:12] FATHULLAH: No, no. So I don't much work on the file notes, right?
+[10:14] MONICA: Let me just...
+[10:16] FATHULLAH: It's always Bhargavi or Dhanush for me.
+[10:19] MONICA: Yeah.
+[10:20] FATHULLAH: I also have Ashwin, Ashwin is assisting, so they always load files. They just give me the bronze batch IDs and I run queries on batch IDs. I don't personally load any files.
+[10:31] MONICA: Okay, I think she put it in the GitHub also.
+[10:35] FATHULLAH: Okay.
+[10:35] MONICA: So normally we have like a. Okay, normally we do have a post SQL over here.
+[10:42] FATHULLAH: Yeah, it's just a script, right? Yeah.
+[10:44] MONICA: Yeah, it's a SQL script that we have. So we put that and that is it.
+[10:47] FATHULLAH: Is it?
+[10:49] MONICA: Those are the changes we need to confirm everything. So in the writer, change the table name, schema name, and post SQL if you're working on any
+[10:56] FATHULLAH: Mhm.
+[10:59] MONICA: JSON or anything like that. And next thing is like you just have to that will be saved and next you just have to select it and just say like save and
+[11:07] FATHULLAH: I got it. Okay.
+[11:08] MONICA: sync catalogue. So the next thing you see is like a data domain or the data types and everything. So it's like checking everything with you if this is a data type that is there in the field or something like that.
+[11:18] FATHULLAH: Yeah.
+[11:19] MONICA: And if you want, you can cheque everything or if you don't like anything, you can just put everything else string and work on it later.
+[11:27] FATHULLAH: Okay.
+[11:28] MONICA: So after that, after that is done, it goes to the map to domain option. Okay, here normally we have, this is the bronze table name you gave before, right? So that will be the one and this will be
+[11:39] FATHULLAH: Yes, yes.
+[11:41] MONICA: the, or your silver rodius table, sorry, silver rod table.
+[11:44] FATHULLAH: Okay. Okay.
+[11:46] MONICA: Okay, and the mapping you're talking, right? So you have to give it in a script, this kind of script, like, you know, this is what it does, dedupe logic or anything like that.
+[11:55] FATHULLAH: Okay.
+[11:56] MONICA: So, uh...
+[11:56] FATHULLAH: So this mapping only maps anything from bronze to silver wrong.
+[12:01] MONICA: Yes, bronze.
+[12:03] FATHULLAH: Okay.
+[12:04] MONICA: So, once you write a script, or what you can do, like you can just say, there is an option called generated generate mapping or something like that, or if you don't have anything over here, so you can click on that if it gives,
+[12:15] FATHULLAH: Mm-hmm.
+[12:18] MONICA: but it's better to have our own mapping to over here,
+[12:20] FATHULLAH: Mhm.
+[12:21] MONICA: so you can take a help of ChatGPD or... Claude to, you know, get the details and all the map, yeah,
+[12:24] FATHULLAH: Yeah, write this. Yeah.
+[12:28] MONICA: description, everything. So, once you do that, you'll have an option called, I think, in the bottom, in the up in the here only, the header column only, you'll see like submit review or something like that, OK?
+[12:41] FATHULLAH: Okay, okay.
+[12:42] MONICA: After that, what it does is it's going to take a lot of time for you to do that mapping and everything.
+[12:47] FATHULLAH: OK.
+[12:47] MONICA: So it gives you some mapping like this. This is the target table and this is a target column and how the column is mapping to what it is, like whatever it became. Sometimes you might get an SME review saying like, you know, review the mapping because it didn't,
+[13:00] FATHULLAH: Okay.
+[13:00] MONICA: the AI didn't understand, the machine didn't understand what exactly do you want the mapping to be. So it just gives you a logic like, you know, this is,
+[13:05] FATHULLAH: Okay.
+[13:08] MONICA: is this what you want me to do or something like that. So you can just choose an option over there, like, you know, it's something,
+[13:11] FATHULLAH: Okay.
+[13:14] MONICA: it will be like this, like, you know, this certain target column, where do you want me to map it to? It gives you an options,
+[13:20] FATHULLAH: Okay.
+[13:20] MONICA: you can choose from the options, so you can just type it in your own words, like, you know, I want this to do this exactly, so you can map it. Do whatever you want or something like that.
+[13:29] FATHULLAH: Okay.
+[13:30] MONICA: So it basically helps you mapping and everything. So once this is done, you have to go to schedule and monitoring. Okay, this is gonna take time.
+[13:45] FATHULLAH: So all the mappings, whatever the native language, we can find it from GitHub.
+[13:50] MONICA: Yes, yes, I think Bhargavi gave all the mappings in the GitHub. She already pasted all the mappings. You have the GitHub access, right?
+[14:00] FATHULLAH: Yes, can can you show like you know how to navigate the GitHub once?
+[14:03] MONICA: Yes.
+[14:06] FATHULLAH: Do you want me to share the link or you have the link handy?
+[14:08] MONICA: Yeah, I hope it opens, yeah.
+[14:12] FATHULLAH: Yeah.
+[14:14] MONICA: So, now when in this, can do you have data link or video, right?
+[14:16] FATHULLAH: We do. DDL, yes, the yeah.
+[14:21] MONICA: This one? So, in this, it's for you, it's clean, right? So, here in those,
+[14:25] FATHULLAH: Means. Like.
+[14:28] MONICA: this is the seeding view that I think, like, yeah, yeah, this is for the seeding,
+[14:30] FATHULLAH: The scripts they are writing, yeah.
+[14:34] MONICA: so views is the SQL part which I was talking to you, right? So, this is the one, so they put it in a minified version,
+[14:38] FATHULLAH: Yeah.
+[14:42] MONICA: I think she. It does have a minified version also, like over here. So it's in a one-line script that you put it in the post SQL.
+[14:50] FATHULLAH: Okay.
+[14:51] MONICA: So, this...
+[14:51] FATHULLAH: But this is only for MSSP. I don't see anything for sent in and also they did not write anything for sent in and silver ODS or what.
+[14:58] MONICA: No, no, this is not the audio. This is for the part where I showed you right.
+[15:02] FATHULLAH: No, no, no, but there should be something for sent in, right? I don't see that payers, so I'm asking.
+[15:07] MONICA: They are not NDJS and files, right? These are the NDJS and files we are
+[15:10] FATHULLAH: Okay, NDJSONs, okay. If they're not NDJSONs,
+[15:10] MONICA: getting, right? Yeah, for.
+[15:12] FATHULLAH: you will not have any mapping.
+[15:15] MONICA: Ohh, so for the, if these are for the views, these are not exactly for the mapping, these are for the views that we're
+[15:20] FATHULLAH: Okay.
+[15:22] MONICA: creating. So, for the mappings, the script is, I think the script should be then the requirements, yeah, sending,
+[15:28] FATHULLAH: Yeah.
+[15:29] MONICA: so you can see the script over here, right? So, she...
+[15:32] FATHULLAH: Because I remember one time while she was giving me training, she told like, you know, you have to come to this and change something in here and then post. Run the tag.
+[15:44] MONICA: Oh, that is different. Yeah, that is still there.
+[15:44] FATHULLAH: Two.
+[15:47] MONICA: I still didn't come to come over here. So this is normally I'm showing you where
+[15:48] FATHULLAH: Okay, yeah.
+[15:51] MONICA: she has the scripts and everything. Like, you know,
+[15:52] FATHULLAH: Okay, okay.
+[15:54] MONICA: if you want any script similar to that or something you want to change,
+[15:58] FATHULLAH: Okay.
+[15:58] MONICA: you can take help from these scripts that she has for things. So normally, in the schedule and monitoring, you just have to go to the schedule.
+[16:06] FATHULLAH: Mhm.
+[16:06] MONICA: And for me, it's normally every daily run, right, for every 15 minutes. If you remember, Varadharajan is asking me to cheque for
+[16:11] FATHULLAH: Yes.
+[16:12] MONICA: every 15 minutes and everything. So that is basically this part.
+[16:14] FATHULLAH: Yes.
+[16:16] MONICA: So I have to schedule it for every 15 minutes, but I think for you, it is monthly, right? So if it is going to schedule monthly,
+[16:20] FATHULLAH: Yeah.
+[16:22] MONICA: then it should be monthly when you guys start doing it.
+[16:25] FATHULLAH: Okay.
+[16:26] MONICA: And after you have to select that and in the controls you just have to select one
+[16:30] FATHULLAH: Mhm.
+[16:31] MONICA: time arrival, structural validation and schema drift. So for me in the one time arrivals, the evaluation mode normally it will be periodic cut off for me this freshness, like you know, because I'll be getting all new entries, right?
+[16:45] FATHULLAH: Yes.
+[16:46] MONICA: So, for me, the freshness, like, is it the duplicate account, duplicate one or something like that? Did I already get this one or something
+[16:53] FATHULLAH: Thank you.
+[16:53] MONICA: like that? And then the alert, you can select then the default notification as like team channel over here.
+[17:00] FATHULLAH: Okay.
+[17:01] MONICA: Notification testing. OK, team channel this one and you can just click on save over here for me just now and you can once it is done you will be
+[17:07] FATHULLAH: Mhm.
+[17:10] MONICA: having a publish option over here like the dialogue box will be like do you want to publish or something like that. So here what you can do is in the.
+[17:16] FATHULLAH: Okay.
+[17:20] MONICA: Ohh, what do you call this here? You can just put it as like whatever name you're gonna give, like just a commit subject, like you know,
+[17:26] FATHULLAH: OK, good coming to you.
+[17:28] MONICA: I'm gonna, this is yeah, get commit, so once you commit this, what will happen is like in the GitHub. Let me show you one example. So if you go to the GitHub in the DL Dev project, here, you'll be having flows.
+[17:45] FATHULLAH: Mhm.
+[17:47] MONICA: So I think Danishpati recently committed something, so I'll show you this one. So go. The flow is 237. So, you can you can see the recent ones, so 37.
+[18:12] MONICA: I don't think that was 237. Okay, whatever.
+[18:14] FATHULLAH: Anything, yeah, just up on a random one.
+[18:16] MONICA: Yeah, I just open one thing. So here in the dash you go, you select the Python file over here. You just select the name over here.
+[18:23] FATHULLAH: Yeah.
+[18:23] MONICA: And if you want to cheque your pipeline name or something, like if the pipeline has any issues, like you know, if you just want to cheque if the pipeline is not going to break or you
+[18:33] FATHULLAH: Mm-hmm.
+[18:33] MONICA: want to give to the AI to verify if the pipeline is going to work or not. You can go over here and cheque for the pipeline number. Pipeline ID will be there, so you can see 506 is the 506 and 507. OK,
+[18:48] FATHULLAH: Okay.
+[18:48] MONICA: so these two pipelines are there, so you can have a duplicate tab or something like that, and here you can go to.
+[18:54] FATHULLAH: And.
+[18:58] MONICA: pipeline. So here you see, right? This is basically landing to. Wrong flavour.
+[19:09] FATHULLAH: Okay.
+[19:11] MONICA: And then 507 will be a bronze to silver draw, like the silver draw, right?
+[19:14] FATHULLAH: Server, OK.
+[19:15] MONICA: So these two will be the, you can see the pipelines over here.
+[19:17] FATHULLAH: Yeah.
+[19:19] MONICA: So you can cheque it yourself, like, you know, if everything is good or you want to do the comparisons or something, or you can give it to AI to see if your pipeline is going to break or not.
+[19:26] FATHULLAH: Mhm.
+[19:30] MONICA: That's what I do every time.
+[19:30] FATHULLAH: Thank you.
+[19:33] MONICA: So, like 5 or 7 will be the mapping and everything will be over here, like how the terms will be changed.
+[19:36] FATHULLAH: S. Ross the Silver Road, yeah.
+[19:40] MONICA: Yes, so that will be over here, so you, if you want, you're gonna go cheque everything yourself, then in the DAX in the flows, right? I told you to select the file name, right? You can set the file name over here and copy it, and in the...
+[19:51] FATHULLAH: Yep.
+[19:57] MONICA: So you can see actions over here, like here it says.
+[20:00] FATHULLAH: Mhm. Yep.
+[20:07] MONICA: So you can click on actions over here and also basically sync that to Azure Inflow Data, which is there, right? So you can click on this and when you
+[20:14] FATHULLAH: Yeah.
+[20:16] MONICA: click on the run flow, you have to click the list.
+[20:19] FATHULLAH: List.
+[20:20] MONICA: and then you just have to paste whatever DAG you have. You just copy and you run workflow. It's going to take a little time,
+[20:23] FATHULLAH: And then download, OK.
+[20:27] MONICA: like one minute or one last minute or something to sync the DAG and everything. Once you've done that, just go to sync. That should be doing the sync databricks. But for me, just for my assurance, I'll click on sync to Databricks workspace.
+[20:42] FATHULLAH: Mhm.
+[20:42] MONICA: And also run the workflow over here. I just have to click run flow over here. I don't have to change anything. I think these are new things that came,
+[20:48] FATHULLAH: Okay.
+[20:50] MONICA: but before I didn't have this. I'll just click on run workflow directly.
+[20:54] FATHULLAH: Okay.
+[20:54] MONICA: Automatically, whatever is in the GitHub, it automatically syncs with the database.
+[21:00] FATHULLAH: Okay.
+[21:00] MONICA: Once that is done, the whole part is done. You go to a flow. So if you remember,
+[21:05] FATHULLAH: It.
+[21:07] MONICA: you copied the file name, right? So what we do is like, we just,
+[21:07] FATHULLAH: Hi, Lynn. Yes.
+[21:12] MONICA: you just have to. Paste the file name, just remove PY at the end, and you can see claims federal is downstate dental, right?
+[21:18] FATHULLAH: Okay. Yeah, if this job is running or not.
+[21:23] MONICA: Yeah. Basically, it's a new one that you're going to run. That is your DAG for sure. It will be empty over here.
+[21:27] FATHULLAH: Yes.
+[21:31] MONICA: You won't be seeing any of this part will be covered or something like that.
+[21:34] FATHULLAH: Yeah.
+[21:36] MONICA: It will be empty. You just have to click on "Trigger" and
+[21:39] FATHULLAH: Okay.
+[21:39] MONICA: trigger. It will start running. Your DAG will be running. Basically, First, the first step is it cheques the place where you gave the file name. OK, so the location in the starting that you
+[21:50] FATHULLAH: Okay.
+[21:51] MONICA: will be giving, right? Or if you remember in the starting place
+[21:54] FATHULLAH: Hello.
+[21:54] MONICA: where we gave the location, I told you to go to the Azure blog and
+[21:58] FATHULLAH: Yes.
+[21:58] MONICA: select, so it will go there in that location, it will cheque with the regular expression that we have given it to it.
+[22:04] FATHULLAH: Okay.
+[22:04] MONICA: If this is a file that is batching or something like that. If it is there, then this stage will be passed. Then here is a part, this create compute where it's going to take a little time in the starting. If some computers already started running and it will take the help of that and it can run in 30 seconds or 40 seconds.
+[22:23] FATHULLAH: Okay.
+[22:23] MONICA: So after that, the next pipeline is landing to bronze. This pipeline will be landing to bronze and this pipeline will be bronze to
+[22:29] FATHULLAH: Okay.
+[22:33] MONICA: Silver Rock. If normally, if you have the Silver ODS pipeline, there will be Silver ODS pipeline also over here in the next step. Then after all these processes are done, you can see the files which are in the landing will be moved to the archive folders.
+[22:50] FATHULLAH: Okay.
+[22:51] MONICA: And then we compute will be deleted and the flow will be ending. So again,
+[22:55] FATHULLAH: Thanks.
+[22:55] MONICA: you can put a different file in the same location and you can run the trigger
+[22:58] FATHULLAH: Mhm.
+[22:59] MONICA: again. I think you can put multiple files also, but I'm not sure about that yet. So, I just want to...
+[23:05] FATHULLAH: So, now, like, when, when, when Bhargavi or Dhanushpati says, like, you know, there is some issue, there is some issue, so where exactly that issue is like in the mapping or what?
+[23:16] MONICA: So, normally, if you, I'll show you, I'll show you one of mine. Yep. So.
+[23:32] FATHULLAH: Reddy.
+[23:36] MONICA: So if I go to the Fed LSV3 OK, please pass now.
+[23:39] FATHULLAH: Mmh.
+[23:44] MONICA: Okay, something must have failed for me, so many have.
+[23:47] FATHULLAH: You have the failed philtre on the top, right? Can you click that?
+[23:50] MONICA: So it basically cheques for the last one I guess. So it will show you if the last one is failed or not.
+[23:56] FATHULLAH: Okay.
+[23:57] MONICA: It doesn't show you like the which one. Yeah. So I ran too many.
+[23:58] FATHULLAH: The list of fails, OK. So usually if you see a failed or something from the DAG, you would know what was the reason or where the log would explain you where it failed or something.
+[24:07] MONICA: Yeah, so basically if you see over here, right? So it is a failure or something.
+[24:10] FATHULLAH: Yeah.
+[24:11] MONICA: So you can, you know, this one is failing. So what you can do is like normally it doesn't exactly show where the file, what's wrong with the, like where the error is and everything. What you can do is like you can go to the
+[24:19] FATHULLAH: Mmh.
+[24:23] MONICA: data bricks over here.
+[24:24] FATHULLAH: Mm-hmm.
+[24:28] MONICA: Okay, in the runs, when you click on the runs, it shows you currently if anything is running or something, okay?
+[24:34] FATHULLAH: Okay.
+[24:35] MONICA: So here it basically shows you everything like if it is a fail or pass or something. Like you can see I think he got something some error over here. So the error message will be over here. So you can go through the error message
+[24:43] FATHULLAH: Okay.
+[24:46] MONICA: and you can make the fixes and everything. So normally what these people do is like they try to change the pipeline in the data bricks. So if there is an issue or something.
+[24:55] FATHULLAH: Okay.
+[24:55] MONICA: They change things in the data bricks and directly run the 8 flow done. Basically, 8 flow is connected to the data bricks, so whatever pipeline is in the data bricks, that will be running whenever you trigger
+[25:04] FATHULLAH: Okay.
+[25:07] MONICA: the 8 flow dot. But what happens is like when someone
+[25:08] FATHULLAH: Okay.
+[25:10] MONICA: clicks on the sync or data bricks right over here.
+[25:13] FATHULLAH: Okay.
+[25:14] MONICA: What happens is, like, whatever is in the GitHub, again, it replaces in the data brick, so that will be a double job for you. So, what I do personally is, like, in the GitHub itself, I'll change the things and commit, and then I'll click on sync to data bricks workspace, so that, you know, whatever I make the changes will already be changed in the data bricks.
+[25:31] FATHULLAH: Databricks.
+[25:32] MONICA: So once whenever you have a fail, whenever the pipeline is fail, so you can just direct go to the pipeline wherever the fail was there.
+[25:37] FATHULLAH: Mhm.
+[25:40] MONICA: Like if there is a thing that you have to make over in the pipeline, just go to the pipeline and make the changes and then click on commit changes. Then you just have to come to sync databricks workspace and sync them.
+[25:53] FATHULLAH: Okay.
+[25:54] MONICA: You just have to, for sure you have to sync. If you don't sync it, then it's going to run the same pipeline again, like previous pipeline. So once you sync that.
+[26:00] FATHULLAH: Yeah. From the... Yeah, good, good.
+[26:05] MONICA: Once you sync into the Databricks workspace, whatever changes you made, that will be changed in the Databricks. When you click on the A-flow DAG again, it automatically runs the new pipeline. Sometimes what happens is sometimes it
+[26:20] FATHULLAH: Okay.
+[26:22] MONICA: will be breaking in. or silver or raw layer. Imagine if it for me like over here, you can see this one broken silver raw, right? So,
+[26:32] FATHULLAH: Yes.
+[26:32] MONICA: but the bronze layers have been fulfilled before.
+[26:36] FATHULLAH: Yes.
+[26:37] MONICA: So, if I'm gonna make the changes in Silver Raw and again run the DAG over here, what happens is like it says like this because we put in this freshness and everything, I've already processed the file before, right? Because it is in the bronze layer.
+[26:52] FATHULLAH: Mhm.
+[26:53] MONICA: It automatically says it automatically fails in the bronze layer itself because it says this file has already been uploaded or something like that. Yeah,
+[26:59] FATHULLAH: Processed. OK.
+[27:01] MONICA: process. So what we do is like we have to delete the files which are related to the previous DAG in the control table or in the input table.
+[27:10] FATHULLAH: Okay.
+[27:10] MONICA: So I think I should be having that script on, so I'm not sure exactly. So basically you just have to, yeah, I think I have that.
+[27:22] FATHULLAH: My only concern is like, you know, once the whole Digital Earth team is moving out or BI or this hammer, big hammer moves out, right? So who would be doing all these things? Do you think that they are giving Anurag, Ashwin all this training?
+[27:35] MONICA: I think Ashwin knows how to do it, I guess.
+[27:38] FATHULLAH: Okay.
+[27:39] MONICA: Because when I was working on the seeding and everything, he told me like he's also doing the seeding part and everything. So I thought he will be doing same like me in the Databricks, but Bhargavi later told me like, you know, he's actually doing it from the UI or something like that.
+[27:53] FATHULLAH: Okay, so what happens if something breaks in the UI, Digital Earth UI, who would be fixing that? Like we...
+[28:00] MONICA: The digital, the bigger people owns the UI, right? So they'll be like, you know, like how when we are using AWS or
+[28:04] FATHULLAH: Yeah.
+[28:06] MONICA: Databricks or something, if something is broke or something in the Databricks, if the pipeline has issues, then we will be fixing ourselves. But if something like genuinely the problem is with the website or something, the Databricks team will be working in their own company, right? So, in a similar way, I think Big Kumaravel is gonna work in that way.
+[28:27] FATHULLAH: OK, something breaks in the UI, we have to reach big hammer and then fix it.
+[28:31] MONICA: They have to ignore it, yeah. Because we don't have access directly for the UI, even if you're currently working in it, we don't have the access, right? Even if you go to, if you see a UI issue. So basically, if you remember long time, I told Varadharajan, like, you know, the UI is showing me this options and everything. So it's not my issue. I can't fix it,
+[28:47] FATHULLAH: Yes.
+[28:49] MONICA: even though if I'm working for digital earth or something, I don't own the UI, right? UI is owned by the, even if I don't, the people who are working on the back
+[28:53] FATHULLAH: Yeah.
+[28:57] MONICA: end, they have to make the changes for the UI.
+[29:01] FATHULLAH: So, always working on the backend then.
+[29:03] MONICA: We have a team, I guess, the, yeah, India team probably like Jayanth or
+[29:05] FATHULLAH: Like, offshore, India.
+[29:08] MONICA: someone like that, so they will be working on that,
+[29:11] FATHULLAH: Okay.
+[29:11] MONICA: so you just, they will fix everything if there is an issue or something.
+[29:17] FATHULLAH: That's what was 11 concern, like if there's something who should we
+[29:17] MONICA: Oh.
+[29:20] FATHULLAH: reach out because after September I don't think Big Hammer would stay here.
+[29:23] MONICA: Yeah.
+[29:26] FATHULLAH: Yeah, I think this is good for now. I think, Monica, this helps because I think what 30 minutes you shared would take me a couple of days to understand and process a couple of files. I can understand all the claims, but on the enrollment,
+[29:37] MONICA: Yeah.
+[29:38] FATHULLAH: it's a different script, different mapping. On the edit, it's a different script, different mapping, different process. So individual process is different, but yeah,
+[29:45] MONICA: Yes.
+[29:47] FATHULLAH: I think I would at least save this recording in the future. Yeah.

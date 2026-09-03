@@ -1,0 +1,37 @@
+version: 1
+updated: "2026-09-03"
+kind: delivery_convention
+source_system: fidelis_ny_upstate
+
+file_naming:
+  observed: "_UPSTATE_Member_Roster_MM_DD_YYYY.<ext>"
+  note: "The name begins with a leading underscore. The sample copies in the corpus carry a deidentified_ prefix and a trailing _1 that the real delivery does not have."
+  regex: "^_?UPSTATE_Member_Roster_\\d{2}_\\d{2}_\\d{4}\\.(csv|xlsx)$"
+  matching_both_populations: "^_?CINQ(UP|DOWN)STATE_Member_Roster_\\d{2}_\\d{2}_\\d{4}\\.(csv|xlsx)$"
+
+business_date:
+  source: "file name"
+  format: "MM_DD_YYYY"
+  meaning: "roster extract date"
+  example: "03_05_2026 is 5 March 2026"
+  corroboration: "Every recertification and coverage end date in that file is April 2026 or later, consistent with a March snapshot."
+
+delivery:
+  cadence: monthly
+  method: manual_upload
+  landing_path: "enrollments/fidelis_upstate/"
+  size_band: "5 MB to 30 MB"
+  arrival_note: "Both populations land in the same folder, so the file-name expression must match both and the population is read from vbp_id rather than from the path."
+
+format:
+  container: "CSV, comma-delimited, minimal quoting"
+  header: "row 1"
+  line_terminator: CRLF
+  encoding: "no byte order mark"
+  trailer: none
+
+arrival_archetype: full_snapshot
+implies: >
+  Deletions are detected by absence. Never upsert a delivery without reconciling the member
+  identifiers present last month and missing this month, or coverage terminates silently for
+  everyone who dropped off.

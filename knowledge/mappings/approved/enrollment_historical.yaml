@@ -1,0 +1,87 @@
+version: 1
+updated: "2026-09-02"
+domain: enrollment
+
+# Mapping decisions CINQCARE has already made, for three enrollment sources.
+# GROUNDED IN:
+#   docs/03_data_source_schemas/enrollment/Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx
+#   (sheets: "Non ACO Enrollment", "CinqACO Reach Enrollment", "Cinq MSSP Enrollment")
+#
+# These are exemplars, not rules: they show how this organisation has mapped
+# similar source columns before. Targets are recorded using the names the
+# executable DDL declares (see canonical/enrollment.yaml); where the spreadsheet
+# used a different word, `source_document_target` preserves what it said.
+grounded_in:
+  - "docs/03_data_source_schemas/enrollment/Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx"
+
+decision_sets:
+  - source: "cinq.dbo.Members (Non-ACO enrollment, internal DB)"
+    sheet: "Non ACO Enrollment"
+    decisions:
+      - { source_field: "Members_SystemIDs.SystemIDNumber", target: "members.source_system_id" }
+      - { source_field: "Members_SystemIDs.SystemIDType", target: "members.source_system_id_type" }
+      - { source_field: "Members.First_Name", target: "members.first_name" }
+      - { source_field: "Members.Last_Name", target: "members.last_name" }
+      - { source_field: "Members.Middle_Name", target: "members.middle_name" }
+      - { source_field: "Members.Suffix", target: "members.suffix" }
+      - { source_field: "Members.Date_of_Birth", target: "members.date_of_birth" }
+      - { source_field: "Members.Sex", target: "members.sex", source_document_target: "gender" }
+      - { source_field: "Members.Race", target: "members.race" }
+      - { source_field: "Members.Ethnicity", target: "members.ethnicity" }
+      - { source_field: "Members.Language", target: "members.language" }
+      - { source_field: "Members.CMPChart", target: "members.care_management_program" }
+      - { source_field: "Members.Last_Contact", target: "members.last_contact" }
+      - { source_field: "Members.Dual_Status_Code", target: "members.dual_status_code" }
+      - { source_field: "Members.Death_Date", target: "members.death_date" }
+      - { source_field: "Members.DNC", target: "members.dnc" }
+      - { source_field: "Members_Addresses.Address1", target: "members_addresses.address1" }
+      - { source_field: "Members_Addresses.Address2", target: "members_addresses.address2" }
+      - { source_field: "Members_Addresses.City", target: "members_addresses.city" }
+      - { source_field: "Members_Addresses.AddressType", target: "members_addresses.address_type" }
+    unresolved:
+      - source_field: "Members_Guardian.Guardian_Name"
+        source_document_target: "guardian_first_name / guardian_last_name"
+        note: "No guardian column in the executable DDL - see canonical contested_fields."
+      - source_field: "Members_Guardian.Guardian_Phone"
+        source_document_target: "guardian_phone_number"
+        note: "Same gap."
+      - source_field: "Members_Guardian.Guardian_Email"
+        source_document_target: "guardian_email"
+        note: "Same gap."
+
+  - source: "CMS_DCE_D0284 roster alignment (ACO REACH)"
+    sheet: "CinqACO Reach Enrollment"
+    decisions:
+      - { source_field: "Beneficiary MBI ID", target: "members.source_system_id" }
+      - { source_field: "Beneficiary First Name", target: "members.first_name" }
+      - { source_field: "Beneficiary Last Name", target: "members.last_name" }
+      - { source_field: "Beneficiary Date of Birth", target: "members.date_of_birth" }
+      - { source_field: "Beneficiary Gender", target: "members.sex", source_document_target: "gender" }
+      - { source_field: "race_ethnicity_description", target: "members.race" }
+      - { source_field: "Beneficiary Date of Death", target: "members.death_date" }
+    notes: >
+      source_system was set to the literal "ACO_REACH_D0284" rather than mapped from a
+      column - a constant, decided by the analyst, not inferred from the file.
+
+  - source: "cms_mssp.mssp roster alignment (MSSP)"
+    sheet: "Cinq MSSP Enrollment"
+    decisions:
+      - { source_field: "BENE_MBI_ID", target: "members.source_system_id" }
+      - { source_field: "BENE_MBI_ID", target: "members.source_system_id_type" }
+      - { source_field: "BENE_1ST_NAME", target: "members.first_name" }
+      - { source_field: "BENE_LAST_NAME", target: "members.last_name" }
+      - { source_field: "BENE_BRTH_DT", target: "members.date_of_birth" }
+      - { source_field: "BENE_SEX_CD", target: "members.sex", source_document_target: "gender" }
+      - { source_field: "RACE_CD_DESCRIPTION", target: "members.race" }
+      - { source_field: "BENE_DEATH_DT", target: "members.death_date" }
+    derivations:
+      - target: "members.middle_name"
+        note: "Spreadsheet says 'get from first name' - a derivation, not a column mapping."
+      - target: "members.suffix"
+        note: "Spreadsheet says 'Get from first and lastname' - also a derivation."
+
+# What these exemplars establish, stated plainly for retrieval:
+#   * A payer member identifier maps to members.source_system_id.
+#   * First/last/middle/suffix/DOB/sex/race/death date have stable canonical homes.
+#   * Sex/gender arrives under many source names and always lands in members.sex.
+#   * Guardian and coverage-period columns have no canonical home in this DDL version.

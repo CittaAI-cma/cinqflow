@@ -1,0 +1,23 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: centene_il
+column_naming: "Column names contain spaces and are upper case. EMAIL_ADDRESS is the only name that uses an underscore, so a reader that assumes one convention will mis-handle the other."
+date_formats: { dob: "MEMBER DOB as YYYY-MM-DD", months: "MEMBER ELIG START MONTH and MEMBER MEDICAID START MONTH as YYYYMM" }
+flag_vocabulary: { GENDER: "F or M" }
+identifier_conventions:
+  "AMISYS NUMBER": "Centene AMISYS member identifier, a letter followed by ten digits. The natural key."
+  "MEDICAID NUMBER": "Nine-digit Illinois Recipient Identification Number, the state identity key."
+  "ASSIGNED TIN": "Tax identification number of the attributed group, fourteen distinct values."
+analytics_columns:
+  note: "Centene supplies its own derived analytics. Treat as source-provided attributes, never as platform measurements."
+  risk: ["RISK SCORE", "POPULATION HEALTH CATEGORY", "PRIMARY RISK CATEGORY"]
+  utilisation_counters: ["TOTAL PCP CLAIMS", "ALL ADMITS", "ACUTE ADMITS", "OP CLAIMS", "ED VISITS", "ED TO IP VISITS", "SNF ADMITS", "INNTWRK SPEC CLAIMS", "OUTNTWRK SPEC CLAIMS", "TOTAL BRAND RX COUNT", "GENERIC RX COUNT", "OTH CLAIMS", "PREVENTABLE ADMITS", "PREVENTABLE ED VISITS"]
+  caution: "PRIMARY RISK CATEGORY values are truncated at 30 characters, for example AUTISM & DEVELOPMENTAL DISORDE. PREVENTABLE ADMITS and PREVENTABLE ED VISITS are zero on every row, which is a placeholder rather than a finding."
+known_exceptions:
+  - "MEMBER TYPE, MIDDLE NAME and MEMBER ADDRESS LINE 2 are effectively always empty."
+  - "The risk score, health categories and all fourteen counters have no home in the canonical enrollment model."
+  - "Eligibility and Medicaid start months have no canonical home."
+sample_caveats:
+  - "The profile report lists only MEMBER TYPE as having missing data, treating every faked column as complete. EMAIL_ADDRESS is in fact 59.7% empty and PCP MIDDLE NAME 68.3%."
+  - "This report is the origin of the MEMBER TYPE 100% chart image that was copied into the Centene GA Medicaid and Molina Down-HARP reports."

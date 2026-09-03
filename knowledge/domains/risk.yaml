@@ -1,0 +1,50 @@
+version: 1
+updated: "2026-09-03"
+kind: domain_knowledge
+domain: risk
+volatile: true
+review_by: "2027-04-30"
+
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml"
+  - "docs/03_data_source_schemas/reference_data/Reference_Data_Data_Model.xlsx"
+  - "CMS CY2024 Rate Announcement (CMS-HCC v28 phase-in)"
+
+what_it_answers: >
+  How sick is this population, expressed as an expected cost relative to an average beneficiary.
+  Risk adjustment scales benchmarks and payments, so a risk score is a revenue number.
+
+mechanics:
+  chain: "Diagnoses from qualifying encounters map to Hierarchical Condition Categories; HCC coefficients plus demographic factors sum to a Risk Adjustment Factor, normalised so 1.0 is average."
+  hierarchies: "Only the most severe condition in a family scores, so naive counting of diagnosis codes overstates risk."
+  annual_reset: "Most models reset each year: a chronic condition documented last year earns nothing this year unless it is documented again in the current collection period. This is why suspecting and gap-closure analytics exist."
+  acceptable_sources: "Diagnoses must come from qualifying face-to-face encounters. Pipeline logic that pulls diagnoses from any claim type inflates the score and creates audit exposure."
+
+model_version:
+  current: "Payment year 2026 runs entirely on CMS-HCC v28. The v24 to v28 blend (33% v28 in 2024, 67% in 2025) is complete and v24 is retired for payment."
+  differences: "v28 carries 115 payment HCC categories against v24's 86, is built natively on ICD-10, removes roughly 2,000 diagnosis codes from the risk-adjustable set, and constrains related HCCs to share a coefficient."
+  hard_rules:
+    - "HCC numbering is not stable across versions. A stored HCC number without a model version is meaningless."
+    - "A risk score is never stored or reported without its model version and payment year."
+    - "Year-over-year RAF comparisons spanning the transition are invalid unless restated under one model."
+    - "Coefficient sets are annually versioned reference data, never constants in code."
+
+at_cinqcare:
+  aco_reach: "The alignment roster carries riskscore_raw, riskscore_norm, a risk score file date and month, a normalisation fallback flag, and the CMS source. The PY2024 results file reports a normalised score of 1.1756 with a coding-intensity-capped 1.1422."
+  reference_reports: "D0284_RAP carries ACO-level raw and normalised risk scores by calendar month with a benchmark type of A (prospective) or E (expenditure)."
+  payer_rosters: "Centene IL supplies its own RISK SCORE, population health category and primary risk category. These are Centene's calculations, not CINQCARE's, and must be labelled as such."
+  adt: "The working table carries risk categories from both an HCC model and a CRG model, plus a quintile rank. Mixed vocabularies and MISSING literals are normal there."
+
+interpretation_rules:
+  - "New members dilute average RAF without anyone becoming healthier."
+  - "Partial-year capture understates RAF until the annual sweep completes; present RAF alongside capture completeness or the number invites a wrong conclusion."
+  - "A change in RAF changes benchmark variance without any change in spend."
+  - "Never propose changing inclusion logic, acceptable sources or exclusions to improve a risk score. That is audit exposure regardless of technical defensibility."
+
+failure_modes:
+  - id: stale_model_mapping
+    description: "An HCC mapping table still referencing v24 produces wrong revenue projections."
+  - id: unqualified_diagnosis_source
+    description: "Pulling diagnoses from ADT or from non-qualifying claim types inflates RAF."
+  - id: unversioned_score
+    description: "A stored score without model version and payment year cannot be reproduced or compared."

@@ -1,0 +1,38 @@
+version: 1
+updated: "2026-09-03"
+kind: dq_rules
+domain: adt
+
+# GROUNDED IN: ADT_Data_Model_Final.xlsx (is_duplicate, has_conflict, sequence_valid flags),
+# ADT_Data_Model_Open_Items.docx, Data_lake_data_model.xlsx DQ rules for DailyCensus
+# (DQ-015..022, DQ-045, DQ-046, DQ-058..061, DQ-066, DQ-068..071, DQ-082, DQ-088, DQ-093..096,
+# DQ-103..105), the ADT sample profile, and the knowledge pack (KB-SRC-003, KB-SIL-003).
+grounded_in:
+  - "docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx"
+  - "docs/05_business_logic_and_domain_rules/ADT_Data_Model_Open_Items.docx"
+  - "docs/03_data_source_schemas/lakehouse_and_layers/Data_lake_data_model.xlsx"
+  - "docs/04_source_data_samples_and_profiles/2-ADT/"
+
+rules:
+  - { id: DQ-A-01, legacy: DQ-015, rule: "SourceSystemId (cinq id) present on every event", action: quarantine, meaning: "Unmatched events cannot reach a member; retain and count (KB-DQ-005 DQ-O-07)" }
+  - { id: DQ-A-02, legacy: DQ-016, rule: "AdmissionDate present and parseable (HL7 length 8/12/14/17; flat files date only)", action: block }
+  - { id: DQ-A-03, rule: "EventType present; maps to A01/A02/A03/A04/A08/A11/A13 or a known source vocabulary (Fidelis DS/AR; Garage 'Inpatient Discharge')", action: quarantine }
+  - { id: DQ-A-04, legacy: DQ-045, rule: "PatientClass in {I, E, O, V, R} after derivation", action: warn }
+  - { id: DQ-A-05, legacy: DQ-017, rule: "FacilityName present (join key to facility_ref)", action: warn }
+  - { id: DQ-A-06, legacy: DQ-058, rule: "DischargeDate >= AdmissionDate when both present (sequence_valid)", action: quarantine, meaning: "Out-of-order messages (discharge before admit) are flagged, not corrected" }
+  - { id: DQ-A-07, legacy: DQ-066, rule: "Exact duplicate event (same SourceMessageId or RecordHash) flagged is_duplicate, stored, excluded from encounter_current", action: observe, meaning: "Same clinical event legitimately arrives from multiple routes; sample shows 30 same member/day/event duplicates" }
+  - { id: DQ-A-08, rule: "Conflicting facts for the same admission (different discharge datetime from the same source) flagged has_conflict with conflict_detail; never auto-updated", action: warn }
+  - { id: DQ-A-09, rule: "Open stays: admission without discharge older than a governed window (Fidelis UM never sends discharge - the member drops off the file)", action: observe }
+  - { id: DQ-A-10, legacy: DQ-061, rule: "Death indicator implies an 'expired' discharge disposition (UB-04 20-29)", action: warn }
+  - { id: DQ-A-11, rule: "DischargeDispositionCode conforms to UB-04 patient status codes; free text ('Home or Self Care', 'N/A', 'HOME') enumerated for mapping", action: observe }
+  - { id: DQ-A-12, legacy: DQ-068, rule: "Event received within 24h of event datetime (ReceivedDatetime - MessageDate)", action: warn, meaning: "Care-alert timeliness; ADT is the only feed fast enough to drive intervention" }
+  - { id: DQ-A-13, legacy: DQ-088, rule: "Admission not in the future", action: quarantine }
+  - { id: DQ-A-14, rule: "Literal null tokens (NULL, '.', MISSING, NA, None, '0' as unknown NPI) normalised to null before null-rate rules", action: observe }
+  - { id: DQ-A-15, rule: "AttendingNPI/AdmittingNPI/PCPNPI valid 10-digit when present; '0' is null", action: observe }
+  - { id: DQ-A-16, rule: "DiagnosisList preserved verbatim; primary code derivable (first token)", action: observe }
+  - { id: DQ-A-17, legacy: DQ-082, rule: "Readmit_7 subset of Readmit_15 subset of Readmit_30", action: warn }
+  - { id: DQ-A-18, legacy: [DQ-069, DQ-070, DQ-071], rule: "Care-management timeliness: PHN contact within 48h of admission; MD follow-up within 7 days of discharge; med reconciliation within 30 days", action: observe, layer: silver_ods, note: "Workflow columns come from the CINQ app (encounter_cinq_ext), not from ADT sources" }
+  - { id: DQ-A-19, legacy: DQ-103, rule: "IP admission rate per 1,000 members within 150-400 for Medicare populations", action: observe, layer: serving }
+  - { id: DQ-A-20, rule: "SourceSystem in the nine recognised values; BronxRhio JSON key 'Discharge_Diposition' typo handled per source", action: block }
+  - { id: DQ-A-21, rule: "InsuranceID resolves to Members_EnrollmentSegments.InsuranceID for the admit date (coverage match) within band", action: warn, layer: silver_ods }
+  - { id: DQ-A-22, legacy: DQ-060, rule: "Census IP admissions have a corresponding IP claim within a tolerance window", action: observe, layer: silver_ods, meaning: "Claims and ADT rates legitimately differ; label the source" }

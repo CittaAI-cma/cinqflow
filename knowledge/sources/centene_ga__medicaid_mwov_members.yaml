@@ -1,0 +1,176 @@
+version: 1
+updated: "2026-09-03"
+
+# Loader-facing feed contract. YamlKnowledgeProvider.get_source() reads this exact path;
+# ContextBuilder injects it whole at file understanding and mapping. Richer organisational
+# knowledge for this source is in sources/centene_ga/.
+#
+# Columns, row counts, null rates and value shapes below were read from the de-identified
+# sample and its profile report, not inferred.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/3.GA CENTENE Medicaid/"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/3.GA CENTENE Medicaid/Centene GA Medicaid Profile Report.pdf"
+
+source_system: centene_ga
+feed: medicaid_mwov_members
+domain: enrollments
+payer: Centene Georgia (Peach State Health Plan)
+population: Medicaid MWOV Members
+contract: centene_ga
+line_of_business: Georgia Families Medicaid (LOB = MEDICAID on every row)
+file_pattern: "^Medicaid MWOV Members - \\d{4}-\\d{2}-\\d{2}\\.txt$"
+cadence: monthly
+delivery: sftp
+arrival_archetype: full_snapshot
+
+format:
+  container: "comma-separated values in a .txt file"
+  delimiter: ","
+  quoting: "every field and every header cell is double-quoted"
+  header: row 1
+  line_terminator: CRLF
+  encoding: "ASCII, no BOM"
+  trailer: none
+  empty_value: "\"\" (an empty quoted field)"
+
+business_date:
+  source: "file name suffix after ' - '"
+  format: "YYYY-MM-DD"
+  meaning: extract date
+  example: "Medicaid MWOV Members - 2026-03-10.txt = extracted 10 March 2026"
+
+grain: one row per active member (full snapshot)
+natural_key: [MEMBER_KEY]
+secondary_identifiers: [EDW_MEMBER_CK, MEMBER_MEDICAID_ID]
+
+# Observed in the de-identified sample (7,817 rows, 34 columns).
+sample_observed:
+  rows: 7817
+  columns: 34
+  blank_rows: 0
+  rows_with_wrong_field_count: 0
+
+# The 34 columns as they actually arrive, in file order.
+expected_columns:
+  - LOB
+  - EDW_MEMBER_CK
+  - MEMBER_MEDICAID_ID
+  - MEMBER_KEY
+  - MEMBER_NAME
+  - MEMBER_SEX
+  - MEMBER_DOB
+  - MEMBER_ADDRESS_1
+  - MEMBER_ADDRESS_2
+  - MEMBER_CITY
+  - MEMBER_STATE
+  - MEMBER_ZIP
+  - MEMBER_COUNTY
+  - MEMBER_REGION
+  - MEMBER_PRIMARY_PHONE
+  - MEMBER_HOME_PHONE
+  - MEMBER_CELL_PHONE
+  - MEMBER_LANGUAGE
+  - MEMBER_ELIG_START_DT
+  - MEMBER_ELIG_END_DT
+  - MEMBER_ACTIVE_IND
+  - PCP_IRS_NBR
+  - PCP_IRS_NAME
+  - PCP_NPI
+  - PCP_PROV_KEY
+  - PCP_FIRST_NAME
+  - PCP_LAST_NAME
+  - PCP_ADDRESS1
+  - PCP_ADDRESS2
+  - PCP_CITY
+  - PCP_STATE
+  - PCP_ZIP
+  - PCP_PHONE
+  - PCP_FAX
+
+# Per-column facts the profiler measured. `null_pct` counts empty strings and literal
+# null tokens. `phi` marks member-identifying columns (HIPAA Safe Harbor).
+columns:
+  - { name: LOB, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: EDW_MEMBER_CK, type: int, null_pct: 0.0, distinct: 7817, phi: true }
+  - { name: MEMBER_MEDICAID_ID, type: int, null_pct: 0.0, distinct: 7815, phi: true }
+  - { name: MEMBER_KEY, type: string, null_pct: 0.0, distinct: 7817, phi: true }
+  - { name: MEMBER_NAME, type: string, null_pct: 0.0, distinct: 7613, phi: true }
+  - { name: MEMBER_SEX, type: string, null_pct: 0.0, distinct: 2, phi: true }
+  - { name: MEMBER_DOB, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 5666, phi: true }
+  - { name: MEMBER_ADDRESS_1, type: string, null_pct: 0.0, distinct: 7808, phi: true }
+  - { name: MEMBER_ADDRESS_2, type: string, null_pct: 96.8, distinct: 231, phi: true }
+  - { name: MEMBER_CITY, type: string, null_pct: 0.0, distinct: 6293, phi: true }
+  - { name: MEMBER_STATE, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: MEMBER_ZIP, type: int, null_pct: 0.0, distinct: 100, phi: true }
+  - { name: MEMBER_COUNTY, type: string, null_pct: 0.0, distinct: 3, phi: true }
+  - { name: MEMBER_REGION, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: MEMBER_PRIMARY_PHONE, type: int, null_pct: 1.4, distinct: 7704, phi: true }
+  - { name: MEMBER_HOME_PHONE, type: int, null_pct: 99.7, distinct: 21, phi: true }
+  - { name: MEMBER_CELL_PHONE, type: int, null_pct: 95.3, distinct: 368, phi: true }
+  - { name: MEMBER_LANGUAGE, type: string, null_pct: 0.0, distinct: 9, phi: false }
+  - { name: MEMBER_ELIG_START_DT, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 624, phi: false }
+  - { name: MEMBER_ELIG_END_DT, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 12, phi: false }
+  - { name: MEMBER_ACTIVE_IND, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: PCP_IRS_NBR, type: int, null_pct: 0.8, distinct: 279, phi: false }
+  - { name: PCP_IRS_NAME, type: string, null_pct: 0.8, distinct: 96, phi: false }
+  - { name: PCP_NPI, type: int, null_pct: 1.0, distinct: 711, phi: false }
+  - { name: PCP_PROV_KEY, type: string, null_pct: 0.8, distinct: 762, phi: false }
+  - { name: PCP_FIRST_NAME, type: string, null_pct: 0.8, distinct: 642, phi: false }
+  - { name: PCP_LAST_NAME, type: string, null_pct: 0.8, distinct: 976, phi: false }
+  - { name: PCP_ADDRESS1, type: string, null_pct: 0.8, distinct: 7742, phi: false }
+  - { name: PCP_ADDRESS2, type: string, null_pct: 57.0, distinct: 1320, phi: false }
+  - { name: PCP_CITY, type: string, null_pct: 0.8, distinct: 6198, phi: false }
+  - { name: PCP_STATE, type: string, null_pct: 0.8, distinct: 14, phi: false }
+  - { name: PCP_ZIP, type: int, null_pct: 0.8, distinct: 251, phi: false }
+  - { name: PCP_PHONE, type: int, null_pct: 1.0, distinct: 7738, phi: false }
+  - { name: PCP_FAX, type: int, null_pct: 17.5, distinct: 6446, phi: false }
+
+phi_columns:
+  - EDW_MEMBER_CK
+  - MEMBER_MEDICAID_ID
+  - MEMBER_KEY
+  - MEMBER_NAME
+  - MEMBER_SEX
+  - MEMBER_DOB
+  - MEMBER_ADDRESS_1
+  - MEMBER_ADDRESS_2
+  - MEMBER_CITY
+  - MEMBER_ZIP
+  - MEMBER_COUNTY
+  - MEMBER_PRIMARY_PHONE
+  - MEMBER_HOME_PHONE
+  - MEMBER_CELL_PHONE
+
+# Closed-domain columns and the values observed. A value outside these is DQ-B-07.
+value_domains:
+  LOB: [MEDICAID]
+  MEMBER_SEX: [F, M]
+  MEMBER_STATE: [GA]
+  MEMBER_REGION: [ATLANTA]
+  MEMBER_COUNTY: [CARROLL, PAULDING, HARALSON]
+  MEMBER_ACTIVE_IND: [Y]
+
+formats:
+  dates: "MEMBER_DOB, MEMBER_ELIG_START_DT, MEMBER_ELIG_END_DT = YYYY-MM-DD"
+  open_ended_coverage: "MEMBER_ELIG_END_DT = 9999-12-31 means coverage is open (96.5% of rows); treat as null, not as a date"
+  member_name: "MEMBER_NAME is a single full-name field in 'FIRST LAST' order and must be parsed before mapping"
+  phones: bare 10 digits
+  identifiers: "MEMBER_KEY is GA + 11 digits; MEMBER_MEDICAID_ID is the 12-digit Georgia Medicaid id; PCP_PROV_KEY is GA<digits>-<digits>"
+
+# De-identification artefacts in the SAMPLE ONLY. Never tune a rule or threshold on
+# these; the production feed has a different shape.
+deid_artifacts:
+  - "EDW_MEMBER_CK, MEMBER_MEDICAID_ID, MEMBER_KEY, PCP_IRS_NBR, PCP_NPI and PCP_PROV_KEY are hashed; member and PCP names, addresses and phones are faked; MEMBER_DOB is date-faked."
+  - "Three MEMBER_MEDICAID_ID cells hold a four-letter token rather than an id, most likely the literal NULL."
+  - The profile PDF for this feed embeds chart images copied from the Centene IL and Optum GA reports; its tables are correct but its charts are not.
+
+quirks:
+  - "63 members (0.8%) carry no PCP at all, which fails the client's 'member must have a PCP assigned' rule. Recorded as exception EX-002 rather than a row-level reject."
+  - "Three separate phone columns arrive, two of which are almost always empty (HOME 99.7%, CELL 95.3%)."
+  - "The Medicare sibling feed shares the file-naming convention and column count but not the column set."
+
+notes: >
+  A Medicaid snapshot roster with the PCP attribution block carried inline. Every field is
+  quoted, so a reader configured for minimal quoting will still parse it but will treat empty
+  fields as the two-character string rather than null. MWOV is not expanded anywhere in the
+  corpus or in public Centene material; do not assert an expansion.

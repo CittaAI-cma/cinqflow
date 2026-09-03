@@ -1,0 +1,75 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+confidence: authoritative
+
+# How a member becomes "ours", per programme. Attribution is the denominator that decides
+# everything, and the method differs materially between programmes.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml"
+  - "https://www.cms.gov/priorities/innovation/innovation-models/aco-reach"
+  - "https://www.cms.gov/files/document/aco-reach-py25-part-pref-provider-mgmt-guide.pdf"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/8.Cinq ACO Reach/"
+
+methods:
+  prospective:
+    means: "The population is named before the year starts."
+    trade_off: "Predictable, but you manage people who may leave."
+  retrospective:
+    means: "Assignment happens after the fact from where care was actually delivered."
+    trade_off: "Accurate, but you spent the year managing the wrong list."
+  plurality_claims_based:
+    means: "Assignment by the greatest share of qualifying primary care services, usually by allowed amount or visit count, with a specialist fallback tier."
+    cms_term: "Primary Care Qualified Evaluation and Management services (PQEM) furnished by participant providers."
+  voluntary_alignment:
+    means: "The beneficiary designates a practitioner, which typically overrides claims logic."
+    forms: "Medicare.gov designation, or a signed paper attestation. Where a beneficiary qualifies by both routes they are treated as claims-aligned."
+  roster_based:
+    means: "The payer decides and sends the assignment. The organisation receives a decision rather than computing one."
+    at_cinqcare: "Every commercial Medicaid and Medicare Advantage roster works this way."
+
+per_programme:
+  aco_reach_d0284:
+    method: "Claims-based plurality plus voluntary alignment, under Prospective Plus Alignment."
+    prospective_plus: "Voluntarily aligned beneficiaries can be added quarterly during the performance year, effective from the first day of the following quarter."
+    scope_rule: "Only participant providers are considered for alignment and for quality measure scoring. Preferred providers are excluded from alignment."
+    roster_fields:
+      identity: ["Beneficiary MBI ID", "MBI_original", "MBI_previous"]
+      status: ["Alignment Status", "alignment_status_description", "Newly Aligned Beneficiary Flag", "Prospective Plus Alignment"]
+      method: ["Claim Based Alignment Indicator", "Voluntary Alignment Type"]
+      period: ["Beneficiary Alignment Effective Start Date", "Beneficiary Alignment Effective Termination Date", "yr_mo", "filedate"]
+      provider: ["aligned_inpi", "aligned_tin", "aligned_tin_market", "aligned_tin_submarket", "aligned_affiliate", "aligned_org_name"]
+      palmr: ["aligned_palmr_va_*", "aligned_palmr_clm_primarycare_*", "aligned_palmr_clm_other_*"]
+    exit_reasons: "Alignment Status explains why a beneficiary left: moved to Medicare Advantage, died, Medicare became secondary, moved out of area, eligibility unverifiable, or lost Part A or B."
+  mssp:
+    method: "A two-step assignment similar to REACH plurality, at TIN level."
+    consequence: "An incorrect provider-to-TIN assignment moves patients and dollars between entities."
+  medicaid_managed_care:
+    method: "Roster-based. The plan assigns a PCP and sends it monthly."
+    at_cinqcare: "Fidelis, Molina, Centene GA and Centene IL rosters all carry the attributed PCP inline with an NPI, a TIN and a group name."
+    new_york_note: "The New York value-based payment roadmap does not mandate an attribution methodology but requires each arrangement to state its own."
+  medicare_advantage:
+    method: "Roster-based, with the plan's own assignment logic."
+    at_cinqcare: "Optum NY carries an assigned provider NPI and TIN on each coverage span; Optum GA leaves the PCP empty for most members because the contract is engagement only."
+
+hard_rules:
+  - id: AT-01
+    rule: "Store attribution as an effective-dated fact, never as a column on the member."
+  - id: AT-02
+    rule: "Pin the attribution version on any metric that will be compared across periods. Restatement is normal, not exceptional."
+  - id: AT-03
+    rule: "Where the programme supplies an authoritative roster, the platform's count must match it exactly. Any difference is escalated, never absorbed."
+  - id: AT-04
+    rule: "Prospective and retrospective counts for the same period differ, and both are correct in their own frame. Label which one is being shown."
+  - id: AT-05
+    rule: "A member may be attributed to more than one entity across programmes and must not be deduplicated across them."
+  - id: AT-06
+    rule: "A member attributed mid-year contributes partial member months, so headcount and member months tell different stories."
+
+failure_modes:
+  - id: attributed_count_drift
+    description: "The platform's attributed count drifts from the programme roster because a restatement was absorbed silently."
+    detection: "Reconcile to the supplied roster every cycle and decompose any difference into new, ended, merged and split."
+  - id: unaligned_rows_treated_as_members
+    description: "ACO REACH roster rows with a non-aligned status counted as attributed lives."
+    detection: "Filter on Alignment Status and report the excluded counts by reason."

@@ -1,0 +1,152 @@
+version: 1
+updated: "2026-09-03"
+
+# Loader-facing feed contract. YamlKnowledgeProvider.get_source() reads this exact path;
+# ContextBuilder injects it whole at file understanding and mapping. Richer organisational
+# knowledge for this source is in sources/optum_ny/.
+#
+# Columns, row counts, null rates and value shapes below were read from the de-identified
+# sample and its profile report, not inferred.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/6.Optum NY/"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/6.Optum NY/Optum NY CINQCare_Elig Profile Report.pdf"
+
+source_system: optum_ny
+feed: eligibility
+domain: enrollments
+payer: Optum / UnitedHealthcare (New York)
+population: CINQCare_Elig
+contract: optum_ny
+line_of_business: "Medicare Advantage and D-SNP (38 plan names; UHC Dual Complete NY-S002 covers 56% of rows)"
+file_pattern: "^CINQCare_Elig_\\d{6}\\.csv$"
+cadence: monthly
+delivery: manual_upload
+arrival_archetype: restated_history
+
+format:
+  container: "comma-separated values"
+  delimiter: ","
+  quoting: none
+  header: row 1
+  line_terminator: CRLF
+  encoding: "ASCII, no BOM"
+  trailer: none
+
+business_date:
+  source: file name suffix
+  format: YYYYMM
+  meaning: reporting month of the delivery
+  example: "CINQCare_Elig_202602.csv = February 2026, though the spans inside reach back to 2023-01-01"
+
+grain: one row per subscriber per coverage span
+natural_key: [SBSCR_NBR, RECORD_START_DT]
+secondary_identifiers: [CURR_MBI, EMPI, SOURCE_PATIENT_ID]
+key_note: >
+  14,567 distinct subscribers hold up to 11 spans each. Spans are mostly calendar-year with mid-year plan changes.
+
+# Observed in the de-identified sample (37,104 rows, 25 columns).
+sample_observed:
+  rows: 37104
+  columns: 25
+  blank_rows: 0
+  rows_with_wrong_field_count: 0
+
+# The 25 columns as they actually arrive, in file order.
+expected_columns:
+  - SBSCR_NBR
+  - SOURCE_PATIENT_ID
+  - EMPI
+  - MBR_LST_NM
+  - MBR_MIDL_INIT
+  - MBR_FST_NM
+  - MBR_GDR_CD
+  - BTH_DT
+  - CONTR_CURR_PLN_NM
+  - CONTR_NBR
+  - CONTR_PBP
+  - CONTR_NBR_PBP
+  - CURR_MBI
+  - DTH_DT
+  - RECORD_START_DT
+  - RECORD_END_DT
+  - MBR_ADR_LOC_ADR1
+  - MBR_ADR_LOC_ADR2
+  - MBR_ADR_LOC_CTY
+  - MBR_ADR_LOC_ST_CD
+  - MBR_ADR_LOC_ZIP_CD
+  - SBSCR_CNTY_NM
+  - MBR_DO_NOT_CNTC_FLG
+  - ASSIGNED_PROVIDER_NPI
+  - ASSIGNED_TIN
+
+# Per-column facts the profiler measured. `null_pct` counts empty strings and literal
+# null tokens. `phi` marks member-identifying columns (HIPAA Safe Harbor).
+columns:
+  - { name: SBSCR_NBR, type: int, null_pct: 0.0, distinct: 14567, phi: true }
+  - { name: SOURCE_PATIENT_ID, type: string, null_pct: 0.0, distinct: 15431, phi: true }
+  - { name: EMPI, type: int, null_pct: 0.5, distinct: 14125, phi: true }
+  - { name: MBR_LST_NM, type: string, null_pct: 0.0, distinct: 7766, phi: false }
+  - { name: MBR_MIDL_INIT, type: string, null_pct: 33.9, distinct: 18, phi: false }
+  - { name: MBR_FST_NM, type: string, null_pct: 0.0, distinct: 689, phi: false }
+  - { name: MBR_GDR_CD, type: string, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: BTH_DT, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 13814, phi: true }
+  - { name: CONTR_CURR_PLN_NM, type: string, null_pct: 0.0, distinct: 38, phi: false }
+  - { name: CONTR_NBR, type: string, null_pct: 0.0, distinct: 5, phi: false }
+  - { name: CONTR_PBP, type: int, null_pct: 0.0, distinct: 15, phi: false }
+  - { name: CONTR_NBR_PBP, type: string, null_pct: 0.0, distinct: 17, phi: false }
+  - { name: CURR_MBI, type: string, null_pct: 0.0, distinct: 14224, phi: true }
+  - { name: DTH_DT, type: string, null_pct: 96.3, distinct: 515, phi: true }
+  - { name: RECORD_START_DT, type: date:MM/DD/YYYY, null_pct: 0.0, distinct: 38, phi: false }
+  - { name: RECORD_END_DT, type: date:MM/DD/YYYY, null_pct: 0.0, distinct: 44, phi: false }
+  - { name: MBR_ADR_LOC_ADR1, type: string, null_pct: 0.0, distinct: 36886, phi: true }
+  - { name: MBR_ADR_LOC_ADR2, type: string, null_pct: 78.2, distinct: 420, phi: true }
+  - { name: MBR_ADR_LOC_CTY, type: string, null_pct: 0.0, distinct: 20717, phi: true }
+  - { name: MBR_ADR_LOC_ST_CD, type: string, null_pct: 0.0, distinct: 28, phi: true }
+  - { name: MBR_ADR_LOC_ZIP_CD, type: int, null_pct: 0.0, distinct: 2578, phi: true }
+  - { name: SBSCR_CNTY_NM, type: string, null_pct: 88.5, distinct: 59, phi: true }
+  - { name: MBR_DO_NOT_CNTC_FLG, type: string, null_pct: 11.5, distinct: 2, phi: false }
+  - { name: ASSIGNED_PROVIDER_NPI, type: int, null_pct: 0.1, distinct: 345, phi: false }
+  - { name: ASSIGNED_TIN, type: int, null_pct: 0.0, distinct: 71, phi: false }
+
+phi_columns:
+  - SBSCR_NBR
+  - SOURCE_PATIENT_ID
+  - EMPI
+  - BTH_DT
+  - CURR_MBI
+  - DTH_DT
+  - MBR_ADR_LOC_ADR1
+  - MBR_ADR_LOC_ADR2
+  - MBR_ADR_LOC_CTY
+  - MBR_ADR_LOC_ST_CD
+  - MBR_ADR_LOC_ZIP_CD
+  - SBSCR_CNTY_NM
+
+# Closed-domain columns and the values observed. A value outside these is DQ-B-07.
+value_domains:
+  MBR_GDR_CD: [female, male]
+  MBR_DO_NOT_CNTC_FLG: [N, Y]
+
+formats:
+  dob: "BTH_DT = YYYY-MM-DD"
+  spans: RECORD_START_DT and RECORD_END_DT = MM/DD/YYYY
+  death: "DTH_DT = YYYY-MM-DD HH:MM:SS.fff, 96.3% empty"
+  gender: "MBR_GDR_CD arrives in lower case words, unlike every other feed"
+  pbp: "CONTR_PBP is a 3-digit zero-padded plan benefit package id"
+
+# De-identification artefacts in the SAMPLE ONLY. Never tune a rule or threshold on
+# these; the production feed has a different shape.
+deid_artifacts:
+  - "SBSCR_NBR, SOURCE_PATIENT_ID, CONTR_NBR, CONTR_NBR_PBP, ASSIGNED_PROVIDER_NPI and ASSIGNED_TIN are hashed. Because CONTR_NBR was hashed independently of CONTR_NBR_PBP, the two no longer agree: CONTR_NBR_PBP is not CONTR_NBR plus the PBP suffix in this sample."
+  - "The de-identification table does not list EMPI, MBR_LST_NM, CURR_MBI or DTH_DT, so their treatment is unstated."
+
+quirks:
+  - "This is a coverage-span history restated every month, not a member snapshot. Loading it as a snapshot collapses a member's plan history."
+  - "SBSCR_CNTY_NM is empty on 88.5% of rows, so county must come from the ZIP crosswalk rather than the feed."
+  - "173 subscribers have no EMPI, which is the enterprise master patient identifier the payer uses internally."
+
+notes: >
+  The only enrollment feed in the corpus that arrives as effective-dated coverage spans rather
+  than a snapshot, which makes it the natural test case for the canonical model's missing
+  coverage-period fields. Its Medicare Beneficiary Identifier joins to the ACO REACH roster and
+  to the ADT extract for Medicare populations.

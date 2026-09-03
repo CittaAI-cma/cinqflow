@@ -1,0 +1,28 @@
+version: 1
+updated: "2026-09-03"
+kind: delivery_convention
+source_system: cms_aco_reach_d0284
+alignment_roster:
+  file_naming: { observed: "D0284_AlignmentRoster.xlsx", regex: "^D0284_AlignmentRoster\\.(xlsx|csv)$" }
+  format_caution: >
+    The supplied file is named .xlsx but its bytes are comma-separated text. It is not a zip
+    archive and no spreadsheet reader will open it. The reader is configured as CSV until the
+    production delivery format is confirmed. Recorded as exception EX-005.
+  format: { container: "comma-separated text despite the extension", delimiter: ",", quoting: "minimal, on free-text fields", header: "row 1", line_terminator: CRLF, encoding: "mostly ASCII with one mis-encoded description column" }
+  business_date:
+    source: "columns, not the file name"
+    filedate: "YYYYMMDD integer, the CMS alignment report file date"
+    yr_mo: "YYYY_MM, the alignment month"
+    caution: "The file name carries no date, so two deliveries are distinguished only by their contents. The mo column is not zero-padded while yr_mo is."
+  arrival_archetype: restated_history
+cclf:
+  delivery: "Monthly on a published CMS schedule, with an annual historical baseline and monthly incrementals, plus a three-month run-out after the performance year."
+  format: "Pipe-delimited flat files."
+  properties: >
+    Each file month is a snapshot of adjudication as at the extract date, so a claim can appear,
+    be adjusted, and reappear with a different amount across months. Each month must be loaded
+    as its own immutable partition. Header and detail arrive in separate files, so orphan detail
+    lines across a month boundary are expected rather than a defect.
+bcda:
+  delivery: "Asynchronous bulk export against a Group endpoint, weekly for adjudicated claims."
+  format: "Newline-delimited JSON, FHIR R4."

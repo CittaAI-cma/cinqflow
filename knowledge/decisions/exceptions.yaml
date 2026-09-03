@@ -1,0 +1,76 @@
+version: 1
+updated: "2026-09-03"
+kind: exception_register
+
+# Feed-level exceptions to governed rules, approved or proposed. An exception names the rule,
+# the feed, the reason, the evidence, the owner and a review date. Proposed exceptions are
+# surfaced by the AI at Bronze analysis (intelligence/escalation.yaml ES-12) and become
+# `approved` only by an analyst.
+grounded_in:
+  - "knowledge/dq/enrollment.yaml"
+  - "docs/04_source_data_samples_and_profiles/"
+
+exceptions:
+  - id: EX-001
+    status: proposed
+    rule: DQ-E-07 (member must have PCP)
+    feed: optum_ga__housecalls_roster
+    reason: "Engagement-only HouseCalls outreach roster; PCP_NPI/PCP_Name 81.5% empty by design."
+    evidence: "docs/04_source_data_samples_and_profiles/1-Enrollment/5.Optum GA/ profile"
+    proposed_action: "Run DQ-E-07 in observe mode for this feed."
+    owner: business_analyst
+    review_by: "2026-12-31"
+
+  - id: EX-002
+    status: proposed
+    rule: DQ-E-07 (member must have PCP)
+    feed: centene_ga__medicaid_mwov_members
+    reason: "63 of 7,817 members (0.8%) carry no PCP in the March 2026 file."
+    proposed_action: "Warn with count; do not quarantine."
+    owner: business_analyst
+    review_by: "2026-12-31"
+
+  - id: EX-003
+    status: proposed
+    rule: DQ-E-19 (death date implies inactive)
+    feed: molina_ny__member_enrollment_history
+    reason: "Sample Member_Date_Of_Death is DATE FAKED (99.6% in year 2078); production expected mostly null."
+    proposed_action: "Do not tune thresholds from the sample; re-baseline on the first production delivery."
+    owner: data_steward
+    review_by: "2026-12-31"
+
+  - id: EX-004
+    status: proposed
+    rule: DQ-B-08 (duplicate row hash)
+    feed: cms_aco_reach_d0284__alignment_roster
+    reason: "December 2023 restatement appears twice (5,131 pairs) plus 4 exact duplicates; source behaviour, not a delivery error."
+    proposed_action: "Observe in Bronze; dedupe at Silver Raw on (aco_id, filedate, yr_mo, Beneficiary MBI ID) with collapse count emitted."
+    owner: business_analyst
+    review_by: "2026-12-31"
+
+  - id: EX-005
+    status: proposed
+    rule: DQ-L-09 (declared format matches bytes)
+    feed: cms_aco_reach_d0284__alignment_roster
+    reason: "File named .xlsx is comma-separated text."
+    proposed_action: "Reader configured as CSV until the production delivery format is confirmed."
+    owner: data_engineer
+    review_by: "2026-10-31"
+
+  - id: EX-006
+    status: proposed
+    rule: DQ-B-03 (expected column 100% null)
+    feed: molina_ny__member_enrollment_history
+    reason: "Molina's generic multi-LOB template: SegType, Member_Relationship, COB columns, Preferred_Language, Hospice_Flag, ESRD_Flag, Contract, PBP, LIS, Member_Marketplace_ID, Metal_Tier, Grace_Period_1-3, Member_Enroll_ID are always empty for Medicaid/HARP populations."
+    proposed_action: "Register these 17 columns as expected-empty so their emptiness is a layout fact, not drift."
+    owner: data_steward
+    review_by: "2026-12-31"
+
+  - id: EX-007
+    status: proposed
+    rule: DQ-A-14 (literal null tokens)
+    feed: cinq_adt__clinical_events
+    reason: "SQL export uses literal NULL, '.', MISSING, NA, None and '0' as unknown NPI."
+    proposed_action: "Token list registered on the feed; nulls computed after token normalisation."
+    owner: data_engineer
+    review_by: "2026-12-31"

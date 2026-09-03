@@ -1,0 +1,86 @@
+version: 1
+updated: "2026-09-03"
+kind: domain_knowledge
+domain: enrollment
+
+# What an enrollment feed means, at what grain, and the judgement an analyst applies to it.
+# Concepts here are portable; the CINQCARE-specific facts live in sources/ and decisions/.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml"
+  - "docs/05_business_logic_and_domain_rules/Enrollment_Domain_Level_Rules.docx"
+  - "docs/03_data_source_schemas/enrollment/"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/"
+
+what_it_answers: >
+  Who is ours, from when, under which plan, and attributed to which provider. Enrollment is the
+  denominator of nearly every value-based metric, which is why a missing member is more expensive
+  here than a missing claim: it changes the number that decides settlement.
+
+core_entities:
+  member: "one row per person per source system per identifier era"
+  coverage_span: "one row per person per plan per contiguous effective period"
+  member_month: "one row per member per calendar month of eligible coverage - the denominator of every rate"
+  attribution: "one row per person per programme per performance year per attribution version"
+  address_phone_email: "one row per member per type; the type is part of the key, not a detail"
+
+grain_rules:
+  - "A roster is a snapshot: it states who is enrolled as at the delivery date and says nothing about history."
+  - "An enrollment history is member-month or span shaped and restates the past every delivery."
+  - "Never infer a coverage span from consecutive snapshots without recording that you did so; a gap in deliveries becomes a false termination."
+  - "Member months are computed from spans, never from a member list. Partial months need a stated convention (whole month versus prorated) and the convention must match the contract."
+
+arrival_archetypes:
+  full_snapshot:
+    seen_in: [fidelis_ny_upstate, fidelis_ny_downstate, centene_ga, centene_il, optum_ga, cmp_1598]
+    implies: "Deletions are detected by absence, the hardest kind of change. Never upsert a snapshot without reconciling the keys that disappeared."
+  restated_history:
+    seen_in: [molina_ny, optum_ny, cms_aco_reach_d0284]
+    implies: "Prior periods are re-sent with corrections. Point-in-time storage is mandatory; overwriting destroys the ability to reproduce a prior report."
+  incremental_delta:
+    seen_in: []
+    implies: "Gap detection matters: a missing cycle is invisible unless sequence is tracked."
+
+identity:
+  principle: "Every external identifier is a versioned attribute of a person, never the identity itself."
+  per_market:
+    ny_medicaid: "CIN - 2 letters, 5 digits, 1 letter. The cross-payer key for NY Medicaid members."
+    medicare: "MBI - 11 characters. Reissued on fraud or request, so a person may hold several over time."
+    payer_assigned: "Member id, subscriber id, AMISYS number, MEMBER_KEY. Changes on plan change and sometimes on renewal."
+  rule: "A feed usually carries two or three identifiers. Exactly one becomes the canonical key; the rest are crosswalk inputs and must be surfaced, not silently dropped."
+
+attribution:
+  concept: "Assignment of a member to a provider or entity accountable for cost and quality."
+  in_rosters: "Payer rosters carry the attributed PCP inline (pcp_npi, tin, group name). This is roster-based assignment: the payer decides and CINQCARE receives the decision."
+  in_cms: "ACO REACH and MSSP align beneficiaries by claims-based plurality of primary care plus voluntary alignment; the alignment roster is authoritative and any difference must be escalated rather than reconciled away."
+  volatility: "Attribution lists are versioned and restated. A metric computed against 'current attribution' is not comparable to the same metric last quarter unless the version is pinned."
+
+lines_of_business:
+  medicaid_managed_care: "State-contracted managed care. Products vary by state and payer; the code set is never shared across payers."
+  harp: "NY Health and Recovery Plan - integrated physical, mental health and addiction services for adults with significant behavioural health needs."
+  essential_plan: "NY state programme for people above Medicaid limits but below the marketplace threshold."
+  medicare_advantage: "Part C plans, identified by a contract number and plan benefit package."
+  dsnp: "Dual Eligible Special Needs Plan - members with both Medicare and Medicaid."
+  aco_reach_alignment: "Not a plan: Medicare fee-for-service beneficiaries aligned to a REACH ACO."
+
+analysis_semantics:
+  - "Product and line of business are payer-specific vocabularies. TANF Adult, HARP, SSI NON - DUAL and MEDICAID EXPANSION are not interchangeable across feeds even when they look similar."
+  - "An active indicator is a payer's view of enrolment as at the extract date, not a coverage period."
+  - "Recertification and renewal dates drive outreach, not eligibility. In NY the standard authorisation is 12 months and the member is notified roughly a month before it ends."
+  - "Dual status determines who pays what and materially changes cost analytics; it is carried as a CMS code, not as a flag."
+  - "A death date in an enrollment feed terminates coverage and every active flag. In a de-identified sample it is frequently faked and must not drive a rule."
+
+known_gaps:
+  - "The Silver Raw enrollment model declares no effective or termination dates, so coverage periods, member months, recertification windows and eligibility spans have nowhere to land. Every roster and history feed hits this. See canonical/enrollment.yaml contested_fields."
+  - "Care-management, HARP and Health Home status compete for one string column (members.care_management_program), so precedence is an analyst decision per feed."
+  - "Guardian and responsible-party contacts have no canonical home."
+
+failure_modes:
+  - id: silent_termination
+    description: "A full-file feed processed as a change file, or a delivery missed entirely, terminates coverage for everyone absent from it."
+    detection: "Reconcile disappeared keys against the prior delivery before any write."
+  - id: double_counted_member_months
+    description: "Restated history loaded as an append duplicates member-months and inflates every denominator."
+    detection: "Grain uniqueness on the declared key, plus a collapse count."
+  - id: attribution_drift
+    description: "A member's PCP changes between deliveries and the change is applied without effective dating, so historical attribution is lost."
+    detection: "Model attribution as an effective-dated fact, never as a column on the member."

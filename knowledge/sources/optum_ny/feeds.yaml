@@ -1,0 +1,8 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: optum_ny
+feeds:
+  - { feed: eligibility, domain: enrollments, status: registered, contract_file: "sources/optum_ny__eligibility.yaml", grain: "one row per subscriber per coverage span", cadence: monthly, delivery: manual_upload, columns: 25, natural_key: [SBSCR_NBR, RECORD_START_DT] }
+  - { feed: claims, domain: claims, cadence: monthly, sample: none, silver_raw_source_system: UHC_OPTUM_NY }
+  - { feed: um_census, domain: adt, cadence: daily, sample: none, silver_raw_source_system: Optum_UM, note: "A flat-file utilisation management census that lands in the ADT encounter table, not in enrollment." }

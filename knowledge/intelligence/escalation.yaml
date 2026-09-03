@@ -1,0 +1,78 @@
+version: 1
+updated: "2026-09-03"
+kind: governance
+
+# When the AI must stop and surface a decision for a human, at each screen.
+# GROUNDED IN: vbc_domain_knowledge_pack 08_agent_specs.yaml (requires_human, stop_condition,
+# guardrails GR-02, GR-06, GR-07), 03_medallion_layer_contracts.yaml (KB-XLR-001), and the
+# CINQFLOW approval model (mapping approval by analyst; G2 gate exports approved decisions).
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/08_agent_specs.yaml"
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/03_medallion_layer_contracts.yaml"
+  - "backend/src/cinqflow/knowledge/export.py"
+
+principle: >
+  The model proposes; the analyst decides. Anything that changes a number someone has seen or
+  will file, or that writes to a published table, requires a human. A plausible inference that
+  is wrong costs more than a delay.
+
+always_escalate:
+  - id: ES-01
+    trigger: "Unexpected sender, feed or population (no source definition matches the layout)."
+    action: "Stop at file understanding; surface 'unregistered feed' with the closest known layout and the differences."
+    owner: data_steward
+  - id: ES-02
+    trigger: "Registered expected column missing or 100% null when the contract says populated (DQ-B-03)."
+    action: "Block promotion; name the affected canonical fields and downstream numbers."
+    owner: business_analyst
+  - id: ES-03
+    trigger: "Natural key not unique in Bronze and no composite key is supported by the data."
+    action: "Do not invent a composite key; surface duplicates with counts."
+    owner: business_analyst
+  - id: ES-04
+    trigger: "Row count outside the historical or contract band (default +/-10% members, +/-20% claims volume; DQ-101/DQ-102)."
+    action: "Warn at file understanding; block at promotion on a large deficit."
+    owner: operations
+  - id: ES-05
+    trigger: "A mapping proposal needs a constant the analyst has not supplied (source_system, address_type, phone_type, member_plan, member_payor, population label)."
+    action: "Status ambiguous; list the PK components missing."
+    owner: business_analyst
+  - id: ES-06
+    trigger: "Two identifier columns compete for the same canonical key (member_id vs medicaid_id vs MBI)."
+    action: "Propose one, mark the other unknown with reason; the analyst picks the key."
+    owner: business_analyst
+  - id: ES-07
+    trigger: "Many-to-one normalisation proposed (race, LOB, visit type, discharge disposition free text)."
+    action: "Status ambiguous with the observed value inventory; the analyst owns the value_map."
+    owner: data_steward
+  - id: ES-08
+    trigger: "Governed knowledge disagrees with the observed file (columns renamed, format changed, date convention changed)."
+    action: "Report the conflict; propose a source-definition update as a recommendation, never apply it."
+    owner: data_steward
+  - id: ES-09
+    trigger: "Volatile regulatory fact past review_by (HCC model year, measure year, ACO REACH end date)."
+    action: "Surface staleness; do not use the fact."
+    owner: lead_analyst
+  - id: ES-10
+    trigger: "Any change touching a settlement, quality submission or care-management worklist number, regardless of volume."
+    action: "Never auto-promote; require approval even for a handful of rows."
+    owner: approver
+  - id: ES-11
+    trigger: "PHI would be needed to resolve the question (e.g. identity conflict needs the actual name and DOB)."
+    action: "Stop; hand to the identity steward with row identifiers only."
+    owner: identity_steward
+  - id: ES-12
+    trigger: "Enrollment DQ rule 'member must have PCP' fails for a large share (Optum GA 81.5% no PCP; Centene GA Medicaid 63 rows)."
+    action: "Surface as a feed-level exception candidate, not a row-level reject; the analyst decides whether the rule applies to an engagement-only roster."
+    owner: business_analyst
+
+never_autonomous:
+  - "Writing to a Silver Raw, Silver ODS or published table."
+  - "Changing a matching threshold or dedup rule."
+  - "Changing inclusion/exclusion logic of any quality or risk metric to improve a rate."
+  - "Approving a mapping version (G2) or exporting decisions to knowledge/mappings/approved/."
+  - "Onboarding a new sender or population."
+
+hand_off_record:
+  # What every escalation carries so the human can act without re-deriving.
+  fields: [screen, feed, batch_id, trigger_id, observed, expected, evidence_citations, affected_canonical_fields, affected_downstream_numbers, loud_or_silent, recommended_action, reversibility]

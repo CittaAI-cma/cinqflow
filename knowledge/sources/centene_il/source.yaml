@@ -1,0 +1,18 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: centene_il
+organization:
+  payer: "Centene Illinois"
+  brands: ["Meridian", "Wellcare of Illinois"]
+  programme_context: "HealthChoice Illinois is the state Medicaid managed care programme, run by the Department of Healthcare and Family Services with statewide plans from Meridian, Aetna Better Health, Blue Cross Community Health Plans and Molina, plus CountyCare in Cook County."
+contract: { id: centene_il, risk_arrangement: "Full Risk", lives: 25779, wave: "Wave 2, August 2026, sequence 6", priority: 7 }
+ownership: { analyst: Raveena, engineer: Khaja, business_uat: "David and Jonathan", claims_analyst: Syed }
+silver_raw_source_system: "Centene IL"
+semantics:
+  what_it_is: "A monthly member snapshot that also carries Centene's own analytics: a risk score, a population health category, a primary risk category and fourteen utilisation counters for the plan year to date."
+  boundary: >
+    Those analytic columns are Centene's calculations, not CINQCARE's. They are useful for
+    care-management targeting and must never be presented as CINQCARE's own utilisation or risk
+    measurement, because the definitions, periods and populations behind them are not ours.
+  second_largest: "At roughly 25,800 lives under full risk this is the second largest contract after Fidelis."

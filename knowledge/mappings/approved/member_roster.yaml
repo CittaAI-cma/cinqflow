@@ -1,0 +1,22 @@
+version: 1
+updated: '2026-09-02'
+domain: enrollment
+feed: member_roster
+generated_by: cinqflow G2 approval; decisions are the analyst's
+decision_sets:
+- source: member_roster (uploaded file, mapped in CINQFLOW)
+  mapping_version: 1
+  approved_at: '2026-09-02'
+  approved_by: analyst@cinqcare.com
+  batch_id: c036fa9d6787
+  target_table: silver_raw.members
+  decisions:
+  - source_field: First_Name
+    target: members.first_name
+    decided_by: analyst_accepted_ai
+  - source_field: Last_Name
+    target: members.last_name
+    decided_by: analyst_accepted_ai
+  - source_field: LOB
+    target: members_enrollment_segments.lob
+    decided_by: analyst_accepted_ai

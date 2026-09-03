@@ -1,0 +1,55 @@
+version: 1
+updated: "2026-09-03"
+kind: domain_knowledge
+domain: quality
+volatile: true
+review_by: "2027-06-30"
+
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml"
+  - "https://www.cms.gov/priorities/innovation/files/aco-reach-py26-qual-meas-meth-report.pdf"
+  - "https://www.ncqa.org (HEDIS MY2025 measure descriptions)"
+
+what_it_answers: >
+  Did the population get good care, measured the way the contract defines it. Quality gates
+  payout in nearly every value-based contract, so a quality number is a financial number.
+
+measurement_frames:
+  hedis: "NCQA measure logic, used by Medicaid and commercial plans and as the basis of many Star measures. Versioned by measurement year."
+  stars: "CMS Part C and D Star Ratings, aggregating measures into a plan-level rating that drives Medicare Advantage revenue."
+  aco_reach: "Claims and survey based only. Five measures, all pay-for-performance in PY2026."
+  mssp_app_plus: "An eCQM and administrative-claims set reported through the Alternative Payment Model Performance Pathway."
+
+structural_rules:
+  - "Measure logic is versioned by measurement period. A locally invented version of a HEDIS measure is not that measure and must never be labelled as one."
+  - "Value sets are pulled from the authoritative terminology release for the period, never hand-maintained."
+  - "Continuous enrollment and anchor date rules exclude members whose absence is easy to miss."
+  - "Report compliant, eligible and excluded counts, never the rate alone."
+  - "Administrative-only calculation understates any measure whose numerator is commonly captured clinically."
+
+ecds_transition:
+  what: "Electronic Clinical Data Systems reporting draws numerators from clinical feeds rather than claims or chart review."
+  consequence: "As measures move to ECDS-only, supplemental clinical data pipelines shift from optional enrichment to the primary compliance path. The hybrid chart-chase method is on a published path to removal by measurement year 2029."
+  at_cinqcare: "Phase 1 has no clinical feed, so ECDS-only measures cannot be computed today. This is a stated gap, not a defect to work around."
+
+terminology_change:
+  note: "For measurement year 2026 NCQA restructured the specifications to align with the FHIR measure resource: eligible population became initial population, measurement year became measurement period, and required exclusions became denominator exclusions."
+
+interpretation_rule:
+  measurement_versus_care: >
+    Whenever a quality rate improves, state explicitly whether measurement improved rather than
+    care. A rate that jumps because a supplemental feed finally arrived is a real improvement in
+    measurement, not in care, and the two lead to opposite management actions.
+
+common_causes_of_movement:
+  denominator: ["eligibility or continuous enrollment rule changed", "age window shifted with the measurement period rollover", "denominator exclusions began applying"]
+  numerator: ["a supplemental clinical feed onboarded or backfilled", "value set version added codes", "a lab feed began mapping to LOINC"]
+  comparison: ["a partial current year compared against a complete prior year always looks worse until corrected, and correcting it mid-cycle produces an apparent jump"]
+
+small_numbers:
+  rule: >
+    Rates on small denominators are unstable and are reported with the denominator visible or
+    not at all. Cell suppression applies to any output that could re-identify an individual, and
+    stratifying by race or ethnicity multiplies cells and therefore risk. The smallest cohorts
+    are usually the highest-risk members, so dropping small cells removes exactly the population
+    value-based care exists to serve. Aggregate across periods or peers instead of excluding.

@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cinqflow / requirements/agents.txt              WAVE 2 AND ABOVE ONLY
+#
+# NOT installed in the Wave-0 / Wave-1 image, and not referenced by the root
+# requirements.txt — the same discipline as databricks.txt and azure.txt. A
+# package that is not in the environment cannot be imported by accident.
+#
+# WHY IT IS NOT IN WAVE 0 (ADR-0018)
+#   The Wave-0 agent's graph is four nodes and linear:
+#       route(small) -> plan_tools(small) -> execute(no model) -> answer(large)
+#   The `inproc` runtime behind the agent_runtime port handles that in ~150
+#   lines we control, holds no credentials, and is therefore the Lane-1 runner.
+#
+# WHY IT ARRIVES IN WAVE 2
+#   `pipeline_medic` branches a failure taxonomy five ways and hands off to
+#   `dq_rca`; `onboarding_copilot` interrupts mid-flow for human gates; plate 11
+#   names a "batch/agentic (minutes, with progress states)" latency class.
+#   Checkpointed resume, conditional branching and streaming become real work,
+#   and this is a good way not to write it.
+#
+# WHAT IT IS ALLOWED TO OWN
+#   The graph runner. Nothing else. Nodes are OUR functions calling OUR services:
+#     • no ChatOpenAI / BaseChatModel — a node calling a model outside the LLM
+#       gateway fails by construction; no credentials exist there (CF-V0-E16-01)
+#     • no LangChain prompt templates — prompts live in the registry, and an
+#       inline prompt string is a defect class (CF-V0-E16-02)
+#     • no LangChain tool node — tools go through the action gateway, which is
+#       non-bypassable and carries the per-agent whitelist and kill switch
+#     • no LangChain retriever — retrieval ranking, packing and the citation
+#       contract live in core/ and must survive a vector-store swap
+#   Graph DEFINITIONS stay in core/agents/<agent>/graph.py as data. Only
+#   execution crosses the port.
+# ─────────────────────────────────────────────────────────────────────────────
+
+-r base.txt
+
+langgraph>=1.2,<2.0                   # graph runner: conditional edges, resume, streaming
+langgraph-checkpoint-postgres>=3.1    # checkpointer on the Postgres we already run
+
+# MEASURED 2026-08-29: resolves cleanly against the runtime set, adding 16
+# packages. Its checkpointer uses psycopg>=3.2 — the driver already in base.txt.
+#
+# CAUTION, and a conformance item: langgraph pulls langchain-core, which pulls
+# `langsmith`. That telemetry client is inert unless LANGSMITH_TRACING is set,
+# but this platform's invariant is "only endpoints declared in the connection
+# profile may be called". When this adapter lands, the profile must pin tracing
+# off and the conformance kit must gain an egress check that proves it.

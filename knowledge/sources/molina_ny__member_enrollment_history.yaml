@@ -1,0 +1,274 @@
+version: 1
+updated: "2026-09-03"
+
+# Loader-facing feed contract. YamlKnowledgeProvider.get_source() reads this exact path;
+# ContextBuilder injects it whole at file understanding and mapping. Richer organisational
+# knowledge for this source is in sources/molina_ny/.
+#
+# Columns, row counts, null rates and value shapes below were read from the de-identified
+# sample and its profile report, not inferred.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/Molina NY MHI_NYCINQ- Down - HARP_NY_MCAID Health Data Profile.pdf"
+
+source_system: molina_ny
+feed: member_enrollment_history
+domain: enrollments
+payer: Molina Healthcare of New York
+population: "NYCINQ- Down - HARP / Down - MEDICAID / Up - MEDICAID / NYCINQUpstate_HARP (four deliveries, one layout)"
+contract: molina_ny
+line_of_business: Medicaid Managed Care and HARP (Member_Health_Plan_Line_of_Business = MEDICAID on every row)
+file_pattern: "^MHI_NYCINQ[ -_].*_NY_MCAID_\\d{8}_to_\\d{8}_\\d{8}_\\d{3}of\\d{3}_Data_MemEnrollHist\\.txt$"
+cadence: monthly
+delivery: sftp
+arrival_archetype: restated_history
+
+format:
+  container: "pipe-delimited text"
+  delimiter: "|"
+  quoting: none (zero quote characters in the file)
+  header: row 1
+  line_terminator: CRLF
+  encoding: "ASCII, no BOM"
+  trailer: none
+  trailing_empty_fields: "the last 12 columns are always empty, so every line ends in a run of pipes - the reader must keep the field count at 60"
+
+business_date:
+  source: file name
+  period_start: "token 1 (YYYYMMDD) - matches min Member_Month"
+  period_end: "token 2 after _to_ (YYYYMMDD) - matches max Member_Month"
+  extract_date: third date token (YYYYMMDD)
+  part: _NNNofNNN part N of M; all samples are 001of001
+  example: "MHI_NYCINQ- Down - HARP_NY_MCAID_20240201_to_20260131_20260223_001of001_Data_MemEnrollHist.txt = period 2024-02..2026-01, extracted 2026-02-23"
+
+grain: "one row per member per coverage month (member-month history), restated in full each delivery"
+natural_key: [Member_ID, Member_Month, Ratecode]
+secondary_identifiers: [Medicaid_State_ID, Subscriber_ID]
+key_note: >
+  (Member_ID, Member_Month) is unique in three of the four files; the Down-MEDICAID file has 10 duplicate pairs that Ratecode resolves. Use the three-part key everywhere for consistency.
+
+# Observed in the de-identified sample (3,745 rows, 60 columns).
+sample_observed:
+  rows: 3745
+  columns: 60
+  blank_rows: 0
+  rows_with_wrong_field_count: 0
+
+# The 60 columns as they actually arrive, in file order.
+expected_columns:
+  - Health_Plan_State_code
+  - Member_ID
+  - Subscriber_ID
+  - SegType
+  - Medicaid_State_ID
+  - Program_ID
+  - Plan_ID
+  - Program_Description
+  - Member_First_Name
+  - Member_Middle_Name
+  - Member_Last_Name
+  - Member_Date_Of_Birth
+  - Member_Date_Of_Death
+  - Member_Gender
+  - Member_Relationship
+  - Member_Ethnicity_or_Race
+  - Member_Language
+  - Member_Residence_Mailing_Street_Address1
+  - Member_Residence_Mailing_Street_Address2
+  - Member_Residence_Mailing_City
+  - Member_Residence_Mailing_State
+  - Member_Residence_Mailing_ZIP_Code
+  - Member_Residence_Mailing_County_Code_Description
+  - Member_Residence_Physical_Street_Address1
+  - Member_Residence_Physical_Street_Address2
+  - Member_Residence_Physical_City
+  - Member_Residence_Physical_State
+  - Member_Residence_Physical_ZIP_Code
+  - Member_Residence_Physical_County_Code_Description
+  - Member_Residence_Country
+  - Member_Health_Plan_Line_of_Business
+  - Member_Health_Plan_Product
+  - Member_Health_Plan_Enrollment_Effective_Date
+  - Member_Health_Plan_Enrollment_Termination_Date
+  - Member_Health_Plan_COB_Status
+  - Member_Health_Plan_COB_Effective_Date
+  - Member_Health_Plan_COB_Termination_Date
+  - Ratecode
+  - Coverage_Effective_Date
+  - Coverage_Term_Date
+  - Member_Month
+  - Member_Home_Phone_Number
+  - Member_Mobile_Number
+  - Home_DNC_Flag
+  - Mobile_DNC_Flag
+  - Preferred_Language
+  - Member_Race
+  - Member_Ethnicity
+  - Medicare_Beneficiary_ID
+  - Hospice_Flag
+  - ESRD_Flag
+  - Contract
+  - PBP
+  - LIS
+  - Member_Marketplace_ID
+  - Metal_Tier
+  - Grace_Period_1
+  - Grace_Period_2
+  - Grace_Period_3
+  - Member_Enroll_ID
+
+# Per-column facts the profiler measured. `null_pct` counts empty strings and literal
+# null tokens. `phi` marks member-identifying columns (HIPAA Safe Harbor).
+columns:
+  - { name: Health_Plan_State_code, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: Member_ID, type: string, null_pct: 0.0, distinct: 299, phi: true }
+  - { name: Subscriber_ID, type: string, null_pct: 0.0, distinct: 299, phi: true }
+  - { name: SegType, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Medicaid_State_ID, type: string, null_pct: 0.0, distinct: 301, phi: true }
+  - { name: Program_ID, type: string, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Plan_ID, type: string, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Program_Description, type: string, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Member_First_Name, type: string, null_pct: 0.0, distinct: 564, phi: true }
+  - { name: Member_Middle_Name, type: string, null_pct: 61.0, distinct: 18, phi: true }
+  - { name: Member_Last_Name, type: string, null_pct: 0.0, distinct: 858, phi: true }
+  - { name: Member_Date_Of_Birth, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 3287, phi: true }
+  - { name: Member_Date_Of_Death, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 352, phi: true }
+  - { name: Member_Gender, type: string, null_pct: 0.0, distinct: 2, phi: true }
+  - { name: Member_Relationship, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Member_Ethnicity_or_Race, type: string, null_pct: 0.0, distinct: 9, phi: true }
+  - { name: Member_Language, type: string, null_pct: 0.0, distinct: 3, phi: false }
+  - { name: Member_Residence_Mailing_Street_Address1, type: string, null_pct: 0.0, distinct: 3743, phi: true }
+  - { name: Member_Residence_Mailing_Street_Address2, type: string, null_pct: 84.8, distinct: 305, phi: true }
+  - { name: Member_Residence_Mailing_City, type: string, null_pct: 0.0, distinct: 3319, phi: true }
+  - { name: Member_Residence_Mailing_State, type: string, null_pct: 0.0, distinct: 3, phi: false }
+  - { name: Member_Residence_Mailing_ZIP_Code, type: int, null_pct: 0.0, distinct: 930, phi: true }
+  - { name: Member_Residence_Mailing_County_Code_Description, type: string, null_pct: 0.1, distinct: 18, phi: true }
+  - { name: Member_Residence_Physical_Street_Address1, type: string, null_pct: 0.0, distinct: 3740, phi: true }
+  - { name: Member_Residence_Physical_Street_Address2, type: string, null_pct: 89.6, distinct: 264, phi: true }
+  - { name: Member_Residence_Physical_City, type: string, null_pct: 0.0, distinct: 3322, phi: true }
+  - { name: Member_Residence_Physical_State, type: string, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Member_Residence_Physical_ZIP_Code, type: int, null_pct: 0.0, distinct: 918, phi: true }
+  - { name: Member_Residence_Physical_County_Code_Description, type: string, null_pct: 0.0, distinct: 10, phi: true }
+  - { name: Member_Residence_Country, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: Member_Health_Plan_Line_of_Business, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: Member_Health_Plan_Product, type: string, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Member_Health_Plan_Enrollment_Effective_Date, type: date:MM/DD/YYYY, null_pct: 0.0, distinct: 25, phi: false }
+  - { name: Member_Health_Plan_Enrollment_Termination_Date, type: date:MM/DD/YYYY, null_pct: 0.0, distinct: 27, phi: false }
+  - { name: Member_Health_Plan_COB_Status, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Member_Health_Plan_COB_Effective_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Member_Health_Plan_COB_Termination_Date, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Ratecode, type: string, null_pct: 0.0, distinct: 7, phi: false }
+  - { name: Coverage_Effective_Date, type: date:MM/DD/YYYY, null_pct: 0.0, distinct: 25, phi: false }
+  - { name: Coverage_Term_Date, type: date:MM/DD/YYYY, null_pct: 0.0, distinct: 27, phi: false }
+  - { name: Member_Month, type: int, null_pct: 0.0, distinct: 24, phi: false }
+  - { name: Member_Home_Phone_Number, type: int, null_pct: 20.3, distinct: 2985, phi: true }
+  - { name: Member_Mobile_Number, type: int, null_pct: 56.8, distinct: 1619, phi: true }
+  - { name: Home_DNC_Flag, type: string, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Mobile_DNC_Flag, type: string, null_pct: 0.0, distinct: 1, phi: true }
+  - { name: Preferred_Language, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Member_Race, type: string, null_pct: 0.0, distinct: 8, phi: true }
+  - { name: Member_Ethnicity, type: string, null_pct: 0.0, distinct: 2, phi: true }
+  - { name: Medicare_Beneficiary_ID, type: empty, null_pct: 100.0, distinct: 0, phi: true }
+  - { name: Hospice_Flag, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: ESRD_Flag, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Contract, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: PBP, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: LIS, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Member_Marketplace_ID, type: empty, null_pct: 100.0, distinct: 0, phi: true }
+  - { name: Metal_Tier, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Grace_Period_1, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Grace_Period_2, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Grace_Period_3, type: empty, null_pct: 100.0, distinct: 0, phi: false }
+  - { name: Member_Enroll_ID, type: empty, null_pct: 100.0, distinct: 0, phi: true }
+
+# Always empty in the sample. Emptiness here is a layout fact, not drift (DQ-B-03 must
+# not fire on these) unless the registered contract says they were populated before.
+expected_empty_columns:
+  - SegType
+  - Member_Relationship
+  - Member_Health_Plan_COB_Status
+  - Member_Health_Plan_COB_Effective_Date
+  - Member_Health_Plan_COB_Termination_Date
+  - Preferred_Language
+  - Medicare_Beneficiary_ID
+  - Hospice_Flag
+  - ESRD_Flag
+  - Contract
+  - PBP
+  - LIS
+  - Member_Marketplace_ID
+  - Metal_Tier
+  - Grace_Period_1
+  - Grace_Period_2
+  - Grace_Period_3
+  - Member_Enroll_ID
+
+phi_columns:
+  - Member_ID
+  - Subscriber_ID
+  - Medicaid_State_ID
+  - Member_First_Name
+  - Member_Middle_Name
+  - Member_Last_Name
+  - Member_Date_Of_Birth
+  - Member_Date_Of_Death
+  - Member_Gender
+  - Member_Ethnicity_or_Race
+  - Member_Residence_Mailing_Street_Address1
+  - Member_Residence_Mailing_Street_Address2
+  - Member_Residence_Mailing_City
+  - Member_Residence_Mailing_ZIP_Code
+  - Member_Residence_Mailing_County_Code_Description
+  - Member_Residence_Physical_Street_Address1
+  - Member_Residence_Physical_Street_Address2
+  - Member_Residence_Physical_City
+  - Member_Residence_Physical_ZIP_Code
+  - Member_Residence_Physical_County_Code_Description
+  - Member_Home_Phone_Number
+  - Member_Mobile_Number
+  - Mobile_DNC_Flag
+  - Member_Race
+  - Member_Ethnicity
+  - Medicare_Beneficiary_ID
+  - Member_Marketplace_ID
+  - Member_Enroll_ID
+
+# Closed-domain columns and the values observed. A value outside these is DQ-B-07.
+value_domains:
+  Health_Plan_State_code: [NY]
+  Member_Gender: [M, F]
+  Member_Health_Plan_Line_of_Business: [MEDICAID]
+  Member_Health_Plan_Product: [HARP, ABD BH, TANF, TANF CHILD, "ABD NON-DUAL", "ABD LTC NON-DUAL", ESSENTIAL]
+  Home_DNC_Flag: [Y, N]
+  Mobile_DNC_Flag: [Y, N]
+  Member_Ethnicity: [NO ETHNICITY, Hispanic or Latino]
+  Member_Residence_Country: [UNITED STATES]
+
+formats:
+  dates_iso: "Member_Date_Of_Birth, Member_Date_Of_Death = YYYY-MM-DD"
+  dates_us: "Member_Health_Plan_Enrollment_Effective_Date, _Termination_Date, Coverage_Effective_Date, Coverage_Term_Date = MM/DD/YYYY"
+  month: Member_Month = YYYYMM integer
+  phones: "bare 10 digits, no punctuation"
+  identifiers: "Member_ID and Subscriber_ID are NYM + 11 digits; Medicaid_State_ID is the NY CIN (2 letters, 5 digits, 1 letter)"
+  ratecode: "rate-premium-region, e.g. 2205-7580-NY; region suffixes seen NY, LI, NM, MH, WR; Medicaid files also use the short forms 2205-NY, 2201"
+  spans: "enrollment effective/termination always equal coverage effective/term, and always bracket the Member_Month"
+
+# De-identification artefacts in the SAMPLE ONLY. Never tune a rule or threshold on
+# these; the production feed has a different shape.
+deid_artifacts:
+  - "Member_Date_Of_Death is 0% null with 99.6% of values in year 2078; the production feed is expected to be mostly null. Do not build a deceased rule from this sample."
+  - "Member_ID, Subscriber_ID, Medicaid_State_ID, Medicare_Beneficiary_ID and Member_Enroll_ID are hashed."
+  - "The profile PDF Column Summary reports 0.0% missing for faked columns that are largely empty; use Missing Value Analysis or the column facts here instead."
+
+quirks:
+  - "The layout is Molina's generic multi-line-of-business enrollment template, so 17 columns for Medicare, Marketplace and coordination-of-benefits are always empty for these Medicaid and HARP populations."
+  - "File names are inconsistent: three use 'NYCINQ- <Down|Up> - <LOB>' with spaces and hyphens, the fourth is 'NYCINQUpstate_HARP' with neither. One regex must tolerate both."
+  - Both a mailing and a physical address block arrive; each becomes a members_addresses row with its own address_type.
+  - "Race appears twice under different code sets: Member_Ethnicity_or_Race (Molina codes) and Member_Race (OMB-style categories with mixed casing)."
+
+notes: >
+  Four population files share one 60-column layout and are delivered together. This is
+  restated history, not an incremental: every delivery repeats the full period from the fixed
+  start date, so loading it as an upsert without a key comparison will silently duplicate
+  member-months. The enrollment canonical model has no home for coverage spans or member
+  months, so the date and Member_Month columns land as unknown until the model is extended.

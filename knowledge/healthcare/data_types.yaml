@@ -1,0 +1,78 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+
+# Healthcare-specific data shapes, and how to tell them apart from lookalikes during profiling.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/ (observed across 14 files)"
+  - "knowledge/transformations/dates.yaml"
+  - "knowledge/healthcare/identifiers.yaml"
+
+dates:
+  see: "transformations/dates.yaml for the full format inventory and parse patterns"
+  domain_rules:
+    - "Date of birth is PHI and is never shifted in Silver Raw, only masked in previews."
+    - "A date of service is meaningful only with a paid-through date beside it."
+    - "Open-ended coverage is expressed as a sentinel, not as null: 9999-12-31 at Centene GA, 9999-12-31 23:59:58.963000 at Optum GA."
+    - "A date column that is 0% null in a de-identified sample is suspect; date-faking fills nulls."
+
+flags:
+  observed_vocabularies:
+    y_n: "Molina DNC flags, Centene GA active indicator, CMS alignment flags"
+    zero_one: "ACO REACH derived flags, the ADT working table"
+    yes_blank: "Fidelis in_care_management_with_fidelis, primary_coverage_not_with_fidelis"
+    phrase_blank: "Fidelis harp_eligible ('HARP Eligible'), health_homes_plus_eligible ('Health Homes Plus Eligible'), ep_assignment_flag ('Attributed_PCP_Group')"
+    token_blank: "Optum GA DNC_IND ('DNC')"
+  rule: "Blank means unknown, not false. A boolean cast must map blank to null, and a phrase-or-blank flag must be value-mapped explicitly rather than tested for truthiness."
+
+amounts:
+  see: "transformations/amounts.yaml"
+  rule: "DECIMAL(18,4) with an ISO currency code. Negative and zero amounts are legitimate for voids, reversals and capitated services."
+
+names:
+  shapes:
+    separate_fields: "first, middle, last, suffix - the common case"
+    single_full_name: "Centene GA MEMBER_NAME in 'FIRST LAST' order"
+    last_comma_first: "Fidelis UM member_name and CMP PCP in 'LAST, FIRST' order, the latter with a credential suffix"
+  rules:
+    - "Parse member name fields only. The client's cleanse rule explicitly excludes the PCP name field."
+    - "Trim, but never change case: names are PHI and case carries information."
+    - "A suffix truncated by a source system is a known cause of parent-and-child false merges."
+
+addresses:
+  shapes:
+    single_block: "line 1, line 2, city, state, ZIP, county"
+    dual_block: "Molina supplies a mailing block and a physical block, each becoming its own address row with its own address_type"
+    fixed_width_remnant: "The ACO REACH roster pads address lines 3 to 6 to 40 spaces rather than leaving them empty"
+  rules:
+    - "Parse member address fields only, never PCP or facility addresses."
+    - "Trim before any null test, or padded blanks read as populated."
+    - "ZIP is stored as text: leading zeros are significant and a ZIP+4 must not become a number."
+
+identifiers:
+  see: "healthcare/identifiers.yaml"
+  rule: "Always text. An identifier stored as a number loses leading zeros and gains scientific notation in a spreadsheet round trip."
+
+free_text:
+  observed:
+    - "Fidelis high_need_status is a comma-joined multi-value list"
+    - "ADT DiagnosisList is a comma-joined list of codes and descriptions up to 1,709 characters"
+    - "CMP Memo1 and Memo2 are operational free text with no schema"
+    - "CMP Race is comma-joined and multi-valued across 76 combinations"
+  rule: "Preserve verbatim in Silver Raw. Splitting a multi-value column is a modelling decision with an owner."
+
+nulls:
+  representations: ["empty string", "the literal NULL", "None", "NaN", ".", "MISSING", "NA", "40 spaces", "0 used as unknown"]
+  rule: >
+    Register the null tokens per feed and normalise before computing any null rate. The ADT
+    working table and the ACO REACH roster both understate their null rates badly if the tokens
+    are treated as values, and the client's own profile reports make exactly this error.
+
+file_containers:
+  csv: "Comma-separated. Quoting varies from none to every field."
+  pipe_txt: "Molina. No quoting at all, so an embedded pipe would break the row."
+  quoted_txt: "Centene GA. A .txt extension holding comma-separated values with every field quoted."
+  xlsx: "Fidelis downstate and Optum GA. Every cell is stored as text including dates, so the reader must parse strings rather than Excel serials."
+  xlsx_that_is_csv: "The ACO REACH roster is named .xlsx but its bytes are comma-separated text."
+  ndjson: "BCDA bulk FHIR export, one JSON resource per line."
+  hl7_v2: "ADT messages, pipe-and-hat delimited, batched into JSON by Mirth before landing."

@@ -1,0 +1,48 @@
+version: 1
+updated: "2026-09-03"
+kind: transformation_reference
+
+# Money and unit semantics for claims feeds.
+# GROUNDED IN: claims-model-final-raw.xlsx (DECIMAL(18,4) amounts, adjudication categories),
+# BCDA_Handling_Claim_Adjustments_and_Claim_Status.docx (sign normalisation),
+# Data_lake_data_model.xlsx Data Quality Rules (DQ-042..044, DQ-057 balance checks),
+# and the VBC knowledge pack financial vocabulary (KB-ONT-010).
+grounded_in:
+  - "docs/03_data_source_schemas/claims/claims-model-final-raw.xlsx"
+  - "docs/05_business_logic_and_domain_rules/BCDA_Handling_Claim_Adjustments_and_Claim_Status.docx"
+  - "docs/03_data_source_schemas/lakehouse_and_layers/Data_lake_data_model.xlsx"
+
+canonical_type: "DECIMAL(18,4); currency ISO code, USD"
+
+amount_kinds:
+  billed:   { aka: [total_charge, line_charge, submitted], means: "Provider list price; never trended", adjudication_category: submitted }
+  allowed:  { aka: [allowed_amount, eligible], means: "Contractually permitted amount; the basis for cost-of-care analytics", adjudication_category: eligible }
+  paid:     { aka: [plan_paid, plan_paid_amount, CLM_PMT_AMT, payment.amount], means: "What the payer paid", adjudication_category: benefit }
+  member_cost_share: { aka: [member_responsibility, member_liability], means: "deductible + copay + coinsurance", adjudication_category: [deductible, copay, coinsurance] }
+  identity: "allowed = paid + member cost share (+ coordination of benefits); DQ-057 checks it within tolerance"
+
+sign_normalisation:
+  # From the BCDA adjustments document §7-§8 and the legacy SAS CCLF logic.
+  cclf: { "0": { type: ORIGINAL, sign: "+" }, "1": { type: CANCELLATION, sign: "-" }, "2": { type: ADJUSTMENT, sign: "+" } }
+  bcda_fhir_r4:
+    no_related_claim: ORIGINAL
+    "related.relationship = prior": ADJUSTMENT
+    "related.relationship = replaces": ADJUSTMENT
+    "related.relationship = replacedby": CANCELLATION
+    "status = cancelled": CANCELLED
+    payment_reversal_detected: REVERSAL
+  rule: "Silver Raw stores the raw amount and the derived claim_adjustment_type_cd. Net financial position (SUM of sign-normalised payment) is a Silver ODS derivation, never a Silver Raw write."
+
+rules:
+  - id: AM-01
+    rule: "Negative or zero amounts are legitimate for voids, reversals and adjustments (DQ-S-06). Observe volume; never reject a row for a negative amount."
+  - id: AM-02
+    rule: "Allowed <= billed and paid <= allowed are soft checks (Medium). Violations are flagged, not corrected; capitated encounters routinely have $0 paid."
+  - id: AM-03
+    rule: "Strip currency symbols and thousands separators before cast; parentheses denote negatives in some payer extracts."
+  - id: AM-04
+    rule: "Never blend a completed (IBNR-estimated) figure into the same column as an actual paid amount."
+  - id: AM-05
+    rule: "Every cost fact carries paid_date (paid-through) so immaturity is visible downstream; a claims feed without a paid date is flagged at file understanding."
+  - id: AM-06
+    rule: "Pharmacy: quantity, days_supply and units are numeric; quantity_units is a string. Days supply 1-365 (DQ-041)."

@@ -1,0 +1,129 @@
+# CINQFLOW local orchestration - containerised parity for the working foundation.
+#
+# One Postgres instance, not two: structure.md documents "One PostgreSQL instance
+# in dev ... two logical groups of schemas" (workflow/queue = control plane;
+# bronze/silver = data plane) - the app itself has exactly one
+# CINQFLOW_DATABASE_URL (settings.py / db.py). The control/data separation the
+# checklist asks for is real, but it is enforced by schema (workflow, jobq vs
+# bronze, silver) and by DB-level grants (Bronze append-only trigger + REVOKE),
+# not by running two Postgres containers the application has no way to address
+# separately. Splitting into two instances would require inventing a second
+# connection string the codebase does not have - out of scope per "do not
+# redesign the application architecture".
+#
+# Usage: `make up` (from the repo root) or `docker compose -f compose/docker-compose.yml up`.
+
+networks:
+  cinqflow:
+
+volumes:
+  pgdata:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cinqflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinqflow}
+      POSTGRES_DB: ${POSTGRES_DB:-cinqflow}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cinqflow} -d ${POSTGRES_DB:-cinqflow}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [cinqflow]
+
+  # One-shot, idempotent bootstrap: `cinqflow install` creates the workflow +
+  # jobq schemas and the Bronze layer namespace (cli.py:cmd_install). Runs to
+  # completion before api/worker start so neither assumes the schemas exist.
+  migrate:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: ["poetry", "run", "cinqflow", "install"]
+    environment: &backend-env
+      CINQFLOW_DATABASE_URL: postgresql://${POSTGRES_USER:-cinqflow}:${POSTGRES_PASSWORD:-cinqflow}@postgres:5432/${POSTGRES_DB:-cinqflow}
+      CINQFLOW_LLM_PROVIDER: ${CINQFLOW_LLM_PROVIDER:-stub}
+      CINQFLOW_LLM_MODEL: ${CINQFLOW_LLM_MODEL:-claude-sonnet-5}
+      CINQFLOW_LLM_API_KEY: ${CINQFLOW_LLM_API_KEY:-}
+    volumes: &backend-volumes
+      # Live code, so `--reload` (api) and iteration work without a rebuild.
+      - ../backend/src:/app/backend/src
+      - ../backend/tests:/app/backend/tests
+      # REPO_ROOT resolves to /app inside the image (see backend/Dockerfile),
+      # so these land exactly where settings.py's defaults already look:
+      # landing_root=/app/.cinqflow/landing, knowledge_root=/app/knowledge.
+      - ../.cinqflow:/app/.cinqflow
+      - ../knowledge:/app/knowledge
+      - ../docs:/app/docs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [cinqflow]
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: ["poetry", "run", "uvicorn", "cinqflow.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    restart: unless-stopped
+    environment: *backend-env
+    volumes: *backend-volumes
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks: [cinqflow]
+
+  # Independently runnable from the API by design (features.md: "thin control
+  # plane" / checklist.md: "worker must be independently runnable from api") -
+  # separate container, separate process, drains all topics on its own loop.
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: ["poetry", "run", "cinqflow", "work"]
+    restart: unless-stopped
+    environment: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [cinqflow]
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Resolved only inside the Next.js server process (all backend calls go
+      # through "use server" actions / server components - lib/api.ts is never
+      # imported by a "use client" module), so the in-network hostname is safe.
+      CINQFLOW_API: http://api:8000
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "${FRONTEND_HOST_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [cinqflow]

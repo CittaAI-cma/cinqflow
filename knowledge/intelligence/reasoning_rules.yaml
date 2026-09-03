@@ -1,0 +1,76 @@
+version: 1
+updated: "2026-09-03"
+kind: governance
+
+# Operating rules for AI interpretation at the Landing, Bronze and Mapping screens.
+# Distilled from the VBC knowledge pack (KB-PLY-001, KB-PLY-004, KB-PLY-011, KB-XLR-001,
+# KB-BRZ-001..004, KB-SRC-008, GR-01..GR-07) and the prompts' own rules, then made specific
+# to what the CINQCARE feeds actually do.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/"
+  - "backend/src/cinqflow/intelligence/prompts/"
+  - "knowledge/sources/"
+
+always_on:
+  - id: RR-01
+    rule: "Observations are true. Never contradict a deterministic profile fact; explain it."
+  - id: RR-02
+    rule: "Governed knowledge is authoritative about the organisation; when it disagrees with the file, say which is stale rather than guessing."
+  - id: RR-03
+    rule: "Classify the arrival archetype before proposing anything about keys or merges: full snapshot (rosters), restated history (Molina member-month, Optum NY spans, D0284 by filedate), append-only events (ADT), incremental delta (CCLF monthlies), correction-in-place."
+  - id: RR-04
+    rule: "The prior for any anomaly is pipeline or source change, then identity or attribution change, then definition change, then reality. State which hypothesis you are testing."
+  - id: RR-05
+    rule: "Cite the governing node or file@version for every rule you assert. An assertion you cannot attribute is one you do not make."
+  - id: RR-06
+    rule: "Say what you cannot determine. A truthful unknown is worth more than a plausible guess; the analyst can resolve an unknown but a wrong mapping corrupts silently."
+  - id: RR-07
+    rule: "Name the blast radius: which canonical table, which downstream number (attribution count, member months, readmission rate, PMPM) a structural finding would move, and whether the failure is loud or silent."
+  - id: RR-08
+    rule: "No PHI in reasoning output. Refer to columns and shapes, never to values from name, DOB, address, phone, email or identifier columns."
+
+file_understanding:
+  - id: RR-10
+    rule: "Determine domain from the column vocabulary, not the folder or file name: enrollment carries member + coverage/plan + PCP; claims carries claim id + dates of service + codes + amounts; ADT carries event type + admit/discharge + facility."
+  - id: RR-11
+    rule: "Identify the payer family from identifier shapes and literals: NY CIN AA99999A (NY Medicaid), 11-char MBI 9AA9AA9AA99 (Medicare), GA 12-digit Medicaid id, IL 9-digit RIN, Fidelis id with -FCNY/-EPP suffix, Molina NYM prefix, Centene GA MEMBER_KEY GA prefix, Centene IL AMISYS A+10 digits."
+  - id: RR-12
+    rule: "Read the business date from the file name when the convention is known (Fidelis MM_DD_YYYY, Molina period_to_period_extract, Centene GA ' - YYYY-MM-DD', Optum GA prefix, Optum NY/Centene IL _YYYYMM); otherwise from a column (D0284 filedate/yr_mo); otherwise state none."
+  - id: RR-13
+    rule: "Report format anomalies as observed facts with a risk: extension lies (.xlsx that is CSV, .txt that is CSV), every-field quoting, trailing empty columns, literal NULL/None/./MISSING/NA tokens, 40-space padded blanks, mojibake."
+  - id: RR-14
+    rule: "Flag de-identification artefacts in samples and refuse to derive rules from them: faked death dates (year 2078), hashed contract numbers that no longer match PBP, hyphenated 13-char MBI, age disagreeing with DOB."
+  - id: RR-15
+    rule: "A population label column (vbp_id, RecordSource, aco_id, LOB) with one distinct value is a feed identity fact, not a data quality problem."
+
+bronze_analysis:
+  - id: RR-20
+    rule: "Bronze never deduplicates. Report duplicate rows as evidence about the source (D0284 December restatement written twice; ADT same member/day/event from two routes) and quantify them."
+  - id: RR-21
+    rule: "Test the declared natural key against Bronze counts; when it is not unique, propose the composite the data supports (Fidelis downstate member_id has 5 duplicate pairs; Molina needs Ratecode; Optum NY needs RECORD_START_DT) and mark it for analyst decision."
+  - id: RR-22
+    rule: "Columns that are 100% empty are a layout fact (Molina's generic multi-LOB template, Centene IL MEMBER TYPE, D0284 placeholders), not a defect - unless the registered contract says they were populated before, which is DQ-B-03 and blocks."
+  - id: RR-23
+    rule: "Sentinel dates are nulls: 9999-12-31 (open-ended eligibility), 2198-12-31, 1753-01-01, 1900-01-01, year 1000 service dates. Report them as nulls-in-disguise, never as outliers."
+  - id: RR-24
+    rule: "Compare row count to the contract band and prior deliveries; a plausible file with a 40% drop is the most dangerous case because every other check passes."
+  - id: RR-25
+    rule: "Relate the feed to its contract: a roster row count far from the contract's attributed lives (e.g. Fidelis 64,201; Centene IL 25,779; D0284 6,973 distinct beneficiaries) is a finding the analyst must see."
+
+mapping:
+  - id: RR-30
+    rule: "Only fields in the canonical model are legal targets. system_populated columns and contested_fields are never proposed."
+  - id: RR-31
+    rule: "Cover every observed column exactly once. Columns with no canonical home get target null and status unknown; the gap goes in notes."
+  - id: RR-32
+    rule: "Prefer an approved decision from the same feed, then the same source family, then a glossary term; a name that merely looks similar is weak."
+  - id: RR-33
+    rule: "When the canonical PK needs a component the feed does not supply (address_type, phone_type, email_type, member_plan, member_payor), say so in notes; the analyst must supply a constant."
+  - id: RR-34
+    rule: "Propose a transform only when the observed values need one to fit the target type, and only from the closed vocabulary (parse_date, trim, upper, lower, concat, substring, cast). value_map is a field table, not a transform."
+  - id: RR-35
+    rule: "Two identifier columns cannot both land in members.source_system_id (member_id vs medicaid_id). Propose the payer id as the key and name the other as an alternate identifier the model cannot yet hold (source_system_id_type records which was used)."
+  - id: RR-36
+    rule: "Coverage start/end, recertification, HARP/Health Home flags and guardian contacts have no home in the enrollment DDL. Surface as unknown with the gap named; never force them into care_management_program or add_reason."
+  - id: RR-37
+    rule: "Many-to-one normalisations (race categories, free-text visit type to patient class, LOB standardisation) are analyst decisions; propose the value_map, mark status ambiguous, and never invent the mapping table."

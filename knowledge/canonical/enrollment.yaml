@@ -1,0 +1,153 @@
+version: 1
+updated: "2026-09-02"
+domain: enrollment
+
+# GROUNDED IN, and only in:
+#   docs/03_data_source_schemas/enrollment/enrollment_silver_raw_model.sql
+# Every field below was read from that executable DDL, including its declared type,
+# its comment and its primary key. Nothing here is inferred.
+#
+# WHY THE DDL AND NOT THE SPREADSHEETS: this file lists the LEGAL MAPPING TARGETS,
+# and a target is only legal if a Silver Raw write could actually land in it. The
+# DDL is what the write must satisfy. Where other documents in docs/ name fields
+# this DDL does not declare, they are recorded under `contested_fields` below
+# instead of being offered as targets.
+grounded_in:
+  - "docs/03_data_source_schemas/enrollment/enrollment_silver_raw_model.sql"
+
+# Populated by the platform, never by a mapping. A proposal targeting one of these
+# is a validation failure, not a suggestion.
+system_populated:
+  - lsdeleted
+  - record_hash
+  - source_system
+  - created_by
+  - created_at
+  - updated_by
+  - updated_at
+  - batch_id
+  - secure_id
+  - record_creation_date
+
+entities:
+  - entity: member
+    table: members
+    grain: "one row per member per source system"
+    primary_key: [source_system_id, source_system]
+    fields:
+      - { name: source_system_id, type: string, phi: true, means: "Source Identifier Record" }
+      - { name: source_system_id_type, type: string, phi: false, means: "Type of identifier used" }
+      - { name: first_name, type: string, phi: true, means: "Member's first (given) name" }
+      - { name: last_name, type: string, phi: true, means: "Member's last (family) name" }
+      - { name: middle_name, type: string, phi: true, means: "Member's middle name" }
+      - { name: suffix, type: string, phi: true, means: "Name suffix (e.g., Jr, Sr, III)" }
+      - { name: date_of_birth, type: timestamp, phi: true, means: "Member's date of birth" }
+      - { name: sex, type: string, phi: true, means: "Member's gender/sex" }
+      - { name: race, type: string, phi: true, means: "Member's race classification" }
+      - { name: ethnicity, type: string, phi: true, means: "Member's ethnicity classification" }
+      - { name: language, type: string, phi: true, means: "Preferred spoken language" }
+      - { name: location, type: string, phi: false, means: "General location or geographic descriptor" }
+      - { name: care_management_program, type: string, phi: false, means: "Care management program the member is enrolled in" }
+      - { name: last_contact, type: timestamp, phi: true, means: "Date/time of last contact with member" }
+      - { name: dual_status_code, type: string, phi: false, means: "Indicator of dual eligibility (Medicare/Medicaid)" }
+      - { name: death_date, type: timestamp, phi: true, means: "Member's date of death" }
+      - { name: dnc, type: bool, phi: false, means: "Do Not Call indicator" }
+
+  - entity: member_address
+    table: members_addresses
+    grain: "one row per member per address type"
+    primary_key: [address_type, source_system_id, source_system]
+    fields:
+      - { name: address_type, type: string, phi: false, means: "Type/category of the address" }
+      - { name: address1, type: string, phi: true, means: "Primary street address line" }
+      - { name: address2, type: string, phi: true, means: "Secondary address line" }
+      - { name: city, type: string, phi: true, means: "City name" }
+      - { name: state, type: string, phi: false, means: "Two-letter state abbreviation" }
+      - { name: zip, type: string, phi: true, means: "ZIP or ZIP+4 postal code" }
+      - { name: zip4, type: string, phi: true, means: "ZIP+4 extension" }
+      - { name: is_zip4, type: string, phi: false, means: "Additional 4-digit ZIP extension flag" }
+      - { name: region, type: string, phi: false, means: "Region" }
+      - { name: county, type: string, phi: true, means: "County name" }
+      - { name: county_ssa, type: string, phi: false, means: "SSA county code" }
+      - { name: county_fips, type: string, phi: false, means: "FIPS county code" }
+      - { name: can_contact, type: bool, phi: false, means: "Flag indicating contact allowed" }
+      - { name: source_system_id, type: string, phi: true, means: "Source Unique Identifier" }
+
+  - entity: member_phone
+    table: members_phones
+    grain: "one row per member per phone type"
+    primary_key: [phone_type, source_system_id, source_system]
+    fields:
+      - { name: phone_type, type: string, phi: false, means: "Phone type (Cell, Home, etc.)" }
+      - { name: phone_number, type: string, phi: true, means: "Member's phone number" }
+      - { name: can_contact, type: bool, phi: false, means: "Flag indicating contact allowed" }
+      - { name: source_system_id, type: string, phi: true, means: "Source Unique Identifier" }
+
+  - entity: member_email
+    table: members_emails
+    grain: "one row per member per email type"
+    primary_key: [email_type, source_system_id, source_system]
+    fields:
+      - { name: email_type, type: string, phi: false, means: "Email type (Primary, Personal, Secondary)" }
+      - { name: email_address, type: string, phi: true, means: "Email address" }
+      - { name: can_contact, type: bool, phi: false, means: "Flag indicating contact allowed" }
+      - { name: source_system_id, type: string, phi: true, means: "Source Unique Identifier" }
+
+  - entity: member_enrollment_segment
+    table: members_enrollment_segments
+    grain: "one row per member per plan/payor/insurance id"
+    primary_key: [member_plan, member_payor, insurance_id, source_system_id, source_system]
+    fields:
+      - { name: member_group, type: string, phi: false, means: "Facility Name or Practice or Group" }
+      - { name: member_plan, type: string, phi: false, means: "Member Plan" }
+      - { name: member_payor, type: string, phi: false, means: "Member Payor" }
+      - { name: lob, type: string, phi: false, means: "Line of Business" }
+      - { name: insurance_id, type: string, phi: true, means: "Insurance ID" }
+      - { name: tin, type: string, phi: false, means: "Tax Identification Number" }
+      - { name: tin_market, type: string, phi: false, means: "PCP State" }
+      - { name: tin_submarket, type: string, phi: false, means: "PCP Upstate/Downstate" }
+      - { name: pcp_name, type: string, phi: false, means: "Primary Care Provider name" }
+      - { name: pcp_npi, type: string, phi: false, means: "Primary Care Provider NPI" }
+      - { name: pay_to_zip, type: string, phi: false, means: "Pay-to ZIP code" }
+      - { name: add_reason, type: string, phi: false, means: "Reason for adding/enrolling member" }
+      - { name: control_number, type: string, phi: false, means: "Optum-specific control number" }
+      - { name: control_number_pbp, type: string, phi: false, means: "Plan Benefit Package control number" }
+      - { name: source_system_id, type: string, phi: true, means: "Source Unique Identifier" }
+
+# ---------------------------------------------------------------------------
+# Fields other documents in docs/ treat as canonical targets, which this DDL does
+# NOT declare. They are NOT legal targets: a mapping to one of them would have
+# nowhere to land. Recorded so the gap is visible to the analyst rather than
+# guessed at by the model - Stage 3 must surface these source columns as unknown.
+contested_fields:
+  - field: guardian_first_name
+    seen_in: "docs/03_data_source_schemas/enrollment/Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx (Non ACO Enrollment)"
+    note: "Mapped there from Members_Guardian.Guardian_Name; no guardian column exists in the DDL."
+  - field: guardian_last_name
+    seen_in: "docs/.../Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx (Non ACO Enrollment)"
+    note: "Same gap as guardian_first_name."
+  - field: guardian_phone_number
+    seen_in: "docs/.../Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx (Non ACO Enrollment)"
+    note: "Mapped there from Members_Guardian.Guardian_Phone; absent from the DDL."
+  - field: guardian_email
+    seen_in: "docs/.../Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx (Non ACO Enrollment)"
+    note: "Mapped there from Members_Guardian.Guardian_Email; absent from the DDL."
+  - field: feed_name
+    seen_in: "docs/.../Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx (Cinq MSSP Enrollment)"
+    note: "The DDL carries source_system only."
+  - field: effective_date
+    seen_in: "roster feeds supply enrollment_date; no canonical coverage-start column exists"
+    note: >
+      members_enrollment_segments declares no effective/end dates, so coverage periods
+      cannot be landed in this canonical version. Flagged in the Stage 1 report.
+  - field: end_date
+    seen_in: "roster feeds supply coverage_end_date"
+    note: "Same gap as effective_date."
+
+# Documented naming equivalences. The left side appears in CINQCARE mapping
+# spreadsheets; the right side is what the DDL actually declares. Approved-mapping
+# knowledge is recorded against the DDL name so proposals stay landable.
+equivalences:
+  - spreadsheet_term: gender
+    canonical_field: sex
+    evidence: "Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx maps Members.Sex -> 'gender'; the DDL column is members.sex"

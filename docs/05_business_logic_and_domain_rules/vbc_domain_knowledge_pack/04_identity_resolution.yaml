@@ -1,0 +1,177 @@
+file: 04_identity_resolution.yaml
+purpose: >
+  The Identity layer in depth. Every downstream number depends on this being right, and identity
+  errors are the hardest defects to detect because the data looks perfectly clean afterwards.
+
+nodes:
+
+  - id: KB-IDN-001
+    title: "The two failure directions and their asymmetric cost"
+    kind: concept
+    layer: identity
+    domain_tags: [identity]
+    confidence: conventional
+    volatile: false
+    body: >
+      False negatives (one person appearing as two) fragment a longitudinal record: care gaps look
+      open when they are closed, chronic conditions look absent, cost per member is understated,
+      and member counts are inflated. False positives (two people merged into one) blend two
+      clinical histories, which is a patient safety event as well as a data error, and produces a
+      record that no downstream check will flag as wrong. Because the costs are asymmetric,
+      matching thresholds in healthcare are tuned conservatively: auto-merge only on high
+      confidence, route the ambiguous middle to human review, and never auto-merge on
+      demographic similarity alone. The agent must never propose loosening thresholds to reduce a
+      backlog of unmatched records; that trade is a clinical decision, not an operational one.
+    depends_on: [KB-ONT-009]
+
+  - id: KB-IDN-002
+    title: "Deterministic matching: rules and traps"
+    kind: decision_rule
+    layer: identity
+    domain_tags: [identity]
+    decision_type: reconcile
+    confidence: conventional
+    volatile: false
+    body: |
+      Deterministic matching keys on exact agreement of identifiers. Tiered, strongest first:
+        1. Current MBI, or MBI resolved through the CMS-supplied historical crosswalk (CCLF9 /
+           BCDA Patient identifier history). This is the strongest Medicare key available.
+        2. Payer member id plus payer plus effective period.
+        3. Facility MRN plus facility. Strong within a facility, meaningless across facilities.
+        4. SSN — legally restricted, frequently wrong, and shared within families in practice.
+           Treat as supporting evidence only, never as a sole match key.
+      Traps: identifiers are reused by source systems after a person leaves; test and placeholder
+      records (999999999, "TEST PATIENT") match each other enthusiastically and must be blocked by
+      an explicit exclusion list; and an MBI change is not a new person, which is exactly the
+      error a naive deterministic rule makes every time CMS reissues an identifier.
+    depends_on: [KB-IDN-001]
+
+  - id: KB-IDN-003
+    title: "Probabilistic matching: blocking, comparison, and thresholds"
+    kind: decision_rule
+    layer: identity
+    domain_tags: [identity]
+    decision_type: reconcile
+    confidence: conventional
+    volatile: false
+    body: |
+      Where identifiers disagree or are absent, probabilistic matching scores attribute agreement.
+      Blocking first (never compare all pairs): common blocking keys are last-name-soundex plus
+      birth year, birth date plus first initial plus ZIP3, or normalised phone. Use several
+      blocking passes; any single pass has systematic blind spots.
+      Comparison attributes and their real-world behaviour:
+        date of birth  strong, but transposition errors and 01/01 defaults are common
+        last name      unstable for married women; hyphenation and compound surnames vary
+        first name     nicknames require a governed synonym table, not string distance alone
+        sex            weak; low cardinality contributes little information
+        address        strong when standardised, but institutional and shelter addresses cluster
+                       many unrelated people at one point
+        phone/email    strong when present, shared within households
+      Score into three bands: auto-match, human review, no match. The review band is not overhead
+      to be minimised — it is where twins, juniors and seniors, and recently married members live.
+      Weights must be tuned on labelled local data; borrowed thresholds are a shop_specific value
+      the agent must never assume.
+    depends_on: [KB-IDN-002]
+
+  - id: KB-IDN-004
+    title: "Household and twin confounders"
+    kind: failure_mode
+    layer: identity
+    domain_tags: [identity]
+    confidence: conventional
+    volatile: false
+    body: >
+      The classic false-positive generators in healthcare identity are twins (same surname, same
+      date of birth, same address, same guarantor, often similar first names), parent and child
+      sharing a first name with a suffix that the source system truncated, and family members
+      sharing a subscriber id where only a dependent sequence number distinguishes them. A fourth
+      is a member enrolled under both a commercial plan and Medicaid, where the same person has
+      genuinely different identifiers and both are correct. Rule: never auto-merge when candidate
+      records share address and date of birth but differ on first name or suffix, and never
+      collapse subscriber and dependent without an explicit relationship code. The agent should
+      flag any proposed merge matching this signature for human review regardless of composite
+      score.
+    depends_on: [KB-IDN-003]
+
+  - id: KB-IDN-005
+    title: "The crosswalk is the deliverable, not the golden record"
+    kind: contract
+    layer: identity
+    domain_tags: [identity]
+    decision_type: define
+    confidence: conventional
+    volatile: false
+    body: >
+      The Identity layer's primary output is a versioned crosswalk table: source system, source
+      identifier, identifier type, effective period, surrogate person key, match method, match
+      score, evidence, and reviewer where applicable. The golden record (the survivorship-resolved
+      set of attributes) is secondary and derived. This ordering matters because the crosswalk is
+      what allows any downstream number to be traced back to source rows and any historical report
+      to be reproduced under the identity assignment in force at the time. Surrogate keys are
+      immutable and never reused. Crosswalk rows are never updated in place — a changed assignment
+      is a new version with the prior one retained, and the reason recorded.
+    depends_on: [KB-IDN-001]
+
+  - id: KB-IDN-006
+    title: "Merge and unmerge as first-class events"
+    kind: decision_rule
+    layer: identity
+    domain_tags: [identity]
+    decision_type: escalate
+    confidence: conventional
+    volatile: false
+    body: >
+      Identity changes over time and the platform must survive being wrong. A merge combines two
+      surrogate keys and must record both antecedents, the reason, and the timestamp, retiring the
+      subordinate key rather than deleting it so historical joins still resolve. An unmerge is
+      harder and must be designed for from day one: every downstream fact must carry the surrogate
+      key version that was in force when it was written, so a split can be replayed rather than
+      guessed. The consequence the agent must always surface: after a merge or unmerge, every
+      published member-level metric for the affected period changes, and any regulatory submission
+      already filed on the old assignment must be assessed for restatement. Merges are never
+      silent, are never batched without a count, and always emit a downstream impact notice.
+    depends_on: [KB-IDN-005]
+
+  - id: KB-IDN-007
+    title: "Provider identity is harder than member identity"
+    kind: concept
+    layer: identity
+    domain_tags: [identity, provider]
+    confidence: conventional
+    volatile: false
+    body: >
+      A provider is simultaneously an individual (NPI type 1), a role at an organisation (NPI type
+      2), a billing entity (TIN), a facility (CCN), and a contracted participant in a programme.
+      These relationships are many-to-many and effective-dated: a physician bills under several
+      TINs, moves practices mid-year, and may be in an ACO for part of a performance year only.
+      Attribution and shared savings are computed at TIN level in MSSP and LEAD, so an incorrect
+      provider-to-TIN assignment moves patients and dollars between entities. Model provider
+      identity as person, organisation, and affiliation-span as three distinct concepts. The
+      frequent shortcut of storing a single specialty or single TIN on the provider record is the
+      most common source of misattributed panels, and the resulting error is invisible in
+      aggregate while being badly wrong per practice.
+    depends_on: [KB-ONT-009]
+
+  - id: KB-IDN-008
+    title: "Identity layer promotion gate and monitoring"
+    kind: contract
+    layer: identity
+    decision_type: promote
+    confidence: conventional
+    volatile: false
+    body: |
+      Publish the identity spine for a cycle only when:
+        - unmatched rate is inside its control band and not trending up
+        - auto-merge rate is inside band; a spike means a source began sending a new identifier
+          format or a placeholder value, not that the population changed
+        - review queue depth is bounded and ageing is monitored; a growing queue silently
+          becomes a growing fragmentation problem
+        - zero merges executed that match the household/twin exclusion signature
+        - net member count change decomposes cleanly into new, ended, merged, split — a net
+          number alone is not acceptable evidence
+        - crosswalk is append-only: no in-place updates in the diff
+      Continuous monitors worth more than any one-off check: fragmentation rate (distinct
+      surrogate keys per known real person in a labelled sample), and clinical implausibility
+      scans on merged records, such as a single person with conflicting sex-specific procedures or
+      overlapping inpatient stays at different facilities.
+    depends_on: [KB-IDN-006, KB-IDN-007]

@@ -1,0 +1,10 @@
+version: 1
+updated: "2026-09-03"
+kind: schema_pointer
+source_system: centene_il
+contract_file: "sources/centene_il__member_roster_preview.yaml"
+field_semantics:
+  identity: { "AMISYS NUMBER": "Centene member identifier, the natural key", "MEDICAID NUMBER": "Illinois Recipient Identification Number" }
+  plan: { "LINE OF BUSINESS": "MEDICAID throughout", "PRODUCT": "MEDICAID, MEDICAID EXPANSION, SSI NON - DUAL or SSI KIDS", "MEMBER MONTHS": "Months elapsed in the plan year to date", "MEMBER ELIG START MONTH": "Eligibility start month", "MEMBER MEDICAID START MONTH": "Medicaid start month" }
+  attribution: { "MPK NAME": "Provider group name", "ASSIGNED TIN NAME": "Attributed tax entity name", "ASSIGNED TIN": "Attributed tax identification number", "PCP NPI": "Attributed PCP", "PCP SPECIALTY": "CLINIC, NURSE PRACTITIONERS, FAMILY PRACTICE, PEDIATRICS, PHYSICIAN S ASSISTANT or INTERNAL MEDICINE" }
+  analytics_from_centene: { "RISK SCORE": "Centene's risk score", "POPULATION HEALTH CATEGORY": "Centene's segmentation, such as HEALTHY or CHRONIC BIG 5-AT RISK", "PRIMARY RISK CATEGORY": "Dominant clinical driver, truncated at 30 characters" }

@@ -1,0 +1,41 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: cms_aco_reach_d0284
+date_formats: "Every date column is YYYY-MM-DD. filedate is a YYYYMMDD integer and yr_mo is YYYY_MM."
+flag_vocabulary:
+  cms_columns: "Y or N on the CMS alignment columns such as Beneficiary Eligibility Alignment Year 1, Part D Coverage Alignment, Newly Aligned Beneficiary Flag, Prospective Plus Alignment and Claim Based Alignment Indicator"
+  derived_columns: "0 or 1 on the derived flags such as ESRD_flag, aged_flag, disabled_flag and aligned_any_flag"
+alignment_status:
+  note: "Nine codes explain why a beneficiary is or is not aligned, each with a description column alongside."
+  values: { AL: Aligned, MC: "Moved to Medicare Advantage", DY: "Death in the payment year", MS: "Moved to Medicare as secondary payer", CO: "Moved outside the service area", NV: "Eligibility could not be verified", DD: "Death prior to the payment year", AB: "Lost Part A or Part B coverage" }
+  usage: "Filter on this before counting attributed lives, and report the excluded counts by reason rather than as a single net number."
+identity_crosswalk:
+  columns: ["Beneficiary MBI ID", MBI_original, MBI_previous, MBI_previous_end_month]
+  significance: >
+    This is the Medicare identifier change history that CCLF9 exists to provide, carried inline.
+    An MBI change is not a new person, and this crosswalk is what prevents a naive deterministic
+    match from treating it as one.
+  coverage: "MBI_previous is populated on 1.3% of rows."
+coded_columns:
+  BENE_DUAL_STUS_CD: "CMS dual eligibility status, with short and long descriptions, a benefit type of Full-benefit, Partial-benefit or NA, and a category"
+  BENE_MDCR_STUS_CD: "Medicare status: 10 aged without ESRD, 11 aged with ESRD, 20 disabled without ESRD, 21 disabled with ESRD, 31 ESRD only"
+  Race-Ethnicity: "CMS RTI code 0 to 6 with a description column"
+  Voluntary Alignment Type: "No, Paper or Electronic"
+  Benchmark Type: "A prospective or E expenditure"
+geography:
+  county_codes: "SSA and FIPS state-county codes both arrive as five digits. They are not interchangeable and 39 rows carry the placeholder ~~."
+  market: "aligned_tin_market and aligned_tin_submarket carry the CINQCARE regional split, including NY - Upstate and NY - Downstate."
+known_exceptions:
+  - "Address lines 3 to 6 arrive as 40 spaces rather than empty on 75,526 rows, a fixed-width remnant. Trim before any null test or the null rate reads as zero."
+  - "High Risk Score Indicator holds the literal string ',,' on every row from file date 20240116, a quoting or column-shift artefact in that month's file."
+  - "BENE_DUAL_STUS_CD_desc_long contains a mis-encoded UTF-8 replacement character in the Qualifying Individual description, so the source was written in a non-UTF-8 code page."
+  - "Seven trailing columns are placeholders that are empty on every row."
+  - "The alignment effective dates, risk scores, benchmark fields and PALMR provider columns have no home in the canonical enrollment model."
+duplicates:
+  observed: "5,131 duplicate pairs in alignment month 2023_12, plus 4 exact duplicate rows."
+  interpretation: "A December restatement written twice. Within the pairs only de-identified columns differ, so in the real file they are almost certainly identical."
+  handling: "Observe in Bronze; deduplicate at Silver Raw on the four-part key with a collapse count emitted. Recorded as exception EX-004."
+sample_caveats:
+  - "Every identifier is hashed, every name and address faked, and every date column date-faked."
+  - "The Members by State chart in the profile report disagrees with the data and should be ignored."

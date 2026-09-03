@@ -1,0 +1,197 @@
+file: 02_source_landscape.yaml
+purpose: >
+  What arrives, at what grain and cadence, and what is wrong with it before you touch it.
+  The agent uses this to interpret Landing and Bronze without guessing.
+
+nodes:
+
+  - id: KB-SRC-001
+    title: "CCLF: Claim and Claim Line Feed"
+    kind: concept
+    layer: landing
+    domain_tags: [claims, attribution]
+    source_tags: [cclf]
+    confidence: authoritative
+    volatile: false
+    body: |
+      CMS's file-based delivery of adjudicated Medicare Parts A, B and D claims for an ACO's
+      assigned and assignable beneficiaries. Pipe-delimited, delivered monthly on a published
+      schedule, with an annual historical baseline and monthly incrementals. Structure:
+        CCLF1  Part A header        CCLF2  Part A revenue centre detail
+        CCLF3  Part A procedure     CCLF4  Part A diagnosis
+        CCLF5  Part B physician     CCLF6  Part B DME
+        CCLF7  Part D               CCLF8  beneficiary demographics / MBI
+        CCLF9  MBI crosswalk (historical to current identifier)
+        CCLFA  ACO participant / attribution supplements (varies by model)
+      Analyst-critical properties: files are a snapshot of adjudication as of the extract date,
+      so a claim can appear, be adjusted, and reappear with a different amount across months;
+      each file month must be loaded as its own immutable partition. Header and detail arrive in
+      separate files, so orphan detail lines across a month boundary are expected, not a defect.
+      CCLF9 exists precisely because MBIs change — treat it as the authoritative Medicare
+      identifier crosswalk rather than building your own.
+    depends_on: [KB-ONT-009]
+
+  - id: KB-SRC-002
+    title: "BCDA: Beneficiary Claims Data API"
+    kind: concept
+    layer: landing
+    domain_tags: [claims]
+    source_tags: [bcda]
+    confidence: authoritative
+    volatile: false
+    body: >
+      BCDA delivers the same Medicare Parts A, B and D claims content as CCLF but as FHIR R4
+      bulk export (NDJSON) via an asynchronous $export operation against a Group endpoint,
+      following the Bulk FHIR implementation guide. Three resources replace twelve files:
+      ExplanationOfBenefit carries what CCLF1-7 carried, Patient corresponds to CCLF8-9
+      including demographic and identifier updates, and Coverage carries enrollment including
+      dual status. CMS publishes a CCLF-to-BCDA data dictionary; use it rather than inferring
+      mappings. REACH ACOs can additionally pull partially adjudicated claims, which land two to
+      four days after submission — dramatically fresher, but not final, so they must be stored in
+      a separate partition and never mixed into settled financial reporting. Practical guidance:
+      if both CCLF and BCDA are available, run both and reconcile. They share claim identifiers,
+      and disagreement between them is one of the highest-signal data quality alarms available.
+    depends_on: [KB-SRC-001]
+
+  - id: KB-SRC-003
+    title: "ADT: admission, discharge, transfer feeds"
+    kind: concept
+    layer: landing
+    domain_tags: [utilization, care_management]
+    source_tags: [adt, hl7v2]
+    confidence: authoritative
+    volatile: false
+    body: |
+      Near-real-time HL7 v2 event messages from hospitals or an HIE, the only feed fast enough
+      to drive care management intervention. Event types that matter:
+        A01 admit    A02 transfer   A03 discharge   A04 register (often ED)
+        A08 update   A11 cancel admit   A13 cancel discharge
+      Pathologies the analyst must assume are present: duplicate messages for the same event from
+      different routes; A08 updates that arrive after A03 and change the discharge disposition;
+      cancellations that must actually reverse a prior event rather than append; missing discharge
+      messages, leaving stays open forever; facility identifiers that are local codes, not NPIs or
+      CCNs; and patient identifiers that are facility MRNs with no payer identifier at all.
+      Because ADT is event-sourced, the correct Bronze model is an append-only event log; stay
+      construction (pairing admits to discharges) is a Silver activity with explicit rules for
+      unmatched events. Never let ADT-derived utilisation be reported alongside claims-derived
+      utilisation without labelling the source — they will never agree, and both are right.
+    depends_on: [KB-ONT-002]
+
+  - id: KB-SRC-004
+    title: "X12 EDI transaction sets"
+    kind: concept
+    layer: landing
+    domain_tags: [claims, eligibility]
+    source_tags: [837, 835, 834, 270, 271, 277]
+    confidence: authoritative
+    volatile: false
+    body: |
+      837  claim submission. 837P professional, 837I institutional, 837D dental. Hierarchical
+           loop structure (2000A billing provider, 2000B subscriber, 2000C patient, 2300 claim,
+           2400 service line). Represents what was submitted, not what was paid.
+      835  remittance advice. Payment, adjustments, and CARC/RARC denial reason codes. The 835
+           is where you learn denials; the 837 alone cannot tell you.
+      834  enrollment and maintenance. The authoritative eligibility spans for commercial and
+           many Medicaid arrangements. Full-file vs change-file semantics differ by payer and
+           getting this wrong silently terminates coverage for everyone.
+      270/271 eligibility inquiry and response. Point-in-time, not a span; do not build
+           enrollment history from 271 responses.
+      277  claim status.
+      Analyst rules: an 837 without its matching 835 is an incomplete financial picture; joining
+      837 to 835 requires the payer claim control number, which the provider does not assign;
+      and segment-level qualifiers (e.g. which identifier type is in NM109) must be read, not
+      assumed, because they vary by trading partner.
+    depends_on: [KB-ONT-010]
+
+  - id: KB-SRC-005
+    title: "EHR and FHIR clinical data"
+    kind: concept
+    layer: landing
+    domain_tags: [clinical, quality]
+    source_tags: [ehr_fhir, hl7v2]
+    confidence: conventional
+    volatile: false
+    body: >
+      Clinical data arrives as FHIR R4 resources (Patient, Encounter, Condition, Observation,
+      Procedure, MedicationRequest, Immunization, DocumentReference), HL7 v2 result messages, or
+      vendor flat-file extracts. It is the only source of the numerators many quality measures
+      now require, and the only source of results (blood pressure values, A1c results) as opposed
+      to the fact that a test was ordered. Its pathologies are the inverse of claims: rich but
+      inconsistent. Expect free-text in coded fields, local codes without a terminology system
+      URI, vital signs with missing or wrong units, the same observation duplicated across
+      interfaces, and Conditions on the problem list with no onset or resolution date, which makes
+      "active condition" a modelling decision rather than a fact. Never treat an EHR Condition as
+      equivalent to a claims diagnosis for risk adjustment; the acceptable-source rules differ and
+      conflating them creates audit exposure.
+    depends_on: [KB-ONT-008]
+
+  - id: KB-SRC-006
+    title: "Pharmacy, lab, provider roster, and SDOH feeds"
+    kind: concept
+    layer: landing
+    domain_tags: [pharmacy, lab, provider, sdoh]
+    source_tags: [ncpdp, lab, roster]
+    confidence: conventional
+    volatile: false
+    body: |
+      Pharmacy (NCPDP / PBM extracts): fill-level, fast (days), and the best early signal for
+      adherence measures and condition suspecting. Watch for reversals — a reversed fill must
+      negate, not append. Days supply and quantity are frequently wrong for compounds and
+      partial fills, which breaks adherence denominators.
+      Lab: results with LOINC where you are lucky and local codes where you are not. Units and
+      reference ranges vary by performing lab, so numeric comparison across labs requires
+      normalisation. Result status (preliminary, final, corrected) must be respected; a corrected
+      result supersedes.
+      Provider roster: the contracted network with TIN, NPI, specialty, panel, and effective
+      dates. Almost always maintained in a spreadsheet somewhere and almost always stale.
+      Reconcile against NPPES but never let NPPES override the contract — NPPES reflects
+      registration, the roster reflects the agreement.
+      SDOH / screening: Z-codes on claims are heavily under-coded; LOINC-coded screening
+      instruments from clinical sources carry far more signal. Treat absence as unknown, never
+      as negative.
+    depends_on: [KB-ONT-008]
+
+  - id: KB-SRC-007
+    title: "Reference and terminology data is a source, not a lookup"
+    kind: decision_rule
+    layer: landing
+    domain_tags: [terminology, governance]
+    source_tags: [reference]
+    confidence: conventional
+    volatile: false
+    decision_type: define
+    body: >
+      HCC model mappings and coefficients, quality measure value sets, DRG grouper versions,
+      NPPES, geographic and market crosswalks, and fee schedules are all versioned external data
+      that changes on regulatory calendars. They must be ingested through the same Landing and
+      Bronze discipline as transactional feeds, with effective dates and version identifiers, not
+      hardcoded in transformation logic or maintained as an untracked table. The test: if
+      someone asks "what would this metric have been under last year's value set?", a platform
+      that hardcoded reference data cannot answer, and in this domain that question is asked
+      every year at audit. Every derived clinical or financial fact must carry the reference
+      version used to derive it.
+    depends_on: [KB-ONT-005, KB-ONT-007]
+
+  - id: KB-SRC-008
+    title: "Arrival pattern archetypes and what each implies"
+    kind: heuristic
+    layer: landing
+    domain_tags: [ingestion]
+    confidence: conventional
+    volatile: false
+    body: |
+      Full snapshot     entire population restated each cycle (rosters, some 834). Implies you
+                        must detect deletions by absence — the hardest kind of change. Never
+                        upsert a full snapshot without a reconciliation of missing keys.
+      Incremental delta only changed records (most CCLF monthlies). Implies gap detection: a
+                        missing cycle is invisible unless you track sequence.
+      Append-only event stream of facts (ADT, some FHIR). Implies out-of-order and duplicate
+                        delivery are normal; idempotency by event id is mandatory.
+      Restated history  prior periods re-sent with corrections (claims adjustments, CCLF
+                        adjustments). Implies point-in-time storage; overwriting destroys the
+                        ability to reproduce a prior report.
+      Correction-in-place a record silently changes with no version marker. The worst case.
+                        Detect via row hashing at Bronze and treat any change as a versioned event.
+      The agent should classify every new feed into one of these five before proposing any
+      ingestion pattern, and should refuse to propose a merge strategy until it has.
+    depends_on: []

@@ -1,0 +1,17 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: molina_ny
+feeds:
+  - feed: member_enrollment_history
+    domain: enrollments
+    status: registered
+    contract_file: "sources/molina_ny__member_enrollment_history.yaml"
+    grain: "one row per member per coverage month"
+    cadence: monthly
+    delivery: sftp
+    columns: 60
+    natural_key: [Member_ID, Member_Month, Ratecode]
+    deliveries_per_cycle: 4
+    note: "Four population files share one layout and arrive together. They are one feed with four population partitions, not four feeds."
+  - { feed: claims, domain: claims, cadence: monthly, sample: none }

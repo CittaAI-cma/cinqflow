@@ -1,0 +1,13 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: centene_ga
+feeds:
+  - { feed: medicaid_mwov_members, domain: enrollments, status: registered, contract_file: "sources/centene_ga__medicaid_mwov_members.yaml", grain: "one row per active member", cadence: monthly, delivery: sftp, columns: 34, natural_key: [MEMBER_KEY] }
+  - { feed: medicare_mwov_members, domain: enrollments, status: registered, contract_file: "sources/centene_ga__medicare_mwov_members.yaml", grain: "one row per active member", cadence: monthly, delivery: sftp, columns: 34, natural_key: [MEMBER_KEY] }
+  - { feed: aes_risk_file, domain: risk, cadence: unknown, sample: none, note: "Named in the contract mind map; no sample and no layout in the corpus." }
+  - { feed: claims, domain: claims, cadence: monthly, sample: none }
+column_set_difference:
+  note: "The two rosters are not the same 34 columns."
+  medicaid_only: [EDW_MEMBER_CK, MEMBER_MEDICAID_ID]
+  medicare_only: [MEMBER_MEDICARE_Nbr, WELL_VISIT]

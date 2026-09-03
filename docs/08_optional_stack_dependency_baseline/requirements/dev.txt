@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cinqflow / requirements/dev.txt
+#
+# "Acceptance criteria ARE the tests, written before the code." This file is
+# therefore not a convenience — it is the part of the toolchain that makes the
+# five architectural laws mechanical instead of aspirational.
+# ─────────────────────────────────────────────────────────────────────────────
+
+-r ai.txt
+-r formats.txt
+
+# ── the five-layer pyramid ───────────────────────────────────────────────────
+pytest>=9.1,<10.0
+pytest-asyncio>=1.4,<2.0
+pytest-cov>=7.1
+pytest-xdist>=3.8             # the pipeline suite is embarrassingly parallel because
+                              # every test owns a rolled-back transaction
+
+hypothesis>=6.165             # LAYER 4, the platform laws as property tests:
+                              #   rows_in == rows_out + quarantined + attributed_drops
+                              #   same file twice  -> skipped, audited, never duplicated
+                              #   restart-from-stage -> no duplicates, no skips
+                              # These are universally-quantified claims. Example-based
+                              # tests cannot express them; Hypothesis can.
+
+testcontainers[postgres]>=4.15 # hermetic Postgres 16 + pgvector for CI and for a laptop
+                              # that has never run `brew services start postgresql@16`
+
+respx>=0.23                   # HTTP-level stubs for CONNECTOR contract tests.
+                              # Explicitly NOT used for LLM Lane-2 cassettes — those are
+                              # recorded at the PORT boundary as
+                              # (prompt_hash, model, version, params) -> response, so they
+                              # survive SDK upgrades and can be diffed across providers
+                              # during the Wave-4 Foundry re-baseline.
+
+freezegun>=1.5.5                # arrival-SLA and freeze-window tests without sleeping
+faker>=40.0                   # simulator: names, addresses, dates. Coded fields (NPI, ICD,
+                              # HCPCS, place-of-service) come from the reference golden sets,
+                              # never from a generator — real layouts, synthetic values.
+
+# ── the Law-1 gate: this is the Wave-0 CI gate "core-purity lint" ────────────
+import-linter>=2.14            # layered + forbidden-module contracts (see .importlinter)
+ruff>=0.16
+mypy>=2.3,<3.0
+detect-secrets>=1.5           # the "no credential in core" half of the purity check
+pip-audit>=2.10
+bandit>=1.9
+
+# ── locking and hooks ────────────────────────────────────────────────────────
+# These files carry FLOORS, not pins. Generate a real lock per rung and commit it:
+#     uv pip compile requirements.txt          -o requirements/lock/runtime.txt
+#     uv pip compile requirements/dev.txt      -o requirements/lock/dev.txt
+#     uv pip compile requirements/databricks.txt -o requirements/lock/databricks.txt
+#     uv pip compile requirements/azure.txt    -o requirements/lock/azure.txt
+# The runtime lock is what the Helm chart's image is built from, so that
+# "byte-identical to what was approved" (FIG 14) includes the dependency set.
+pip-tools>=7.6
+pre-commit>=4.6

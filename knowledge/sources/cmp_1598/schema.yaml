@@ -1,0 +1,10 @@
+version: 1
+updated: "2026-09-03"
+kind: schema_pointer
+source_system: cmp_1598
+contract_file: "sources/cmp_1598__patient_demographics.yaml"
+field_semantics:
+  identity: { Account: "Practice patient account number", Chart: "Practice chart identifier" }
+  coverage: { "Primary Insurance": "Member identifier at the primary payer", "Primary Insurance Name": "The primary payer, one of 105 values", "Secondary Insurance": "Member identifier at the secondary payer, usually a Medicaid CIN", "Secondary Insurance Name": "The secondary payer, usually Medicaid" }
+  practice: { Location: "Practice site", PCP: "Attributed clinician as Last, First, Credential", "Last Appointment": "Most recent visit", "Last Transc Triage": "Most recent triage transcription" }
+  operational: { Memo1: "Free text", Memo2: "Free text" }

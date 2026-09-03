@@ -1,0 +1,18 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: cinq_adt
+organization: { entity: "CINQCARE internal", system: "The ADT and care-alert working table behind the care-management workflow" }
+contract: { id: cross_cutting, note: "Spans nine payer and programme populations rather than serving one contract." }
+semantics:
+  what_it_is: "An extract of CINQCARE's own working table: ADT events already matched to a member and enriched with care-management state."
+  what_it_is_not: >
+    Not raw HL7 and not the ADT ingestion contract. Production ADT arrives as HL7 v2 through
+    Mirth, as the ParticleHealth API, and as Optum and Fidelis flat files, and lands in the
+    Silver Raw encounter table described in canonical/adt.yaml. This extract does not match that
+    layout column for column.
+  value: >
+    It shows what care teams actually work from, and it is a useful identity crosswalk because
+    it carries the CINQCARE internal member id, the payer member id and the Medicaid or Medicare
+    identifier side by side.
+populations_covered: ["ACO Fidelis", "ACO Molina", "AH ACOREACH", "AIP ACOREACH", "Centene GA", "Centene IL", "CINQ ACOREACH", "CINQ MSSP", "OPTUM NY"]

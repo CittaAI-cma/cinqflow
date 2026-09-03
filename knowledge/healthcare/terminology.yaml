@@ -1,0 +1,98 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+confidence: authoritative
+
+# Healthcare terms and their synonyms, aimed at disambiguation rather than definition. A term
+# earns a place here when getting it wrong changes what the platform does.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml"
+  - "docs/03_data_source_schemas/lakehouse_and_layers/Data_lake_data_model.xlsx (172-term business glossary)"
+  - "CMS, NCQA and NYS DOH published definitions"
+
+terms:
+  - term: member
+    synonyms: [beneficiary, patient, enrollee, subscriber, "Family Member"]
+    means: "A person the organisation is accountable for. CINQCARE calls them Family Members. Beneficiary is the Medicare word, enrollee the Medicaid word, patient the clinical word, and subscriber the contract holder as distinct from a dependent."
+    caution: "Subscriber and member are not synonyms in family coverage: one subscriber may cover several members."
+  - term: attribution
+    synonyms: [alignment, assignment, panel]
+    means: "Assignment of a member to a provider or entity accountable for their cost and quality. CMS says alignment for REACH and assignment for MSSP; payers say attribution."
+  - term: coverage span
+    synonyms: [enrollment segment, eligibility span, effective period]
+    means: "A contiguous period during which a member is enrolled in a plan. Bounded by an effective and a termination date."
+  - term: member month
+    means: "One member enrolled for one calendar month. The denominator of nearly every value-based rate."
+    caution: "Dollars divided by member months is PMPM; dollars divided by member count is not."
+  - term: line of business
+    synonyms: [LOB, product]
+    means: "The payer programme a member is enrolled in: Medicaid, Medicare Advantage, Essential Plan, commercial. Product is usually a finer subdivision within it."
+    caution: "The code set is payer-specific and is never shared across payers."
+  - term: encounter
+    means: "A clinical episode of care. May span many claims."
+    caution: "A claim is a billing artifact, not a clinical fact. Analysts who conflate them produce utilisation rates no clinician recognises."
+  - term: claim
+    means: "A billing event submitted for adjudication. Exists in versions: original, adjustment, cancellation."
+  - term: allowed amount
+    means: "The contractually permitted amount. The correct basis for cost-of-care analytics."
+    caution: "Not the billed amount, which is list price, and not the paid amount, which is plan liability only."
+  - term: risk adjustment
+    means: "Converting documented clinical complexity into a relative cost expectation, expressed as a Risk Adjustment Factor where 1.0 is average."
+  - term: benchmark
+    means: "The risk-adjusted expected spend a contract compares actual spend against."
+  - term: dual eligible
+    means: "A person entitled to both Medicare and Medicaid. Full-benefit and partial-benefit duals are governed by different CMS codes and cost differently."
+  - term: HARP
+    expansion: "Health and Recovery Plan"
+    means: "A New York Medicaid managed care plan that integrates physical health, mental health and addiction services for adults 21 and over with significant behavioural health needs. Members must be offered care management through a designated Health Home."
+    caution: "In the Fidelis roster harp_eligible arrives as the phrase 'HARP Eligible' or blank, not as Yes or No."
+  - term: Health Home
+    means: "A New York programme under Affordable Care Act section 2703 providing care management to Medicaid members with two or more chronic conditions, or one qualifying condition such as HIV/AIDS, serious mental illness, sickle cell disease, serious emotional disturbance or complex trauma. Substance use disorder alone does not qualify."
+    note: "CINQCARE operates a designated Health Home in Buffalo (CINQ-NY Health Home IPA)."
+  - term: Health Home Plus
+    synonyms: [HH+]
+    means: "An intensive Health Home care management service for defined populations with serious mental illness, billable only where the caseload ratio is fewer than twelve recipients per care manager."
+  - term: recertification
+    synonyms: [renewal, redetermination]
+    means: "The periodic re-establishment of Medicaid eligibility. In New York the standard authorisation is twelve months and the member is notified roughly a month before it ends."
+    caution: "A recertification window drives outreach. It is not a coverage termination."
+  - term: Essential Plan
+    means: "A New York state programme for people whose income is above Medicaid limits but below the marketplace threshold. Fidelis products include Essential Plan 1 to 4 and 200-250."
+  - term: TANF
+    expansion: "Temporary Assistance for Needy Families"
+    means: "A Medicaid aid category, formerly Aid to Dependent Children, that drives the capitation rate cell. Fidelis products TANF Adult and TANF Child map to it."
+  - term: SSI
+    expansion: "Supplemental Security Income"
+    means: "An aid category covering aged, blind and disabled members, enrolled in New York managed care since 2006."
+  - term: Safety Net Assistance
+    synonyms: [SNA, "Home Relief"]
+    means: "A New York aid category for adults not covered by TANF."
+  - term: upstate and downstate
+    means: "New York regional split. Downstate is the five New York City counties plus Nassau, Suffolk, Westchester, Rockland, Orange, Putnam and Dutchess. Upstate is every other county."
+    note: "CINQCARE carries this as the population label in vbp_id and as tin_submarket in the canonical model."
+  - term: ACO REACH
+    expansion: "Accountable Care Organization Realizing Equity, Access, and Community Health"
+    means: "A CMS Innovation Center capitated model running from 2023 through performance year 2026. CINQCARE participates as a Standard ACO under the Global option with 100% risk."
+  - term: MSSP
+    expansion: "Medicare Shared Savings Program"
+    means: "The permanent statutory Medicare accountable care programme, with BASIC levels A to E and an ENHANCED track."
+  - term: capitation
+    means: "A fixed prepayment per member per month. Produces encounters rather than paid claims, so cost analytics on capitated services needs shadow pricing."
+  - term: UM
+    expansion: "Utilization Management"
+    means: "The payer function that authorises and tracks inpatient stays. CINQCARE receives Fidelis UM and Optum UM census files as ADT sources."
+  - term: HouseCalls
+    means: "Optum's annual in-home clinical preventive assessment programme for Medicare Advantage members. The GA roster is its outreach worklist."
+  - term: Annual Wellness Visit
+    synonyms: [AWV]
+    means: "A Medicare Part B preventive benefit billed as G0438 for the initial visit and G0439 for subsequent visits. G0402 is the separate Welcome to Medicare visit."
+    caution: "The AWV is not a HEDIS measure and not a Star measure; it is a benefit. The nearest HEDIS access measure is Adults' Access to Preventive/Ambulatory Health Services."
+  - term: Medicaid Managed Care
+    synonyms: [MMC]
+    means: "State Medicaid delivered through contracted managed care organisations. Georgia calls its programme Georgia Families; Illinois calls its HealthChoice Illinois."
+  - term: D-SNP
+    expansion: "Dual Eligible Special Needs Plan"
+    means: "A Medicare Advantage plan restricted to dual eligibles."
+  - term: MSO
+    expansion: "Management Services Organization"
+    means: "An arrangement where the organisation provides management services without bearing full insurance risk. CINQCARE's Centene GA contract is mostly MSO with roughly 300 lives at risk."

@@ -1,0 +1,48 @@
+version: 1
+updated: "2026-09-03"
+kind: transformation_reference
+
+# Text, identifier and structure normalisation patterns seen in CINQCARE mapping workbooks.
+grounded_in:
+  - "docs/03_data_source_schemas/adt/ADT_SilverRaw_HL7_Mapping.xlsx"
+  - "docs/03_data_source_schemas/adt/ADT_SilverRaw_Fidelis_Mapping.xlsx"
+  - "docs/03_data_source_schemas/enrollment/Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx"
+  - "docs/03_data_source_schemas/enrollment/Enrollment_Data_Model_Syed_updated.xlsx"
+
+patterns:
+  - id: NM-01
+    name: empty_string_is_null
+    rule: "Empty strings and whitespace-only values are stored as NULL (HL7 mapping: 'Empty string -> store as NULL')."
+  - id: NM-02
+    name: strip_quotes
+    rule: "Strip double quotes wrapping HL7 components (PID-11 address, PV1-3 facility, PV1-36 disposition)."
+  - id: NM-03
+    name: name_split_last_first
+    rule: "Fidelis UM member_name arrives 'LAST, FIRST'; split on the first comma and trim both parts."
+  - id: NM-04
+    name: yes_blank_flags
+    rule: "Roster flags arrive 'Yes' or blank (harp_eligible, in_care_management_with_fidelis). Blank means unknown, not false; a boolean cast must map blank -> null."
+  - id: NM-05
+    name: id_with_plan_suffix
+    rule: "Fidelis member_id arrives suffixed with the plan code (e.g. <id>-FCNY4487). Keep the full value as source_system_id; the suffix is not a separate column."
+  - id: NM-06
+    name: pipe_delimited_lists
+    rule: "DiagnosisList is a pipe-delimited 'code desc type' list. Preserve exactly; ODS derives primary_diagnosis_code."
+  - id: NM-07
+    name: composite_bill_type
+    rule: "CCLF bill type arrives as separate digits (CLM_BILL_FAC_TYPE_CD, CLM_BILL_CLSFCTN_CD, frequency); concat to the 3/4-character UB-04 type of bill."
+  - id: NM-08
+    name: constant_source_system
+    rule: "source_system is a constant chosen by the analyst per feed (e.g. 'ACO_REACH_D0284'), never inferred from a column."
+  - id: NM-09
+    name: whitespace_in_names
+    rule: "Trim names (DQ-091); do not change case - names are PHI and case carries information (e.g. 'McDonald')."
+  - id: NM-10
+    name: address_free_text_state
+    rule: "Legacy State values include Bronx, Brooklyn, Buffalo, NewYork, N.Y.Y, 'DE,'. Standardise via lookup before any region derivation."
+  - id: NM-11
+    name: region_derivation
+    rule: "Region (Northeast / South East / Central / Others) is derived from the standardised state; see canonical/common.yaml regions."
+  - id: NM-12
+    name: derived_middle_name_suffix
+    rule: "MSSP seed mapping says middle_name 'get from first name' and suffix 'get from first and last name'. These are derivations that need a documented rule; do not propose as column mappings."

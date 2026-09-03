@@ -1,0 +1,16 @@
+version: 1
+updated: "2026-09-03"
+kind: delivery_convention
+source_system: centene_il
+file_naming:
+  observed: "Member_Roster_Preview_IL0201633_YYYYMM.csv"
+  regex: "^Member_Roster_Preview_IL\\d{7}_\\d{6}\\.csv$"
+  token_IL0201633: "A Centene-side roster identifier, most likely the contracted provider group. Not defined anywhere in the corpus and carried as an opaque label."
+business_date:
+  source: "file name suffix"
+  format: YYYYMM
+  meaning: "roster month"
+  corroboration: "The February 2026 file shows MEMBER MONTHS of 2 for 97% of members, consistent with two months elapsed in the 2026 plan year."
+delivery: { cadence: monthly, method: manual_upload }
+format: { container: "comma-separated values", delimiter: ",", quoting: none, header: "row 1 with spaces in column names", line_terminator: CRLF, encoding: "ASCII, no BOM", trailer: none }
+arrival_archetype: full_snapshot

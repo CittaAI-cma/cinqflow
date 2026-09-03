@@ -1,0 +1,15 @@
+version: 1
+updated: "2026-09-03"
+kind: delivery_convention
+source_system: optum_ga
+file_naming:
+  observed: "YYYY-MM-DD_CINQ_HouseCalls_GA.xlsx"
+  regex: "^\\d{4}-\\d{2}-\\d{2}_CINQ_HouseCalls_GA\\.xlsx$"
+  caution: "The date is a prefix here, unlike every other feed in the corpus where it is a suffix."
+business_date: { source: "file name prefix", format: "YYYY-MM-DD", meaning: "extract date" }
+delivery: { cadence: monthly, method: manual_upload }
+format:
+  container: "XLSX workbook, single sheet"
+  header: "row 1"
+  cells: "every cell is stored as text, including dates and numbers, so the reader must parse strings rather than Excel serials"
+arrival_archetype: full_snapshot

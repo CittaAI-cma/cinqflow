@@ -1,0 +1,103 @@
+version: 1
+updated: "2026-09-03"
+domain: provider
+
+# GROUNDED IN:
+#   docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx (sheets 06_provider(Reference table), 07_facility(ReferenceTable))
+#   docs/03_data_source_schemas/reference_data/Reference_Data_Data_Model.xlsx (D0284_PARTICIPANT_LIST)
+#   docs/03_data_source_schemas/enrollment/Enrollment_Lake_Models.xlsx (Members_Provider, Members_Practice)
+# CINQCARE has no standalone provider feed today. Provider and facility dimensions are
+# REFERENCE data: built from an annual SharePoint CSV (reference.provider_ref,
+# reference.facility_ref), the CMS ACO REACH participant list, and provider attributes
+# carried on enrollment and ADT rows. This model therefore lists the reference entities a
+# provider-shaped upload could land in. It is SCD Type 2 in ODS; Silver Raw is a snapshot.
+grounded_in:
+  - "docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx"
+  - "docs/03_data_source_schemas/reference_data/Reference_Data_Data_Model.xlsx"
+  - "docs/03_data_source_schemas/enrollment/Enrollment_Lake_Models.xlsx"
+
+system_populated:
+  - source_system
+  - created_by
+  - created_at
+  - updated_by
+  - updated_at
+  - batch_id
+  - record_hash
+  - effective_start_date
+  - effective_end_date
+  - is_current_flag
+  - IsActive
+  - FeedName
+  - SourceSystem
+  - CreatedBy
+  - CreatedAt
+  - UpdatedBy
+  - UpdatedAt
+  - BatchId
+  - RecordHash
+
+entities:
+  - entity: provider
+    table: provider_ref
+    grain: "one row per unique provider NPI (fallback: provider_id_source + source_system when NPI is null)"
+    primary_key: [npi, source_system]
+    fields:
+      - { name: npi, type: string, phi: false, means: "National Provider Identifier; dedup key; nullable for non-licensed staff" }
+      - { name: provider_id_source, type: string, phi: false, means: "Source internal provider id (Optum PCPProviderID); fallback key" }
+      - { name: last_name, type: string, phi: false, means: "Provider last name" }
+      - { name: first_name, type: string, phi: false, means: "Provider first name" }
+      - { name: full_name, type: string, phi: false, means: "Full name as supplied" }
+      - { name: provider_type, type: string, phi: false, means: "Role the NPI came from", allowed: [Attending, Admitting, PCP] }
+      - { name: pcp_group_name, type: string, phi: false, means: "Practice / group name" }
+      - { name: pcp_group_rollup, type: string, phi: false, means: "Group rollup (legacy GroupName)" }
+      - { name: pcp_group_tin, type: string, phi: false, means: "Group TIN" }
+      - { name: pcp_phone, type: string, phi: false, means: "Practice phone" }
+      - { name: ipa_name, type: string, phi: false, means: "IPA name" }
+      - { name: region, type: string, phi: false, means: "Geographic region" }
+
+  - entity: facility
+    table: facility_ref
+    grain: "one row per unique facility (facility_name after standardisation, or facility_npi)"
+    primary_key: [facility_name, source_system]
+    fields:
+      - { name: facility_npi, type: string, phi: false, means: "Facility NPI (type 2) when supplied" }
+      - { name: facility_name, type: string, phi: false, means: "Standardised facility name (e.g. KHS, KHS-KH OCH -> canonical)" }
+      - { name: facility_name_raw, type: string, phi: false, means: "Facility name exactly as received" }
+      - { name: facility_id_source, type: string, phi: false, means: "Source internal facility id (Optum)" }
+      - { name: facility_county, type: string, phi: false, means: "Facility county" }
+
+  - entity: aco_participant
+    table: D0284_PARTICIPANT_LIST
+    grain: "one row per participant provider per performance year (CMS ACO REACH participant list)"
+    primary_key: [Entity ID, Performance Year, Individual NPI, Base Provider TIN]
+    fields:
+      - { name: "Entity ID", type: string, phi: false, means: "ACO entity id; builds member-to-affiliate mapping" }
+      - { name: "Performance Year", type: string, phi: false, means: "Model performance year" }
+      - { name: "Provider Type", type: string, phi: false, means: "Participant vs preferred provider" }
+      - { name: "Provider Class", type: string, phi: false, means: "Provider class" }
+      - { name: "Provider Legal Business Name", type: string, phi: false, means: "Becomes aligned_tin_name" }
+      - { name: "Individual NPI", type: string, phi: false, means: "Becomes aligned_iNPI" }
+      - { name: "Individual First Name", type: string, phi: false, means: "PCP first name" }
+      - { name: "Individual Last Name", type: string, phi: false, means: "PCP last name" }
+      - { name: "Base Provider TIN", type: string, phi: false, means: "Becomes aligned_tin; key in the TIN crosswalk" }
+      - { name: "Organization NPI", type: string, phi: false, means: "Organisation NPI" }
+      - { name: "CCN", type: string, phi: false, means: "CMS Certification Number" }
+      - { name: "Legacy CCN", type: string, phi: false, means: "Legacy CCN" }
+      - { name: "Base Provider TIN Status", type: string, phi: false, means: "TIN status" }
+      - { name: "Legacy TIN", type: string, phi: false, means: "Legacy TIN" }
+      - { name: "Legacy TIN Legal Business Name", type: string, phi: false, means: "Legacy TIN name" }
+      - { name: "Legacy TIN Status", type: string, phi: false, means: "Legacy TIN status" }
+      - { name: "Legacy TIN PECOS Check Result", type: string, phi: false, means: "PECOS enrollment check" }
+      - { name: "Overlaps/Deficiencies", type: string, phi: false, means: "CMS overlap / deficiency note" }
+
+contested_fields:
+  - field: provider_id
+    seen_in: "ADT_Data_Model_Final.xlsx 06_provider"
+    note: "ODS surrogate key; minted by the platform."
+  - field: specialty
+    seen_in: "Enrollment_Data_Model_Syed_updated.xlsx review comments; NPPES taxonomy"
+    note: "No specialty column exists in provider_ref v7. NPPES taxonomy is the natural enrichment source; treat as a gap."
+  - field: MemberProvider.PCPName
+    seen_in: "Enrollment_Lake_Models.xlsx Members_Provider"
+    note: "In the enrollment DDL the PCP attributes live on members_enrollment_segments (pcp_name, pcp_npi), not on a provider table."

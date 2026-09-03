@@ -1,0 +1,180 @@
+version: 1
+updated: "2026-09-03"
+kind: mapping_patterns
+
+# Reusable source-to-canonical patterns distilled from CINQCARE's own mapping workbooks and
+# approved CINQFLOW decisions. Patterns are exemplars for the model and checklists for the
+# analyst; they never bypass the canonical model's legal_targets.
+grounded_in:
+  - "knowledge/mappings/approved/"
+  - "docs/03_data_source_schemas/enrollment/Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx"
+  - "docs/03_data_source_schemas/claims/mapping__CCLF_to_SilverRaw_Mapping_(1).xlsx"
+  - "docs/03_data_source_schemas/claims/mapping__ACO_to_SilverRaw_Mapping_(1).xlsx"
+  - "docs/03_data_source_schemas/adt/ADT_SilverRaw_HL7_Mapping.xlsx"
+
+patterns:
+  - id: MP-01
+    name: payer_member_id_is_source_system_id
+    domain: enrollment
+    rule: "The payer's own member identifier lands in members.source_system_id with on_null reject; source_system_id_type records which identifier it is."
+    source_examples: { fidelis: member_id, molina: Member_ID, centene_ga: MEMBER_KEY, centene_il: "AMISYS NUMBER", optum_ny: SBSCR_NBR, optum_ga: Member_Client_ID, d0284: "Beneficiary MBI ID", mssp: BENE_MBI_ID, cmp: Account }
+    alternates_not_mapped: { fidelis: medicaid_id, molina: Medicaid_State_ID, centene_ga: MEMBER_MEDICAID_ID, centene_il: "MEDICAID NUMBER", optum_ny: [CURR_MBI, EMPI, SOURCE_PATIENT_ID], optum_ga: [MBI, Subscriber_ID] }
+    note: "Alternate identifiers have no second column in the enrollment DDL; surface as unknown and record in the source conventions."
+
+  - id: MP-02
+    name: source_system_is_a_constant
+    domain: all
+    rule: "source_system is never mapped from a column; the analyst fixes a literal per feed (e.g. ACO_REACH_D0284, FIDELIS UPSTATE, MOLINA DOWNSTATE)."
+    evidence: "Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx CinqACO Reach sheet."
+
+  - id: MP-03
+    name: demographics_stable_homes
+    domain: enrollment
+    rule: "first/last/middle name, suffix, DOB, sex, race, ethnicity, language, death date have stable homes on members regardless of payer naming."
+    aliases:
+      first_name: [member_first_name, Member_First_Name, "FIRST NAME", MBR_FST_NM, "Beneficiary First Name", BENE_1ST_NAME, "First Name"]
+      last_name: [member_last_name, Member_Last_Name, "LAST NAME", MBR_LST_NM, "Beneficiary Last Name", BENE_LAST_NAME, "Last Name"]
+      date_of_birth: [member_dob, Member_Date_Of_Birth, MEMBER_DOB, DOB, BTH_DT, "MEMBER DOB", "Beneficiary Date of Birth", BENE_BRTH_DT, MemberDateOfBirth]
+      sex: [member_sex, Member_Gender, MEMBER_SEX, Gender, GENDER, MBR_GDR_CD, "Beneficiary Gender", BENE_SEX_CD, Sex, MemberSex]
+      death_date: [Member_Date_Of_Death, DTH_DT, "Beneficiary Date of Death", BENE_DEATH_DT]
+      race: [member_race, Member_Race, race_ethnicity_description, RACE_CD_DESCRIPTION, Race, MemberRaceEthnicity]
+      language: [member_language, Member_Language, MEMBER_LANGUAGE, Spoken_Language, Language]
+
+  - id: MP-04
+    name: sex_value_map
+    domain: enrollment
+    rule: "members.sex receives a value_map; unmapped values quarantine."
+    value_maps:
+      single_letter: { F: female, M: male, U: unknown }
+      words: { Female: female, Male: male, Unknown: unknown }
+      lower_words: { female: female, male: male }
+      cclf_numeric: { "1": male, "2": female, "0": unknown }
+    evidence: "roster_stage3 approved decision; claims patient.gender transform note."
+
+  - id: MP-05
+    name: split_name_field
+    domain: enrollment
+    rule: "A single member name field must be parsed into first/last before mapping (client cleanse rule). 'FIRST LAST' (Centene GA MEMBER_NAME) vs 'LAST, FIRST' (Fidelis UM). Not expressible as a closed-vocabulary transform; record as an analyst derivation."
+
+  - id: MP-06
+    name: address_block_to_members_addresses
+    domain: enrollment
+    rule: "address1/address2/city/state/zip/county land on members_addresses; address_type is a PK component the feed rarely supplies -> constant per block (Molina: Mailing and Physical blocks become two rows with different address_type)."
+    aliases:
+      address1: [member_address_line_1, Member_Residence_Mailing_Street_Address1, Member_Residence_Physical_Street_Address1, MEMBER_ADDRESS_1, Member_Address_Line_1, MBR_ADR_LOC_ADR1, "MEMBER ADDRESS LINE 1", "Beneficiary Line 1 Address", Address]
+      zip: [member_zip_code, Member_Residence_Mailing_ZIP_Code, MEMBER_ZIP, Member_Zip, MBR_ADR_LOC_ZIP_CD, "MEMBER ZIP", "Beneficiary Zip 5", Zip]
+      county: [member_county, Member_Residence_Mailing_County_Code_Description, MEMBER_COUNTY, Member_County_Name, SBSCR_CNTY_NM, "County Name"]
+      county_ssa: ["Beneficiary State-County of Residence SSA"]
+      county_fips: ["Beneficiary State-County of Residence FIPS"]
+
+  - id: MP-07
+    name: contact_channels
+    domain: enrollment
+    rule: "Phones and emails land on members_phones / members_emails; phone_type / email_type are PK components -> constants (Home, Cell/Mobile, Primary, Work). DNC flags map to members.dnc or can_contact (inverse)."
+    aliases:
+      phone: [member_phone_number, Member_Home_Phone_Number, Member_Mobile_Number, MEMBER_PRIMARY_PHONE, MEMBER_HOME_PHONE, MEMBER_CELL_PHONE, Member_Phone, "MEMBER PHONE NUMBER", Phone, Mobile, Work]
+      email: [member_email, Member_Email, EMAIL_ADDRESS, Email]
+      dnc: [Home_DNC_Flag, Mobile_DNC_Flag, DNC_IND, MBR_DO_NOT_CNTC_FLG]
+
+  - id: MP-08
+    name: attribution_block_to_enrollment_segment
+    domain: enrollment
+    rule: "PCP NPI/name, TIN, group name, LOB/product land on members_enrollment_segments; member_plan, member_payor and insurance_id are PK components the analyst must supply as constants or from columns."
+    aliases:
+      pcp_npi: [provider_npi, PCP_NPI, "PCP NPI", ASSIGNED_PROVIDER_NPI, aligned_inpi, PCPNPI]
+      pcp_name: [provider_name, PCP_Name, PCP_FIRST_NAME, PCP_LAST_NAME, aligned_inpi_name, PCP]
+      tin: [tin, PCP_IRS_NBR, "ASSIGNED TIN", ASSIGNED_TIN, PCP_TIN, aligned_tin]
+      member_group: [group_name, PCP_IRS_NAME, "ASSIGNED TIN NAME", "MPK NAME", aligned_tin_name, aligned_affiliate]
+      lob: [product, Member_Health_Plan_Product, LOB, PRODUCT, "LINE OF BUSINESS", Plan_Name, CONTR_CURR_PLN_NM]
+      tin_market: [aligned_tin_market]
+      tin_submarket: [vbp_id, aligned_tin_submarket]
+      control_number: [CONTR_NBR, Contract]
+      control_number_pbp: [CONTR_NBR_PBP, PBP]
+      insurance_id: ["Primary Insurance", InsuranceIDPrimary]
+
+  - id: MP-09
+    name: coverage_dates_have_no_home
+    domain: enrollment
+    rule: "Effective/termination dates, recertification dates, member month, eligibility start/end have no column in the enrollment DDL. Always status unknown with the gap in notes (canonical contested_fields effective_date/end_date)."
+    columns: [enrollment_date, coverage_end_date, recertification_start_date, recertification_end_date, Member_Health_Plan_Enrollment_Effective_Date, Coverage_Effective_Date, Coverage_Term_Date, Member_Month, MEMBER_ELIG_START_DT, MEMBER_ELIG_END_DT, Insured_Plan_Effective_Date, Insured_Plan_Termination_Date, RECORD_START_DT, RECORD_END_DT, "MEMBER ELIG START MONTH", "Beneficiary Alignment Effective Start Date"]
+
+  - id: MP-10
+    name: care_management_flags_have_no_home
+    domain: enrollment
+    rule: "HARP, Health Home, HH+, high-need, care-management, outreach status and risk category columns have no canonical enrollment field except the single string members.care_management_program (analyst precedence needed)."
+    columns: [harp_eligible, health_homes_enrolled, health_home_status, health_homes_plus_eligible, high_need_status, in_care_management_with_fidelis, Current_Status, Current_SubStatus, "POPULATION HEALTH CATEGORY", "PRIMARY RISK CATEGORY", "RISK SCORE", riskscore_raw, riskscore_norm]
+
+  - id: MP-11
+    name: cclf_header_to_claim_header
+    domain: claims
+    rule: "CCLF/ACO institutional header fields have fixed homes."
+    mappings:
+      CUR_CLM_UNIQ_ID: claim_header.source_claim_id
+      CLM_TYPE_CD: claim_header.claim_type
+      CLM_FROM_DT: claim_header.statement_from
+      CLM_THRU_DT: claim_header.statement_through
+      BENE_PTNT_STUS_CD: claim_header.discharge_status
+      DGNS_DRG_CD: claim_header.drg_code
+      CLM_ADJSMT_TYPE_CD: claim_header.claim_adjustment_type_cd
+      CLM_MDCR_NPMT_RSN_CD: claim_header.claim_status
+      CLM_PMT_AMT: "claim_adjudication.amount (category benefit, scope HEADER)"
+      PRNCPL_DGNS_CD: "claim_diagnosis.source_diagnosis_code (type principal, seq 1)"
+      ADMTG_DGNS_CD: "claim_diagnosis.source_diagnosis_code (type admitting, seq 0)"
+      BENE_MBI_ID: patient.mbi_id
+      BENE_HIC_NUM: patient.hicn
+      FAC_PRVDR_NPI_NUM: "claim_provider.npi (role FACILITY/BILLING)"
+      ATNDG_PRVDR_NPI_NUM: "claim_provider.npi (role ATTENDING)"
+      OPRTG_PRVDR_NPI_NUM: "claim_provider.npi (role OPERATING)"
+      "CLM_BILL_FAC_TYPE_CD + CLM_BILL_CLSFCTN_CD (+ frequency)": "claim_header.bill_type via concat"
+    no_map: ["ACO_0 file metadata", "ACO_A / ACO_B NGACO switches, demo numbers, PBP amounts, MIPS, HPSA (Bronze audit only)"]
+
+  - id: MP-12
+    name: bcda_eob_to_claim_header
+    domain: claims
+    rule: "BCDA FHIR R4 EOB paths per the Silver Raw model's FHIR mapping column."
+    mappings:
+      "EOB.id": claim_header.source_claim_id
+      "EOB.type.coding.code": "claim_header.claim_type via CASE (professional->PROF, oral->DENTAL, institutional+admission/DRG->IP, institutional->OP)"
+      "EOB.billablePeriod.start/end": "claim_header.statement_from / statement_through"
+      "EOB.payment.date": claim_header.paid_date
+      "EOB.created": claim_header.claim_received_date
+      "EOB.status": claim_header.claim_status
+      "EOB.related.relationship.coding.code": "claim_header.claim_adjustment_type_cd (derived: null ORIGINAL, prior/replaces ADJUSTMENT, replacedby CANCELLATION)"
+      "EOB.related.claim.reference": claim_header.replaced_claim_id
+      "EOB.diagnosisRelatedGroup.coding.code": claim_header.drg_code
+      "supportingInfo[discharge-disposition]": claim_header.discharge_status
+      "item.sequence": claim_line.line_number
+      "item.servicedDate / servicedPeriod.start": claim_line.service_date
+      "item.productOrService.coding.code": claim_line.procedure_code
+      "item.revenue.coding.code": claim_line.revenue_code
+      "item.locationCodeableConcept.coding.code": claim_line.place_of_service
+
+  - id: MP-13
+    name: hl7_adt_to_encounter
+    domain: adt
+    rule: "HL7 v2 segment -> silver_raw.encounter column (per ADT_SilverRaw_HL7_Mapping)."
+    mappings:
+      "PID-3 (assigning authority CINQ/CINQCARE)": SourceSystemId
+      "PID-3 (other authority) / PID-2[MRN] / PID-4": FacilityMRN
+      "PV1-19": VisitNumber
+      "MSH-10": SourceMessageId
+      "MSH-9.2 / EVN-1": EventType
+      "PV1-2": PatientClass
+      "MSH-7": MessageDate
+      "PID-5.1 / 5.2": "LastName / FirstName"
+      "PID-7": DateOfBirth
+      "PID-8": Gender
+      "PID-11.1-5": "AddressLine1 / AddressLine2 / City / State / ZipCode"
+      "PV1-7[NPI]": "AttendingNPI / AttendingLastName / AttendingFirstName"
+      "PV1-17[NPI]": "AdmittingNPI / ..."
+      "PV1-3.4 or MSH-4.1 or PV1-3.1 (per source)": FacilityName
+      "PV1-44 / PV1-45": "AdmissionDate / DischargeDate (length-dispatched format)"
+      "PV1-36.1 / 36.2": "DischargeDispositionCode / DischargeDispositionDesc"
+      "PV2-3": "AdmissionReason / ChiefComplaint"
+      "DG1 (pipe-joined) or ZEN-27": DiagnosisList
+      "IN1-3 / IN1-4 / IN1-15 / IN1-35": "InsuranceID / Payer / LOB / MedicaidNumber"
+
+  - id: MP-14
+    name: um_flat_file_to_encounter
+    domain: adt
+    rule: "Payer UM census files (Fidelis UM Excel daily, Optum UM flat) map with different keys: Fidelis member_id -> SourceSystemId, confine_status -> EventType (DS=A03, AR=A01), member_name split 'LAST, FIRST', FileName -> SourceMessageId, FileDate -> MessageDate; Optum CinqID -> SourceSystemId, HCELEVEL -> RiskStratification (1 High, 2 Moderate, 3-5 Low)."

@@ -1,0 +1,291 @@
+CINQFLOW fresh_start — file manifest (2026-09-02)
+
+     16K  00_START_HERE.md
+     44K  01_requirements_and_objectives/CINQFlow_Final_Navigation_and_Screen_Blueprint.docx
+     28K  01_requirements_and_objectives/Cinq_Requirement_Plan.xlsx
+    8.8M  01_requirements_and_objectives/Data_Lakehouse_Phase1_Execution_Plan.pptx
+     64K  01_requirements_and_objectives/Data_Lakehouse_Phase1_Plan_2026-03-11.docx
+     64K  01_requirements_and_objectives/Data_Lakehouse_Phase1_Plan_2026-04-10.docx
+     28K  01_requirements_and_objectives/MVP_objective.docx
+    120K  01_requirements_and_objectives/Team_by_Payors_and_functionalities.xlsx
+    8.0K  02_epics_and_user_stories/CINQFLOW_Epic_Story_Task_Templates.md
+     28K  02_epics_and_user_stories/CINQFLOW_MVP_Backlog__epics_and_stories.csv
+     88K  02_epics_and_user_stories/CINQFLOW_User_Stories_Final.docx
+    168K  02_epics_and_user_stories/CINQFLOW_User_Stories_and_Acceptance_Criteria.docx
+     36K  03_data_source_schemas/adt/ADT_Bronze_to_SilverRaw_Mapping_v2.xlsx
+    416K  03_data_source_schemas/adt/ADT_Data_Model_Draft.xlsx
+    308K  03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx
+     24K  03_data_source_schemas/adt/ADT_SilverRaw_Fidelis_Mapping.xlsx
+     44K  03_data_source_schemas/adt/ADT_SilverRaw_HL7_Mapping.xlsx
+     32K  03_data_source_schemas/adt/ADT_Source_to_Silver_layer_mapping_ref_draft.xlsx
+     36K  03_data_source_schemas/adt/ADT_Stats.xlsx
+     16K  03_data_source_schemas/claims/Claims_Source_Details.xlsx
+    604K  03_data_source_schemas/claims/Silver-Claims-ODS-Data-Model.pdf
+    5.1M  03_data_source_schemas/claims/Silver-Claims-ODS-Data-Model.pptx
+     76K  03_data_source_schemas/claims/claims-model-final-raw.xlsx
+     40K  03_data_source_schemas/claims/mapping__ACO_to_SilverRaw_Mapping_(1).xlsx
+     88K  03_data_source_schemas/claims/mapping__BCDA_Data_Dictionary_(1).xlsx
+     56K  03_data_source_schemas/claims/mapping__CCLF_to_SilverRaw_Mapping_(1).xlsx
+     60K  03_data_source_schemas/claims/mapping__Claims_All_Fields_(1).xlsx
+     40K  03_data_source_schemas/claims/mapping__D0284_CinqDB_to_DataLake_Seed_Mapping_(2).xlsx
+     56K  03_data_source_schemas/claims/mapping__DataLake_to_CinqDB_Mapping_(3).xlsx
+     40K  03_data_source_schemas/claims/mapping__Fidelis_Claims_Silver_Raw_Mapping_(1).xlsx
+     40K  03_data_source_schemas/claims/mapping__MSSP_CinqDB_to_DataLake_Seed_Mapping_(2).xlsx
+     32K  03_data_source_schemas/claims/mapping__UHC_Optum_NY_Mapping_(1).xlsx
+     20K  03_data_source_schemas/enrollment/DataModel_02APR2026.xlsx
+     48K  03_data_source_schemas/enrollment/Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx
+    304K  03_data_source_schemas/enrollment/Enrollment_Data_Model_Syed_updated.xlsx
+     32K  03_data_source_schemas/enrollment/Enrollment_Lake_Models.xlsx
+     96K  03_data_source_schemas/enrollment/Silver_ODS_Enrollments.pdf
+    104K  03_data_source_schemas/enrollment/Silver_Raw_Enrollments.pdf
+    8.0K  03_data_source_schemas/enrollment/enrollment_silver_raw_model.sql
+     32K  03_data_source_schemas/identity_verato/Verato_Identity_Storage_Schema_Structured_Design.docx
+    168K  03_data_source_schemas/lakehouse_and_layers/Data_lake_data_model.xlsx
+     20K  03_data_source_schemas/lakehouse_and_layers/Sample_layered_data.xlsx
+     44K  03_data_source_schemas/lakehouse_and_layers/Table_Statistics.xlsx
+     20K  03_data_source_schemas/reference_data/Reference_Data_Data_Model.xlsx
+    104K  03_data_source_schemas/reference_data/Reference_Data_Design.docx
+     24K  03_data_source_schemas/reference_data/Reference_Data_Flow_Design.vsdx
+    2.0M  04_source_data_samples_and_profiles/1-Enrollment/1.Fedelis_NY/Fidelis NY _CINQDOWNSTATE_Member_Roster Health Data Profile.pdf
+    2.0M  04_source_data_samples_and_profiles/1-Enrollment/1.Fedelis_NY/Fidelis NY _CINQUPSTATE_Member_Roster Health Data Profile.pdf
+     10M  04_source_data_samples_and_profiles/1-Enrollment/1.Fedelis_NY/deidentified_CINQUPSTATE_Member_Roster_03_05_2026_1.csv
+     10M  04_source_data_samples_and_profiles/1-Enrollment/1.Fedelis_NY/deidentified__CINQDOWNSTATE_Member_Roster_03_05_2026_1.xlsx
+    2.1M  04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/Molina NY Health Data Profile UpstateHarp.pdf
+    2.0M  04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/Molina NY MHI_NYCINQ- Down - HARP_NY_MCAID Health Data Profile.pdf
+    2.1M  04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/Molina NY MHI_NYCINQ- Down - MEDICAID_NY Health Data Profile.pdf
+    2.1M  04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/Molina NY MHI_NYCINQ- Up - MEDICAID_NY_MCAID Health Data Profile.pdf
+    1.4M  04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/deidentified_MHI_NYCINQ- Down - HARP_NY_MCAID_20240201_to_20260131_20260223_001of001_Data_MemEnrollHist1.txt
+     55M  04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/deidentified_MHI_NYCINQ- Down - MEDICAID_NY_MCAID_20240201_to_20260131_20260223_001of001_Data_MemEnrollHist.txt
+     67M  04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/deidentified_MHI_NYCINQ- Up - MEDICAID_NY_MCAID_20240201_to_20260131_20260223_001of001_Data_MemEnrollHist.txt
+    4.6M  04_source_data_samples_and_profiles/1-Enrollment/2.Molina NY/deidentified_MHI_NYCINQUpstate_HARP_NY_MCAID_20240201_to_20260131_20260223_001of001_Data_MemEnrollHist.txt
+    1.3M  04_source_data_samples_and_profiles/1-Enrollment/3.GA CENTENE Medicaid/Centene GA Medicaid Profile Report.pdf
+    2.9M  04_source_data_samples_and_profiles/1-Enrollment/3.GA CENTENE Medicaid/deidentified_Medicaid MWOV Members - 2026-03-10_1.txt
+    1.5M  04_source_data_samples_and_profiles/1-Enrollment/4.GA CENTENE Medicare/Centene GA Medicare MWOV Members Profile Report.pdf
+    3.0M  04_source_data_samples_and_profiles/1-Enrollment/4.GA CENTENE Medicare/deidentified_Medicare MWOV Members - 2026-03-10.txt
+    1.5M  04_source_data_samples_and_profiles/1-Enrollment/5.Optum GA/Optum GA _CINQ_HouseCalls_GA Profile Report.pdf
+    768K  04_source_data_samples_and_profiles/1-Enrollment/5.Optum GA/deidentified_2026-03-16_CINQ_HouseCalls_GA1.xlsx
+    1.3M  04_source_data_samples_and_profiles/1-Enrollment/6.Optum NY/Optum NY CINQCare_Elig Profile Report.pdf
+    8.5M  04_source_data_samples_and_profiles/1-Enrollment/6.Optum NY/deidentified_CINQCare_Elig_202602.csv
+    1.5M  04_source_data_samples_and_profiles/1-Enrollment/7.Centene IL/Centene IL  Member_Roster_Preview_ Profile Report.pdf
+    8.1M  04_source_data_samples_and_profiles/1-Enrollment/7.Centene IL/deidentified_Member_Roster_Preview_IL0201633_202602_1.csv
+    3.8M  04_source_data_samples_and_profiles/1-Enrollment/8.Cinq ACO Reach/ACO Beneficiary_D0284_AlignmentRoster_Profile Report.pdf
+     59M  04_source_data_samples_and_profiles/1-Enrollment/8.Cinq ACO Reach/deidentified_D0284_AlignmentRoster.xlsx
+    1.6M  04_source_data_samples_and_profiles/1-Enrollment/9.CMP_1598/2461114_206_20260314032654_dmhmreport Data Profile Report.pdf
+    2.6M  04_source_data_samples_and_profiles/1-Enrollment/9.CMP_1598/deidentified_2461114_206_20260314032654_dmhmreport_CCS_53873287.csv
+    3.2M  04_source_data_samples_and_profiles/2-ADT/ADT data for Payors Profile Report.pdf
+    412K  04_source_data_samples_and_profiles/2-ADT/deidentified_ADT data for Payors.csv
+     32K  05_business_logic_and_domain_rules/ADT_Data_Model_Open_Items.docx
+     40K  05_business_logic_and_domain_rules/BCDA_Handling_Claim_Adjustments_and_Claim_Status.docx
+    8.0K  05_business_logic_and_domain_rules/CINQCARE_VBC_Contract_MindMap.html
+     24K  05_business_logic_and_domain_rules/Enrollment_Domain_Level_Rules.docx
+     20K  05_business_logic_and_domain_rules/Verato_Data_Scenarios.xlsx
+     40K  05_business_logic_and_domain_rules/Verato_Identity_Scenarios.docx
+    8.0K  05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/00_kb_manifest.yaml
+     20K  05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml
+     12K  05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/02_source_landscape.yaml
+     24K  05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/03_medallion_layer_contracts.yaml
+     12K  05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/04_identity_resolution.yaml
+     20K  05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/05_analyst_reasoning_playbooks.yaml
+     12K  05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/06_metric_definitions.yaml
+     12K  05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/07_data_quality_rules.yaml
+     16K  05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/08_agent_specs.yaml
+     76K  06_incumbent_workflow_ground_truth/DIGITALURTH_SURVEY__all_screens.md
+     48K  06_incumbent_workflow_ground_truth/DIGITALURTH_WALKTHROUGH__feed_onboarding_end_to_end.md
+     36K  06_incumbent_workflow_ground_truth/DIGITALURTH_training_call_transcript.txt
+    112K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (1).jpg
+     92K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (10).jpg
+    368K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (11).jpg
+    204K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (2).jpg
+    188K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (3).jpg
+    176K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (4).jpg
+    184K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (5).jpg
+    112K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (6).jpg
+    128K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (7).jpg
+    120K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (8).jpg
+    232K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image (9).jpg
+    100K  06_incumbent_workflow_ground_truth/client_shared_screenshots/shared image.jpg
+    100K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_06_00m35s.png
+    144K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_07_00m51s.png
+    132K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_08_00m57s.png
+    108K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_09_01m00s.png
+    424K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_10_01m06s.png
+    540K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_11_01m11s.png
+    348K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_12_01m33s.png
+    352K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_13_03m42s.png
+    384K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_14_03m47s.png
+    248K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_17_05m11s.png
+    252K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_25_07m20s.png
+    228K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_26_09m57s.png
+    640K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_27_10m07s.png
+    532K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_28_10m16s.png
+    556K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_29_11m42s.png
+    708K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_30_12m13s.png
+    576K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_31_12m31s.png
+    380K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_32_13m13s.png
+    156K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_33_13m51s.png
+    212K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_42_16m02s.png
+    244K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_43_16m17s.png
+    240K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_44_16m30s.png
+    280K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_45_16m45s.png
+    272K  06_incumbent_workflow_ground_truth/incumbent_ui_from_recording/vid_46_17m02s.png
+    104K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_01.webp
+    116K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_02.webp
+     96K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_03.webp
+     44K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_04.webp
+     80K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_05.webp
+    112K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_06.webp
+     60K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_07.webp
+     60K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_08.webp
+     88K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_09.webp
+    156K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_10.webp
+     96K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_11.webp
+     56K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_12.webp
+     92K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_13.webp
+     96K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_14.webp
+     68K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_15.webp
+     68K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_16.webp
+     84K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_17.webp
+     68K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_18.webp
+     72K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_19.webp
+     80K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_20.webp
+     96K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_21.webp
+    112K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_22.webp
+     68K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_23.webp
+    112K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_24.webp
+     64K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_25.webp
+     76K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_26.webp
+     72K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_27.webp
+     80K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_28.webp
+     48K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_29.webp
+     72K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_30.webp
+    120K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_31.webp
+    128K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_32.webp
+    116K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_33.webp
+     88K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_34.webp
+     64K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_35.webp
+     68K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_36.webp
+    152K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_37.webp
+    176K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_38.webp
+    156K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_39.webp
+     96K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_40.webp
+     88K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_41.webp
+    104K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_42.webp
+    104K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_43.webp
+    116K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_44.webp
+     92K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_45.webp
+     80K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_46.webp
+     84K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_47.webp
+    160K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_48.webp
+    104K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/cur_49.webp
+    8.0K  06_incumbent_workflow_ground_truth/incumbent_ui_full_gallery/manifest.json
+     64K  06_incumbent_workflow_ground_truth/survey_frames/cur_09.webp
+     20K  06_incumbent_workflow_ground_truth/survey_frames/cur_15.webp
+     36K  06_incumbent_workflow_ground_truth/survey_frames/cur_19.webp
+     52K  06_incumbent_workflow_ground_truth/survey_frames/cur_20.webp
+     64K  06_incumbent_workflow_ground_truth/survey_frames/cur_21.webp
+     84K  06_incumbent_workflow_ground_truth/survey_frames/cur_22.webp
+     32K  06_incumbent_workflow_ground_truth/survey_frames/cur_23.webp
+     28K  06_incumbent_workflow_ground_truth/survey_frames/cur_25.webp
+     44K  06_incumbent_workflow_ground_truth/survey_frames/cur_26.webp
+     60K  06_incumbent_workflow_ground_truth/survey_frames/cur_27.webp
+     64K  06_incumbent_workflow_ground_truth/survey_frames/cur_28.webp
+     32K  06_incumbent_workflow_ground_truth/survey_frames/cur_29.webp
+     64K  06_incumbent_workflow_ground_truth/survey_frames/cur_44.webp
+     36K  06_incumbent_workflow_ground_truth/survey_frames/cur_45.webp
+     28K  06_incumbent_workflow_ground_truth/survey_frames/cur_46.webp
+     28K  06_incumbent_workflow_ground_truth/survey_frames/cur_47.webp
+    120K  06_incumbent_workflow_ground_truth/survey_frames/cur_48.webp
+     24K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image.webp
+     32K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_1.webp
+     20K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_10.webp
+    116K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_11.webp
+     52K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_2.webp
+     48K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_3.webp
+     48K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_4.webp
+     48K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_5.webp
+     28K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_6.webp
+     32K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_7.webp
+     32K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_8.webp
+     64K  06_incumbent_workflow_ground_truth/survey_frames/shot_shared_image_9.webp
+     56K  06_incumbent_workflow_ground_truth/survey_frames/vid_10_01m06s.webp
+     68K  06_incumbent_workflow_ground_truth/survey_frames/vid_11_01m11s.webp
+     36K  06_incumbent_workflow_ground_truth/survey_frames/vid_12_01m33s.webp
+     32K  06_incumbent_workflow_ground_truth/survey_frames/vid_17_05m11s.webp
+     36K  06_incumbent_workflow_ground_truth/survey_frames/vid_25_07m20s.webp
+     28K  06_incumbent_workflow_ground_truth/survey_frames/vid_26_09m57s.webp
+     76K  06_incumbent_workflow_ground_truth/survey_frames/vid_29_11m42s.webp
+     48K  06_incumbent_workflow_ground_truth/survey_frames/vid_32_13m13s.webp
+     28K  06_incumbent_workflow_ground_truth/survey_frames/vid_42_16m02s.webp
+     32K  06_incumbent_workflow_ground_truth/survey_frames/vid_43_16m17s.webp
+     32K  06_incumbent_workflow_ground_truth/survey_frames/vid_44_16m30s.webp
+     36K  06_incumbent_workflow_ground_truth/survey_frames/vid_46_17m02s.webp
+     36K  06_incumbent_workflow_ground_truth/survey_frames/x_03m30s.webp
+     36K  06_incumbent_workflow_ground_truth/survey_frames/x_04m22s.webp
+     36K  06_incumbent_workflow_ground_truth/survey_frames/x_17m35s.webp
+     96K  06_incumbent_workflow_ground_truth/training_recording/File_process_training.vtt
+     88M  06_incumbent_workflow_ground_truth/training_recording/File_process_training_2026-08-05.mp4
+    144K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_07_00m51s.png
+    132K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_08_00m57s.png
+    424K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_10_01m06s.png
+    540K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_11_01m11s.png
+    348K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_12_01m33s.png
+    384K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_14_03m47s.png
+    248K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_17_05m11s.png
+    368K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_20_05m52s.png
+    576K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_22_06m00s.png
+    608K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_24_06m27s.png
+    252K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_25_07m20s.png
+    228K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_26_09m57s.png
+    556K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_29_11m42s.png
+    708K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_30_12m13s.png
+    576K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_31_12m31s.png
+    380K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_32_13m13s.png
+    292K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_37_14m25s.png
+    272K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_40_14m47s.png
+    472K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_41_15m37s.png
+    212K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_42_16m02s.png
+    244K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_43_16m17s.png
+    240K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_44_16m30s.png
+    280K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_45_16m45s.png
+    272K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_46_17m02s.png
+    424K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_49_17m51s.png
+    400K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_57_20m12s.png
+    420K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_58_20m25s.png
+    372K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_59_20m38s.png
+    168K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_66_23m34s.png
+    596K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_71_24m34s.png
+    1.0M  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_73_25m00s.png
+    248K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_74_25m27s.png
+    504K  06_incumbent_workflow_ground_truth/walkthrough_frames/vid_75_25m45s.png
+    348K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_02m30s.png
+    344K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_02m55s.png
+    356K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_03m30s.png
+    348K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_04m22s.png
+    896K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_04m52s.png
+    252K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_11m15s.png
+    252K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_11m30s.png
+    180K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_17m22s.png
+    284K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_17m35s.png
+    464K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_18m32s.png
+    536K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_19m05s.png
+    488K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_20m05s.png
+    192K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_21m16s.png
+    260K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_21m40s.png
+    276K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_22m22s.png
+    276K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_23m40s.png
+    272K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_26m50s.png
+    524K  06_incumbent_workflow_ground_truth/walkthrough_frames/x_27m40s.png
+    2.9M  07_client_technical_and_infra_design/CINQCARE_Azure_Infrastructure_Architecture.docx
+    572K  07_client_technical_and_infra_design/CINQ_Pipeline_Migration.pptx
+    768K  07_client_technical_and_infra_design/Data_Platform_Architecture_and_Control_Model_v1.pdf
+    4.5M  07_client_technical_and_infra_design/DigitalUrth_CINQCARE_TechnicalDesign.pptx
+    864K  07_client_technical_and_infra_design/Technical_Architecture_Document_CinqCare_v2.docx
+    4.0K  08_optional_stack_dependency_baseline/requirements.txt
+    4.0K  08_optional_stack_dependency_baseline/requirements/agents.txt
+    4.0K  08_optional_stack_dependency_baseline/requirements/ai.txt
+    4.0K  08_optional_stack_dependency_baseline/requirements/azure.txt
+    8.0K  08_optional_stack_dependency_baseline/requirements/base.txt
+    4.0K  08_optional_stack_dependency_baseline/requirements/core.txt
+    4.0K  08_optional_stack_dependency_baseline/requirements/databricks.txt
+    4.0K  08_optional_stack_dependency_baseline/requirements/dev.txt
+    4.0K  08_optional_stack_dependency_baseline/requirements/formats.txt

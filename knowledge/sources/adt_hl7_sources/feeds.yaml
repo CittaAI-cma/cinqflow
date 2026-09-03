@@ -1,0 +1,20 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: adt_hl7_sources
+canonical_model: "canonical/adt.yaml"
+feeds:
+  - { feed: garage, silver_raw_source_system: Garage, transport: "Mirth JSON batch", cadence: daily, bronze_table: bronze.adt_garage, note: "The only source that supplies a facility NPI, embedded in a combined name field, plus admit type, admit source and a transition-of-care flag." }
+  - { feed: healthelink, silver_raw_source_system: HealtheLINK, transport: "HL7 v2.5 via Mirth", cadence: continuous, bronze_table: bronze.adt_healthelink, note: "Assigning authority is CINQCARE rather than CINQ. Facility from MSH-4. The only source with a chief complaint and a payer lookup." }
+  - { feed: hec, silver_raw_source_system: HeC, transport: "HL7 v2.5 via Mirth", cadence: continuous, bronze_table: bronze.adt_hec, note: "Message date from MSH-7 rather than Mirth received time. Carries the widest event set including A04, A07, A11, A12 and A13." }
+  - { feed: bronxrhio, silver_raw_source_system: BronxRhio, transport: "HL7 v2.5 via Mirth", cadence: continuous, bronze_table: bronze.adt_bronxrhio, note: "JSON key for discharge disposition is misspelled Discharge_Diposition." }
+  - { feed: healthix, transport: "HL7 v2.5 via Mirth", cadence: continuous, note: "CINQ identifier from PID-4 rather than PID-3." }
+  - { feed: hibridge, transport: "HL7 v2.5 via Mirth", cadence: continuous, note: "Medical record number from PID-2 where the identifier type is MRN." }
+  - { feed: particlehealth, silver_raw_source_system: ParticleHealth, transport: "JSON Transitions API", cadence: continuous, bronze_table: bronze.adt_particlehealth, note: "Not HL7. Event type is derived from setting, status and the presence of a discharge date. Member id comes from a system identifier lookup." }
+  - { feed: pcc_il, silver_raw_source_system: PCC_IL, transport: "HL7 v2.5 via Mirth", cadence: continuous, bronze_table: bronze.adt_pcc_il }
+  - { feed: pcc_enterprise, silver_raw_source_system: PCC_Enterprise, transport: "HL7 v2.5 via Mirth", cadence: continuous, bronze_table: bronze.adt_pcc_enterprise }
+  - { feed: optum_um, silver_raw_source_system: Optum_UM, transport: "flat file", cadence: daily, bronze_table: bronze.adt_optum_um, note: "Supplies utilisation management authorisation fields, a Medicare identifier, market name and a mortality risk level that no HL7 source carries." }
+  - { feed: fidelis_um, silver_raw_source_system: Fidelis_UM, transport: "Excel via SFTP", cadence: "every 15 minutes per the incumbent walkthrough", bronze_table: bronze.adt_fidelis_um, note: "Never sends a discharge; the member drops off the next file. Member name arrives as LAST, FIRST. Event type comes from confine_status where DS is a discharge and AR an admission or readmission." }
+decommissioned:
+  - { name: "dbo.DailyCensus", note: "The legacy census table the v7 model replaces. Many of its columns were typed as unbounded varchar and are corrected in the new model." }
+  - { name: Centene, note: "Removed from the ADT source set." }

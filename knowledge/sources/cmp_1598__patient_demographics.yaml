@@ -1,0 +1,170 @@
+version: 1
+updated: "2026-09-03"
+
+# Loader-facing feed contract. YamlKnowledgeProvider.get_source() reads this exact path;
+# ContextBuilder injects it whole at file understanding and mapping. Richer organisational
+# knowledge for this source is in sources/cmp_1598/.
+#
+# Columns, row counts, null rates and value shapes below were read from the de-identified
+# sample and its profile report, not inferred.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/9.CMP_1598/"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/9.CMP_1598/2461114_206_20260314032654_dmhmreport Data Profile Report.pdf"
+
+source_system: cmp_1598
+feed: patient_demographics
+domain: enrollments
+payer: "none - this is a practice-side export spanning 105 payers"
+population: CMP_1598 practice patient list
+contract: none
+line_of_business: "mixed, determined per row by Primary Insurance Name and Secondary Insurance Name"
+file_pattern: "^\\d+_\\d+_\\d{14}_dmhmreport_CCS_\\d+\\.csv$"
+cadence: on_demand
+delivery: manual_upload
+arrival_archetype: full_snapshot
+
+format:
+  container: "comma-separated values"
+  delimiter: ","
+  quoting: "minimal - used for names with commas and multi-valued race"
+  header: "row 1 - names contain spaces"
+  line_terminator: CRLF
+  encoding: "ASCII, no BOM"
+  trailer: none
+
+business_date:
+  source: file name
+  format: YYYYMMDDHHMMSS in the third token
+  meaning: report run timestamp
+  example: "2461114_206_20260314032654_dmhmreport_CCS_53873287.csv = run 2026-03-14 03:26:54"
+  note: The other numeric tokens are opaque; the corpus does not define them.
+
+grain: one row per patient account per primary insurance
+natural_key: [Account, Primary Insurance]
+secondary_identifiers: [Secondary Insurance, Chart]
+key_note: >
+  Account alone is not unique: 10,224 distinct values across 10,800 rows, with up to 3 rows per account carrying different insurance.
+
+# Observed in the de-identified sample (10,800 rows, 29 columns).
+sample_observed:
+  rows: 10800
+  columns: 29
+  blank_rows: 0
+  rows_with_wrong_field_count: 0
+  literal_null_tokens: [None]
+
+# The 29 columns as they actually arrive, in file order.
+expected_columns:
+  - First Name
+  - Middle
+  - Last Name
+  - Account
+  - Address
+  - Address1
+  - City
+  - State
+  - Zip
+  - Phone
+  - Mobile
+  - Work
+  - Email
+  - DOB
+  - Sex
+  - Race
+  - Ethnicity
+  - Language
+  - Memo1
+  - Memo2
+  - Location
+  - PCP
+  - Chart
+  - Primary Insurance
+  - Primary Insurance Name
+  - Secondary Insurance
+  - Secondary Insurance Name
+  - Last Appointment
+  - Last Transc Triage
+
+# Per-column facts the profiler measured. `null_pct` counts empty strings and literal
+# null tokens. `phi` marks member-identifying columns (HIPAA Safe Harbor).
+columns:
+  - { name: First Name, type: string, null_pct: 0.0, distinct: 663, phi: true }
+  - { name: Middle, type: string, null_pct: 77.3, distinct: 18, phi: true }
+  - { name: Last Name, type: string, null_pct: 0.0, distinct: 994, phi: true }
+  - { name: Account, type: int, null_pct: 0.0, distinct: 10224, phi: true }
+  - { name: Address, type: string, null_pct: 0.4, distinct: 10730, phi: true }
+  - { name: Address1, type: string, null_pct: 84.4, distinct: 412, phi: true }
+  - { name: City, type: string, null_pct: 0.3, distinct: 8212, phi: true }
+  - { name: State, type: string, null_pct: 0.0, distinct: 22, phi: false }
+  - { name: Zip, type: int, null_pct: 0.3, distinct: 859, phi: true }
+  - { name: Phone, type: string, null_pct: 60.0, distinct: 4319, phi: true }
+  - { name: Mobile, type: string, null_pct: 5.2, distinct: 10235, phi: true }
+  - { name: Work, type: string, null_pct: 96.5, distinct: 374, phi: false }
+  - { name: Email, type: string, null_pct: 38.0, distinct: 6609, phi: true }
+  - { name: DOB, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 8700, phi: true }
+  - { name: Sex, type: string, null_pct: 0.0, distinct: 3, phi: true }
+  - { name: Race, type: string, null_pct: 5.3, distinct: 76, phi: true }
+  - { name: Ethnicity, type: string, null_pct: 7.3, distinct: 21, phi: true }
+  - { name: Language, type: string, null_pct: 4.6, distinct: 46, phi: false }
+  - { name: Memo1, type: string, null_pct: 89.5, distinct: 632, phi: false }
+  - { name: Memo2, type: string, null_pct: 68.2, distinct: 2805, phi: false }
+  - { name: Location, type: string, null_pct: 0.3, distinct: 6, phi: false }
+  - { name: PCP, type: string, null_pct: 15.3, distinct: 244, phi: false }
+  - { name: Chart, type: string, null_pct: 75.8, distinct: 345, phi: true }
+  - { name: Primary Insurance, type: string, null_pct: 4.1, distinct: 10216, phi: false }
+  - { name: Primary Insurance Name, type: string, null_pct: 3.9, distinct: 105, phi: true }
+  - { name: Secondary Insurance, type: string, null_pct: 45.8, distinct: 5835, phi: false }
+  - { name: Secondary Insurance Name, type: string, null_pct: 45.6, distinct: 81, phi: true }
+  - { name: Last Appointment, type: date:MM/DD/YYYY, null_pct: 0.0, distinct: 876, phi: false }
+  - { name: Last Transc Triage, type: date:MM/DD/YYYY, null_pct: 94.6, distinct: 460, phi: false }
+
+phi_columns:
+  - First Name
+  - Middle
+  - Last Name
+  - Account
+  - Address
+  - Address1
+  - City
+  - Zip
+  - Phone
+  - Mobile
+  - Email
+  - DOB
+  - Sex
+  - Race
+  - Ethnicity
+  - Chart
+  - Primary Insurance Name
+  - Secondary Insurance Name
+
+# Closed-domain columns and the values observed. A value outside these is DQ-B-07.
+value_domains:
+  Sex: [Female, Male, Unknown]
+  Location: [Main Office, Linden, Jefferson, Atlantic, Linden Prior To 5/3/23, Atlantic Prior 5/3/23]
+
+formats:
+  dob: "DOB = YYYY-MM-DD"
+  appointments: Last Appointment and Last Transc Triage = MM/DD/YYYY
+  phone: "(999) 999-9999"
+  race: "multi-valued, comma-joined, 76 distinct combinations"
+  pcp: "PCP arrives as 'Last, First, Credential' and is a provider field, so the client's name-parsing rule explicitly excludes it"
+  insurance_ids: "Primary Insurance holds whatever identifier the payer uses: 9 or 11 digits, a NY CIN, or an MBI"
+
+# De-identification artefacts in the SAMPLE ONLY. Never tune a rule or threshold on
+# these; the production feed has a different shape.
+deid_artifacts:
+  - "Account, Chart, Primary Insurance and Secondary Insurance are hashed; names, address, city, ZIP, phones and email are faked; DOB is date-faked."
+
+quirks:
+  - "Ethnicity carries the literal string 'None' on 277 rows, which is a value rather than a null."
+  - "Secondary Insurance is the NY Medicaid CIN on 5,021 rows with Secondary Insurance Name 'Medicaid', which makes this feed a useful Medicaid identity crosswalk."
+  - "Memo1 and Memo2 are free text used operationally (transportation, copay notes, payer ids) and carry no schema."
+  - The folder label CMP_1598 and the tokens dmhmreport and CCS are not explained anywhere in the corpus.
+
+notes: >
+  A practice-management and EHR demographics export from a CINQ-affiliated practice, not a payer
+  roster. Its value is identity: it links a patient account to primary and secondary payer
+  identifiers across 105 payers, which supports crosswalk building and attribution checks. It
+  should never be treated as an eligibility source, because coverage here is a practice's record
+  of what it billed rather than the payer's record of who is covered.

@@ -1,0 +1,186 @@
+version: 1
+updated: "2026-09-03"
+kind: source_system_registry
+
+# Every source system CINQFLOW ingests from, its feeds, and where the loader finds each feed's
+# contract. `source_system` values here are the literals used in landing paths, upload metadata
+# and the Silver Raw source_system column.
+#
+# loader_path is what YamlKnowledgeProvider.get_source(source_system=..., feed=...) resolves to.
+# A feed with `sample: none` has no de-identified sample in the corpus, so its schema is
+# declared from the client's data model rather than from an observed file.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/"
+  - "docs/07_client_technical_and_infra_design/Technical_Architecture_Document_CinqCare_v2.docx"
+  - "docs/03_data_source_schemas/claims/Claims_Source_Details.xlsx"
+  - "docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx"
+
+naming_convention:
+  source_system: "<payer>_<state>[_<region>] in lower snake case, e.g. fidelis_ny_upstate, molina_ny, cms_aco_reach_d0284"
+  feed: "lower snake case noun phrase for the delivery, e.g. member_roster, member_enrollment_history, ip_claim_header"
+  loader_path: "sources/<source_system>__<feed>.yaml"
+  landing_path: ".cinqflow/landing/<domain>/<source_system>/<feed>/"
+
+source_systems:
+
+  - source_system: fidelis_ny_upstate
+    organization: "Fidelis Care (New York)"
+    contract: fidelis_ny
+    population: CINQUpstate
+    state: NY
+    silver_raw_source_system: "FIDELIS UPSTATE"
+    feeds:
+      - { feed: member_roster, domain: enrollments, cadence: monthly, delivery: manual_upload, sample: "1-Enrollment/1.Fedelis_NY/*CINQUPSTATE*.csv", loader_path: "sources/fidelis_ny_upstate__member_roster.yaml", status: registered }
+      - { feed: ip_claim_header, domain: claims, cadence: monthly, delivery: sftp, sample: none, landing: "claims/fidelis_upstate/IP/", pattern: "FidelisCare_Prod_IPClaimHeader_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: ip_claim_line, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/IP/", pattern: "FidelisCare_Prod_IPClaimLine_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: op_claim_header, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/OP/", pattern: "FidelisCare_Prod_OPClaimHeader_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: op_claim_line, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/OP/", pattern: "FidelisCare_Prod_OPClaimLine_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: prof_claim_header, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/Prof/", pattern: "FidelisCare_Prod_ProfHeader_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: prof_claim_line, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/Prof/", pattern: "FidelisCare_Prod_ProfLine_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: dental_claim_header, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/Dental/", pattern: "FidelisCare_Prod_DentalHeader_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: dental_claim_line, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/Dental/", pattern: "FidelisCare_Prod_DentalLine_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: vision_claim_header, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/Vision/", pattern: "FidelisCare_Prod_VisionHeader_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: vision_claim_line, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/Vision/", pattern: "FidelisCare_Prod_VisionLine_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: pharmacy_claim, domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/Pharmacy/", pattern: "FidelisCare_Prod_Pharmacy_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: membership, domain: enrollments, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/Membership/", pattern: "FidelisCare_Prod_Membership_FULL_CINQUPSTATE_.*.txt" }
+      - { feed: member_pcp, domain: enrollments, cadence: monthly, sample: none, landing: "claims/fidelis_upstate/Member_pcp/", pattern: "FidelisCare_Prod_MemberPCP_FULL_CINQUPSTATE_.*.txt" }
+
+  - source_system: fidelis_ny_downstate
+    organization: "Fidelis Care (New York)"
+    contract: fidelis_ny
+    population: CINQDownstate
+    state: NY
+    silver_raw_source_system: "FIDELIS DOWNSTATE"
+    feeds:
+      - { feed: member_roster, domain: enrollments, cadence: monthly, delivery: manual_upload, sample: "1-Enrollment/1.Fedelis_NY/*CINQDOWNSTATE*.xlsx", loader_path: "sources/fidelis_ny_downstate__member_roster.yaml", status: registered }
+      - { feed: "claims (IP/OP/Prof/Dental/Vision header and line, Pharmacy, Membership, Member PCP)", domain: claims, cadence: monthly, sample: none, landing: "claims/fidelis_downstate/*", pattern: "FidelisCare_Prod_.*_FULL_CINQDOWNSTATE_.*.txt", note: "Same 14 patterns as upstate with the CINQDOWNSTATE token." }
+
+  - source_system: molina_ny
+    organization: "Molina Healthcare of New York"
+    contract: molina_ny
+    populations: ["NYCINQ- Down - HARP", "NYCINQ- Down - MEDICAID", "NYCINQ- Up - MEDICAID", "NYCINQUpstate_HARP"]
+    state: NY
+    silver_raw_source_system: MOLINA
+    feeds:
+      - { feed: member_enrollment_history, domain: enrollments, cadence: monthly, delivery: sftp, sample: "1-Enrollment/2.Molina NY/*.txt", loader_path: "sources/molina_ny__member_enrollment_history.yaml", status: registered, note: "One delivery per population; four files share one 60-column layout." }
+      - { feed: claims, domain: claims, cadence: monthly, sample: none }
+
+  - source_system: centene_ga
+    organization: "Centene Georgia (Peach State Health Plan / Wellcare of Georgia)"
+    contract: centene_ga
+    state: GA
+    silver_raw_source_system: "Centene GA"
+    feeds:
+      - { feed: medicaid_mwov_members, domain: enrollments, cadence: monthly, delivery: sftp, sample: "1-Enrollment/3.GA CENTENE Medicaid/*.txt", loader_path: "sources/centene_ga__medicaid_mwov_members.yaml", status: registered }
+      - { feed: medicare_mwov_members, domain: enrollments, cadence: monthly, delivery: sftp, sample: "1-Enrollment/4.GA CENTENE Medicare/*.txt", loader_path: "sources/centene_ga__medicare_mwov_members.yaml", status: registered }
+      - { feed: aes_risk_file, domain: risk, cadence: unknown, sample: none }
+      - { feed: claims, domain: claims, cadence: monthly, sample: none }
+
+  - source_system: optum_ga
+    organization: "Optum (UnitedHealthcare) HouseCalls"
+    contract: optum_ga
+    population: CINQ_HouseCalls_GA
+    state: GA
+    silver_raw_source_system: Optum
+    feeds:
+      - { feed: housecalls_roster, domain: enrollments, cadence: monthly, delivery: manual_upload, sample: "1-Enrollment/5.Optum GA/*.xlsx", loader_path: "sources/optum_ga__housecalls_roster.yaml", status: registered, note: "Engagement/outreach roster, not a payer eligibility file." }
+
+  - source_system: optum_ny
+    organization: "Optum / UnitedHealthcare (New York)"
+    contract: optum_ny
+    population: CINQCare_Elig
+    state: NY
+    silver_raw_source_system: Optum
+    feeds:
+      - { feed: eligibility, domain: enrollments, cadence: monthly, delivery: manual_upload, sample: "1-Enrollment/6.Optum NY/*.csv", loader_path: "sources/optum_ny__eligibility.yaml", status: registered, note: "Coverage spans, restated each month." }
+      - { feed: claims, domain: claims, cadence: monthly, sample: none, silver_raw_source_system: UHC_OPTUM_NY }
+      - { feed: um_census, domain: adt, cadence: daily, sample: none, silver_raw_source_system: Optum_UM }
+
+  - source_system: centene_il
+    organization: "Centene Illinois (Meridian / Wellcare of Illinois)"
+    contract: centene_il
+    population: IL0201633
+    state: IL
+    silver_raw_source_system: "Centene IL"
+    feeds:
+      - { feed: member_roster_preview, domain: enrollments, cadence: monthly, delivery: manual_upload, sample: "1-Enrollment/7.Centene IL/*.csv", loader_path: "sources/centene_il__member_roster_preview.yaml", status: registered }
+      - { feed: claims, domain: claims, cadence: monthly, sample: none, note: "Four claim types per the contract tracker." }
+
+  - source_system: cms_aco_reach_d0284
+    organization: "CMS - ACO REACH"
+    contract: cms_aco_reach_d0284
+    aco_id: D0284
+    state: multi
+    silver_raw_source_system: ACO_REACH_D0284
+    feeds:
+      - { feed: alignment_roster, domain: enrollments, cadence: monthly, delivery: portal_download, sample: "1-Enrollment/8.Cinq ACO Reach/*.xlsx", loader_path: "sources/cms_aco_reach_d0284__alignment_roster.yaml", status: registered, note: "Curated roster: CMS Alignment Report columns joined to PALMR/RAP reference reports and derived risk-score fields." }
+      - { feed: cclf, domain: claims, cadence: monthly, sample: none, note: "CCLF0-CCLF9, CCLFA, CCLFB pipe-delimited; monthly plus a 3-month run-out after the performance year.", silver_raw_source_system: D0284 }
+      - { feed: bcda, domain: claims, cadence: weekly, sample: none, note: "FHIR R4 NDJSON bulk export: ExplanationOfBenefit, Patient, Coverage.", silver_raw_source_system: D0284 }
+      - { feed: palmr, domain: reference, cadence: monthly, sample: none, note: "Provider alignment reference report; feeds aligned_palmr_* columns." }
+      - { feed: rap, domain: reference, cadence: monthly, sample: none, note: "Risk adjustment / benchmark reference report (D0284_RAP)." }
+      - { feed: participant_list, domain: provider, cadence: annual, sample: none, note: "CMS participant and preferred provider list (D0284_PARTICIPANT_LIST)." }
+
+  - source_system: cms_mssp
+    organization: "CMS - Medicare Shared Savings Program"
+    contract: cms_mssp
+    state: multi
+    silver_raw_source_system: MSSP
+    feeds:
+      - { feed: alr_assignment_list, domain: enrollments, cadence: monthly, sample: none, note: "Assignment List Report; the client's seed mapping reads cms_mssp.mssp._roster_alignment." }
+      - { feed: cclf, domain: claims, cadence: monthly, sample: none }
+      - { feed: bcda, domain: claims, cadence: weekly, sample: none }
+
+  - source_system: cmp_1598
+    organization: "CINQ-affiliated practice (MEDENT practice-management export)"
+    contract: none
+    state: NY
+    silver_raw_source_system: "MEDENT CMP"
+    feeds:
+      - { feed: patient_demographics, domain: enrollments, cadence: on_demand, delivery: manual_upload, sample: "1-Enrollment/9.CMP_1598/*.csv", loader_path: "sources/cmp_1598__patient_demographics.yaml", status: registered, note: "Practice patient list spanning 105 payers; used for identity crosswalk and attribution, not for eligibility." }
+
+  - source_system: cinq_adt
+    organization: "CINQCARE internal ADT / care-alert working table"
+    contract: cross_cutting
+    state: multi
+    feeds:
+      - { feed: clinical_events, domain: adt, cadence: continuous, delivery: extract, sample: "2-ADT/*.csv", loader_path: "sources/cinq_adt__clinical_events.yaml", status: registered, note: "Post-HL7 extract already joined to member and care-management fields. Not raw HL7." }
+
+  - source_system: adt_hl7_sources
+    organization: "Health information exchanges and payer UM feeds"
+    contract: cross_cutting
+    state: multi
+    note: "Nine ADT source systems land in silver_raw.encounter. Seven arrive as Mirth-batched HL7 v2 JSON, one as an API pull, two as flat files."
+    feeds:
+      - { feed: garage, domain: adt, cadence: daily, format: "Mirth JSON", silver_raw_source_system: Garage, sample: none }
+      - { feed: healthelink, domain: adt, cadence: continuous, format: "HL7 v2.5 via Mirth", silver_raw_source_system: HealtheLINK, sample: none, note: "Assigning authority CINQCARE, not CINQ; facility from MSH-4." }
+      - { feed: hec, domain: adt, cadence: continuous, format: "HL7 v2.5 via Mirth", silver_raw_source_system: HeC, sample: none, note: "MessageDate from MSH-7, not Mirth received time." }
+      - { feed: bronxrhio, domain: adt, cadence: continuous, format: "HL7 v2.5 via Mirth", silver_raw_source_system: BronxRhio, sample: none, note: "JSON key typo Discharge_Diposition." }
+      - { feed: particlehealth, domain: adt, cadence: continuous, format: "JSON Transitions API", silver_raw_source_system: ParticleHealth, sample: none, note: "No HL7; event derived from setting + status + discharge date." }
+      - { feed: pcc_il, domain: adt, cadence: continuous, format: "HL7 v2.5 via Mirth", silver_raw_source_system: PCC_IL, sample: none }
+      - { feed: pcc_enterprise, domain: adt, cadence: continuous, format: "HL7 v2.5 via Mirth", silver_raw_source_system: PCC_Enterprise, sample: none }
+      - { feed: optum_um, domain: adt, cadence: daily, format: "flat file", silver_raw_source_system: Optum_UM, sample: none }
+      - { feed: fidelis_um, domain: adt, cadence: daily, format: "Excel via SFTP", silver_raw_source_system: Fidelis_UM, sample: none, note: "Every 15 minutes per the incumbent walkthrough; never sends discharge - members drop off the file." }
+      - { feed: healthix, domain: adt, cadence: continuous, format: "HL7 v2.5 via Mirth", sample: none, note: "In the HL7 mapping workbook; CINQ id from PID-4." }
+      - { feed: hibridge, domain: adt, cadence: continuous, format: "HL7 v2.5 via Mirth", sample: none, note: "MRN from PID-2 where PID-2.4 = MRN." }
+
+  - source_system: clinigence
+    organization: "Clinigence (enhanced roster vendor)"
+    contract: cross_cutting
+    populations: ["Fidelis NY", "Molina NY", "Optum NY", "Centene IL"]
+    feeds:
+      - { feed: enhanced_roster, domain: enrollments, cadence: unknown, sample: none }
+
+  - source_system: uhc_md
+    organization: "UnitedHealthcare (Maryland, plus West Virginia)"
+    contract: uhc_md
+    state: MD
+    feeds:
+      - { feed: enrollment, domain: enrollments, cadence: unknown, sample: none }
+      - { feed: claims, domain: claims, cadence: unknown, sample: none }
+
+  - source_system: wellpoint_dc
+    organization: "Wellpoint (District of Columbia)"
+    contract: wellpoint_dc
+    state: DC
+    feeds:
+      - { feed: enrollment, domain: enrollments, cadence: unknown, sample: none }

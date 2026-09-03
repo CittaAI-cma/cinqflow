@@ -1,0 +1,51 @@
+version: 1
+updated: "2026-09-03"
+kind: prompt_registry
+
+# Maps workflow/screen -> prompt name -> version, and declares which knowledge each prompt's
+# context is assembled from. The executable prompt TEXT lives in
+# backend/src/cinqflow/intelligence/prompts/<name>_v<version>.md and its version map in
+# prompts/__init__.py (REGISTRY). This file is the governed description of those prompts and
+# of the two not yet implemented (bronze_analysis), so the ContextBuilder contract is visible
+# to analysts without reading Python. Provenance cites "<name>@<version>".
+grounded_in:
+  - "backend/src/cinqflow/intelligence/prompts/__init__.py"
+  - "backend/src/cinqflow/intelligence/context.py"
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/08_agent_specs.yaml (context_assembly_pattern)"
+
+prompts:
+  - name: interpret_file
+    version: 1
+    status: implemented
+    screen: file_understanding
+    spec: prompts/file_understanding.yaml
+    graph: "cinqflow.intelligence.graphs.interpret_file.InterpretFileGraph"
+    response_schema: "cinqflow.intelligence.schemas.InterpretationResponse"
+  - name: recommend_mapping
+    version: 1
+    status: implemented
+    screen: mapping
+    spec: prompts/mapping.yaml
+    graph: "cinqflow.intelligence.graphs.recommend_mapping.RecommendMappingGraph"
+    response_schema: "cinqflow.intelligence.schemas.MappingProposalResponse"
+  - name: analyze_bronze
+    version: 1
+    status: specified_not_implemented
+    screen: bronze_analysis
+    spec: prompts/bronze_analysis.yaml
+    graph: "planned: cinqflow.intelligence.graphs.analyze_bronze"
+    response_schema: "planned: InterpretationResponse (claims/risks/unknowns)"
+
+# Context slots in the order they enter the LLM call (from the knowledge pack's
+# context_assembly_pattern). Operating rules precede retrieved knowledge; live state is last.
+slot_order:
+  1: role
+  2: operating_rules            # intelligence/reasoning_rules.yaml always_on + screen section
+  3: governed_knowledge         # selected YAML, trimmed, each with citation
+  4: tenant_decisions           # decisions/*.yaml + mappings/approved/*.yaml exemplars
+  5: live_state                 # observations: profile facts, bronze facts (no sample rows)
+  6: task
+
+versioning:
+  rule: "Bumping a prompt = new <name>_v<N>.md + REGISTRY update + entry here. Old versions are never edited; provenance on stored artifacts cites the version that ran."
+  citation_format: "<name>@<version>"

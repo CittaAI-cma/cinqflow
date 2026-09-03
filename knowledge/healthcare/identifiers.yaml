@@ -1,0 +1,122 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+confidence: authoritative
+
+# Identifier semantics and shapes. The shapes are what a profiler sees, so this file is what
+# lets file understanding say "this column is a Medicare Beneficiary Identifier" from evidence
+# rather than from the column name.
+grounded_in:
+  - "https://www.cms.gov/medicare/new-medicare-card (Understanding the MBI)"
+  - "https://npiregistry.cms.hhs.gov and the NPI check-digit specification"
+  - "https://www.health.ny.gov (Medicaid Update - CIN format)"
+  - "docs/04_source_data_samples_and_profiles/ (observed shapes)"
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml"
+
+principle: >
+  Every external identifier is a versioned attribute of a person or organisation, never the
+  identity itself. The platform mints immutable surrogate keys in the identity layer and
+  everything downstream joins on those.
+
+member_identifiers:
+  - id: mbi
+    name: "Medicare Beneficiary Identifier"
+    format: "11 characters, no dashes in storage. Position types C A AN N A AN N A A N N, where C is 1-9, N is 0-9, A is A-Z excluding S, L, O, I, B and Z, and AN is either."
+    shape_observed: "9AA9AA9AA99, 9A99AA9AA99, 9AA9A99AA99"
+    display_form: "Dashes are display only, as in 1EG4-TE5-MK73."
+    stability: "Reissued on fraud, compromise or beneficiary request, so a person may hold several over time and historical files carry the old one. Never a stable primary key."
+    crosswalk: "CCLF9 is the CMS-supplied MBI change history. The D0284 alignment roster carries the same thing as MBI_original and MBI_previous with an end month."
+    seen_in: [centene_ga__medicare_mwov_members, optum_ny__eligibility, optum_ga__housecalls_roster, cms_aco_reach_d0284__alignment_roster, cinq_adt__clinical_events]
+    caution: "The Optum GA sample fakes the MBI into a 13-character hyphenated form; that is a de-identification artefact, not the production shape."
+  - id: hicn
+    name: "Health Insurance Claim Number"
+    format: "Legacy SSN-based Medicare identifier, replaced by the MBI. Blank in CCLF since January 2020."
+    stability: "Still present in historical extracts."
+  - id: ny_cin
+    name: "New York Medicaid Client Identification Number"
+    format: "2 letters, 5 digits, 1 letter, for example AB12345C. One active CIN per person for the whole time they receive benefits."
+    shape_observed: "AA99999A"
+    role: "The cross-payer identity key for New York Medicaid members."
+    seen_in: [fidelis_ny_upstate__member_roster, molina_ny__member_enrollment_history, cmp_1598__patient_demographics, cinq_adt__clinical_events]
+  - id: ga_medicaid_id
+    format: "12 digits."
+    seen_in: [centene_ga__medicaid_mwov_members]
+  - id: il_rin
+    name: "Illinois Recipient Identification Number"
+    format: "9 digits."
+    seen_in: [centene_il__member_roster_preview]
+  - id: payer_member_id
+    name: "Payer-assigned member or subscriber identifier"
+    stability: "Changes on plan change, group change and sometimes on renewal. The subscriber versus dependent distinction matters for family logic."
+    observed_shapes:
+      fidelis: "11 digits, a hyphen, then a plan-specific suffix such as FCNY#### for Medicaid or EPP##### for Essential Plan"
+      molina: "NYM followed by 11 digits"
+      centene_ga_medicaid: "GA followed by 11 digits"
+      centene_ga_medicare: "QG followed by 7 or 8 digits"
+      centene_il: "a letter followed by 10 digits (AMISYS)"
+      optum_ny: "9 digits (subscriber number)"
+      optum_ga: "MBI-shaped client id plus a 9-digit subscriber id"
+  - id: empi
+    name: "Enterprise Master Patient Index identifier"
+    format: "10 digits at Optum NY."
+    note: "A payer-internal identity key, not a member-facing number."
+  - id: cinq_our_id
+    name: "CINQCARE internal member identifier"
+    format: "5 or 6 digits in the ADT working table; a UUID in the enrollment ODS (Members.CinqId)."
+    role: "The master member identifier that ADT messages carry in PID-3 under assigning authority CINQ or CINQCARE."
+
+provider_identifiers:
+  - id: npi
+    name: "National Provider Identifier"
+    format: "10 digits: 9 digits plus a Luhn mod-10 check digit. When used as a card issuer identifier it is prefixed with 80840; to validate an unprefixed NPI add the constant 24 during the check-digit calculation."
+    types: { "1": "Individual", "2": "Organisation" }
+    stability: "Does not change with employment, so an NPI alone does not tell you where a provider practised on a date."
+    validation_regex: "^[12][0-9]{9}$"
+    caution: "The ADT working table uses 0 rather than null for an unknown NPI. ParticleHealth may send a comma-separated list, in which case the first valid NPI wins."
+  - id: tin
+    name: "Taxpayer Identification Number / Employer Identification Number"
+    format: "9 digits, written XX-XXXXXXX by the IRS."
+    role: "The unit of participation in MSSP and the CMS accountable care models. The provider-to-TIN relationship is effective-dated and changes constantly."
+    caution: "Optum GA supplies a bracketed multi-value TIN string, so one member may map to several."
+  - id: ccn
+    name: "CMS Certification Number, historically the OSCAR number"
+    role: "Facility identifier on institutional claims."
+  - id: taxonomy
+    name: "NUCC Health Care Provider Taxonomy code"
+    format: "10 characters, alphanumeric, three levels: grouping, classification, specialisation. Published twice a year."
+
+claim_identifiers:
+  - id: source_claim_id
+    note: "Payer-native claim control number (837 CLM01 or the payer's internal number). Unique only with source_system."
+  - id: cclf_claim_id
+    field: CUR_CLM_UNIQ_ID
+    note: "The CCLF claim key, joined across CCLF1 through CCLF6 with CLM_LINE_NUM for line-level files."
+  - id: fhir_eob_id
+    field: "EOB.id"
+    note: "The BCDA logical id for an ExplanationOfBenefit."
+
+plan_identifiers:
+  - id: ma_contract_number
+    format: "A letter plus four digits. H or 9 is a local Medicare Advantage plan, R a regional PPO, S a stand-alone Part D plan, E an employer-direct plan, F a fallback plan."
+    caution: "In the Optum NY sample CONTR_NBR was hashed independently of CONTR_NBR_PBP, so the two no longer agree. Do not derive one from the other in that sample."
+  - id: pbp
+    name: "Plan Benefit Package identifier"
+    format: "3 characters, alphanumeric, zero-padded."
+  - id: segment_id
+    format: "3 digits; 000 for a non-segmented plan."
+
+geography:
+  ssa_county_code: "5 digits, 2-digit state plus 3-digit county. SSA numbering differs from FIPS and a single FIPS county can map to two SSA codes."
+  fips_county_code: "5 digits, 2-digit state plus 3-digit county."
+  note: "Both appear on the ACO REACH roster and both are declared on members_addresses. They are not interchangeable and a crosswalk is required."
+
+matching_guidance:
+  deterministic_tiers:
+    1: "Current MBI, or an MBI resolved through the CMS historical crosswalk. The strongest Medicare key."
+    2: "Payer member id plus payer plus effective period."
+    3: "Facility MRN plus facility. Strong within a facility, meaningless across facilities."
+    4: "SSN. Legally restricted, frequently wrong, shared within families. Supporting evidence only, never a sole match key."
+  traps:
+    - "Source systems reuse identifiers after a person leaves."
+    - "Test and placeholder records (999999999, TEST PATIENT) match each other enthusiastically and need an explicit exclusion list."
+    - "An MBI change is not a new person, which is exactly the error a naive deterministic rule makes every time CMS reissues one."

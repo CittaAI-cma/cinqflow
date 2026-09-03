@@ -1,0 +1,6 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: cinq_adt
+feeds:
+  - { feed: clinical_events, domain: adt, status: registered, contract_file: "sources/cinq_adt__clinical_events.yaml", grain: "one row per ADT event matched to a member", cadence: continuous, delivery: extract, columns: 142, natural_key: [ID] }

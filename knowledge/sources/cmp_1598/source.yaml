@@ -1,0 +1,16 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: cmp_1598
+organization:
+  entity: "A CINQCARE-affiliated primary care practice in western New York"
+  system: "MEDENT practice management and electronic health record"
+  note: "The technical architecture lists Medent as an enrolment source with two sub-types, CMP_1598 and CAH_152. Neither label is explained anywhere in the corpus."
+contract: { id: none, note: "Not a payer contract. This is practice-side data." }
+silver_raw_source_system: "MEDENT CMP"
+semantics:
+  what_it_is: "A patient demographics export spanning 105 payers, listing who the practice sees and what coverage it bills."
+  value: "Identity. It links a practice patient account to primary and secondary payer identifiers side by side, which supports crosswalk building and attribution checks."
+  boundary: >
+    Never treat this as an eligibility source. Coverage here is a practice's record of what it
+    billed, not the payer's record of who is covered, and the two disagree routinely.

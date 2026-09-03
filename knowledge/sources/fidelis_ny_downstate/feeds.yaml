@@ -1,0 +1,21 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: fidelis_ny_downstate
+
+feeds:
+  - feed: member_roster
+    domain: enrollments
+    status: registered
+    contract_file: "sources/fidelis_ny_downstate__member_roster.yaml"
+    grain: "one row per member per monthly roster delivery"
+    cadence: monthly
+    delivery: manual_upload
+    columns: 45
+    sample_rows: 38489
+    natural_key: [member_id]
+    note: "The only Fidelis feed with a de-identified sample in the corpus."
+
+  # The same 14 claims patterns as upstate with the CINQDOWNSTATE token, landing under
+  # claims/fidelis_downstate/. None has a sample in the corpus.
+  - { feed: "claims (IP, OP, Prof, Dental, Vision header and line; Pharmacy; Membership; Member PCP)", domain: claims, cadence: monthly, sample: none, pattern: "FidelisCare_Prod_.*_FULL_CINQDOWNSTATE_.*.txt", landing: "claims/fidelis_downstate/" }

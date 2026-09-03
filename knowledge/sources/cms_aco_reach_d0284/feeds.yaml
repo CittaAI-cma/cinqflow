@@ -1,0 +1,46 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: cms_aco_reach_d0284
+feeds:
+  - feed: alignment_roster
+    domain: enrollments
+    status: registered
+    contract_file: "sources/cms_aco_reach_d0284__alignment_roster.yaml"
+    grain: "one row per beneficiary per alignment month within a file date"
+    cadence: monthly
+    delivery: portal_download
+    columns: 111
+    natural_key: [aco_id, filedate, yr_mo, "Beneficiary MBI ID"]
+    note: "A curated roster: CMS Alignment Report columns joined to the PALMR provider alignment report and to derived risk-score fields."
+  - feed: cclf
+    domain: claims
+    cadence: monthly
+    sample: none
+    note: "Twelve pipe-delimited files per cycle plus a three-month run-out after the performance year."
+    files:
+      CCLF0: "Summary statistics header, one record per delivered file with record counts"
+      CCLF1: "Part A claims header, one row per institutional claim"
+      CCLF2: "Part A revenue centre detail, one row per revenue line"
+      CCLF3: "Part A procedure codes"
+      CCLF4: "Part A diagnosis codes"
+      CCLF5: "Part B physicians, one row per professional claim line"
+      CCLF6: "Part B durable medical equipment"
+      CCLF7: "Part D prescription drug events"
+      CCLF8: "Beneficiary demographics, one row per beneficiary per date range"
+      CCLF9: "Beneficiary cross-reference, one row per Medicare identifier change"
+      CCLFA: "Part A benefit enhancement and demonstration codes"
+      CCLFB: "Part B benefit enhancement and demonstration codes"
+    naming: "P.D####.ACO.ZCY##.Dyymmdd.Thhmmsst for monthly files and P.D####.ACO.ZCR##... for run-out files"
+    adjustment_field: "CLM_ADJSMT_TYPE_CD, where 0 is original, 1 cancellation and 2 adjustment"
+  - feed: bcda
+    domain: claims
+    cadence: weekly
+    sample: none
+    note: "The same Medicare content as bulk FHIR R4 newline-delimited JSON: ExplanationOfBenefit, Patient and Coverage. Adjustment semantics must be derived from EOB.related.relationship because FHIR carries no adjustment type."
+  - { feed: palmr, domain: reference, cadence: monthly, sample: none, note: "Provider alignment reference report; supplies the aligned_palmr_* columns on the roster." }
+  - { feed: rap, domain: reference, cadence: monthly, sample: none, note: "Risk adjustment and benchmark report, ACO level by calendar month, with raw and normalised risk scores and a benchmark type of A prospective or E expenditure." }
+  - { feed: participant_list, domain: provider, cadence: annual, sample: none, note: "Participant and preferred provider list by performance year. Only participant providers count for alignment and quality scoring." }
+  - { feed: mexpr, domain: reference, cadence: unknown, sample: none, note: "Named in the contract mind map; contents not described anywhere in the corpus." }
+reconciliation:
+  cross_source: "Where both CCLF and BCDA are available, run both and reconcile. They share claim identifiers, and disagreement between them is one of the highest-signal data quality alarms available."

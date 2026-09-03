@@ -1,0 +1,127 @@
+version: 1
+updated: "2026-09-03"
+kind: decision_records
+
+# Analyst-approved corrections and interpretations that are true for CINQCARE and would not
+# be derivable from public sources. Schema follows the knowledge pack's decision_record_schema
+# (08_agent_specs.yaml). Records are shop_specific; generalisable defaults to false. Agents
+# draft, humans approve; superseded records are retained and marked.
+#
+# Mapping-level decisions exported automatically at G2 approval live in mappings/approved/;
+# this file holds decisions about meaning, keys, constants and precedence.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/08_agent_specs.yaml"
+  - "knowledge/mappings/approved/"
+  - "docs/03_data_source_schemas/"
+
+schema:
+  fields: [decision_id, title, layer, trigger, context, options_considered, decision, rationale, decided_by, downstream_impact, reversibility, supersedes, review_by, generalisable]
+
+records:
+  - decision_id: DR-20260902-001
+    title: "Which Fidelis identifier is the member key?"
+    layer: silver_raw
+    trigger: "Mapping proposal: member_id and medicaid_id both plausible for members.source_system_id"
+    context: "Fidelis NY member roster (upstate/downstate), roster_stage3 mapping v2"
+    options_considered: ["member_id (Fidelis id with plan suffix)", "medicaid_id (NY CIN)", "both via two rows"]
+    decision: "member_id -> members.source_system_id with on_null reject; medicaid_id kept out of the key."
+    rationale: "The payer's own id is the roster's natural key (unique upstate); the CIN is the cross-payer identity key and belongs to the identity layer."
+    decided_by: "lead@cinqcare.com (analyst), 2026-09-02"
+    downstream_impact: ["members PK", "identity crosswalk input"]
+    reversibility: reversible_with_restatement
+    generalisable: false
+
+  - decision_id: DR-20260902-002
+    title: "Where does the roster population label go?"
+    layer: silver_raw
+    trigger: "vbp_id carries CINQUpstate/CINQDownstate, not a member id"
+    context: "Fidelis NY roster"
+    options_considered: ["members_enrollment_segments.tin_submarket ('PCP Upstate/Downstate')", "drop", "source_system literal only"]
+    decision: "vbp_id -> members_enrollment_segments.tin_submarket (candidate accepted); source_system literal also distinguishes the two feeds."
+    rationale: "tin_submarket is the DDL's only Upstate/Downstate home; D0284 uses the same field for 'NY - Upstate' / 'NY - Downstate'."
+    decided_by: "analyst_accepted_ai, 2026-09-02"
+    downstream_impact: ["regional reporting (Northeast)", "contract split reporting"]
+    reversibility: reversible
+    generalisable: false
+
+  - decision_id: DR-20260902-003
+    title: "Sex value map for roster feeds"
+    layer: silver_raw
+    trigger: "members.sex receives single letters"
+    context: "Fidelis roster; applies to any F/M/U feed"
+    decision: "value_map F->female, M->male, U->unknown; on_unmapped_value quarantine."
+    rationale: "Closed domain; unmapped is a code-set change, not a default."
+    decided_by: "analyst, 2026-09-02"
+    downstream_impact: ["sex-specific measure denominators"]
+    reversibility: reversible
+    generalisable: true
+
+  - decision_id: DR-20260902-004
+    title: "health_home_status precedence into care_management_program"
+    layer: silver_raw
+    trigger: "Several NY health-home columns compete for one string field"
+    context: "Fidelis roster"
+    decision: "health_home_status -> members.care_management_program with default 'none recorded' on null; other HH/HARP columns left unknown."
+    rationale: "One field, one source; the rest need a canonical extension."
+    decided_by: "analyst, 2026-09-02"
+    downstream_impact: ["care-management worklists"]
+    reversibility: reversible
+    generalisable: false
+
+  - decision_id: DR-20260903-001
+    title: "source_system literal for the CMS ACO REACH roster"
+    layer: silver_raw
+    trigger: "No column carries a source system; aco_id is D0284"
+    context: "Enrollment_DB_to_Datalake_SilverRaw_mapping.xlsx, CinqACO Reach Enrollment sheet"
+    decision: "source_system = 'ACO_REACH_D0284' (constant)."
+    rationale: "Client's own seed mapping."
+    decided_by: "CINQCARE data team (spreadsheet), recorded 2026-09-03"
+    downstream_impact: ["partitioning of members by source_system"]
+    reversibility: reversible
+    generalisable: false
+
+  - decision_id: DR-20260903-002
+    title: "Adjustment indicator lands in claim_adjustment_type_cd, not claim_status"
+    layer: silver_raw
+    trigger: "Legacy CinqDB Adjustment_claim_indicator mapped to claim_status in early drafts"
+    context: "Fidelis, UHC/Optum NY and DataLake_to_CinqDB mapping workbooks (July 2026 correction)"
+    decision: "Adjustment_claim_indicator -> claim_header.claim_adjustment_type_cd; claim_status stays the adjudication state."
+    rationale: "Status is operational state; lineage is claim evolution. They are not the same (BCDA doc §9)."
+    decided_by: "CINQCARE claims team, 2026-07"
+    downstream_impact: ["net paid position", "claim version resolution"]
+    reversibility: reversible_with_restatement
+    generalisable: true
+
+  - decision_id: DR-20260903-003
+    title: "Silver Raw ADT is one table"
+    layer: silver_raw
+    trigger: "Draft models split member/provider/facility/coverage in Silver Raw"
+    context: "ADT Data Model v7"
+    decision: "silver_raw.encounter only; member demographics kept for traceability; provider/facility/coverage resolved in ODS via reference CSVs and Enrollment."
+    rationale: "Silver Raw mirrors the flat JSON before any splitting; no business logic."
+    decided_by: "CINQCARE ADT design (v7), 2026-04"
+    downstream_impact: ["encounter_current view", "provider_ref/facility_ref joins"]
+    reversibility: irreversible
+    generalisable: false
+
+  - decision_id: DR-20260903-004
+    title: "MessageDate for HeC uses MSH-7; all other HL7 sources use Mirth received time"
+    layer: bronze
+    trigger: "Inconsistent timestamps across HIE feeds"
+    context: "ADT_SilverRaw_HL7_Mapping.xlsx"
+    decision: "HeC: MSH.7.1 (length-based format); others: connectorMessage.getReceivedDate()."
+    rationale: "Source behaviour, documented per feed."
+    decided_by: "CINQCARE integration team"
+    downstream_impact: ["event sequencing", "timeliness DQ-A-12"]
+    reversibility: reversible
+    generalisable: false
+
+  - decision_id: DR-20260903-005
+    title: "Reference data is truncate-and-load into ODS with ref_ prefix"
+    layer: silver_ods
+    trigger: "Reference_Data_Design.docx"
+    decision: "All external reference files load Landing -> ODS directly, full load, ref_ prefix, own Airflow DAG each; master loads check codes against ref tables and raise proactive DQ alerts (Phase 2)."
+    decided_by: "CINQCARE data platform team"
+    downstream_impact: ["code description enrichment", "conformance rules DQ-S-03"]
+    reversibility: reversible
+    generalisable: true

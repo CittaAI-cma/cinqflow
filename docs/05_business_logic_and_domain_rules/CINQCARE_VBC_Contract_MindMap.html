@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CINQCARE VBC Contract Map</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.6.0/mermaid.min.js"></script>
+<style>
+  body{margin:0;background:#F6F9F8;color:#1B2C2F;font-family:"Segoe UI",-apple-system,Roboto,sans-serif;padding:32px 24px 64px}
+  .wrap{max-width:1200px;margin:0 auto}
+  h1{font-size:1.6rem;margin:0 0 4px}
+  .sub{color:#54686C;font-size:.95rem;margin:0 0 20px}
+  .board{background:#fff;border:1px solid #DAE4E1;border-radius:12px;padding:12px;overflow-x:auto}
+  .mermaid{min-width:900px}
+  table{border-collapse:collapse;margin-top:24px;font-size:.88rem;background:#fff;border:1px solid #DAE4E1;border-radius:10px;overflow:hidden;width:100%}
+  th{background:#ECF2F0;text-align:left;padding:8px 12px;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:#54686C}
+  td{padding:8px 12px;border-top:1px solid #E7EEEC;font-variant-numeric:tabular-nums}
+  .note{color:#54686C;font-size:.82rem;margin-top:14px;max-width:80ch}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CINQCARE value-based care contracts</h1>
+  <p class="sub">~150K attributed lives · figures and contract types from Datalake Phase-1 Project Plan (Executive Summary), waves from the Priority Sequence tracker</p>
+
+  <div class="board">
+    <pre class="mermaid">
+mindmap
+  root((CINQCARE VBC<br/>~150K lives))
+    (Full Risk · ~118K lives)
+      Fidelis NY · 64,201 · Wave 1 LIVE
+        Upstate roster, claims 26 file patterns
+        Downstate roster, claims
+        Fidelis UM ADT feed
+      ACO REACH D0284 · 6,973 · Wave 1 LIVE
+        CMS CCLF flat files
+        CMS BCDA FHIR EOBs
+        Reference reports MEXPR, PALMR, RAP...
+      UHC MD · 14,000 · Wave 2 · seq 4
+        New contract, plus WV operationally
+        Enrollment and claims
+      Optum NY · 6,939 · Wave 2 · seq 5
+        Enrollment manual, claims
+        Optum UM ADT feed
+      Centene IL · 25,779 · Wave 2 · seq 6
+        Risk contract, high priority
+        Enrollment and 4 claim types
+    (Shared Savings)
+      MSSP · 5,363 · Wave 1 LIVE
+        CMS CCLF and BCDA
+        ALR assignment list
+    (Gain Share)
+      Molina NY · 6,463 · Wave 3 · last
+        Enrollment and claims
+    (MSO with partial risk)
+      Centene GA Wellcare · 15,423 · Wave 3
+        Only ~300 lives at risk, rest MSO
+        Medicaid and Medicare rosters, AES risk file
+    (Engagement only)
+      Optum GA · 3,747 · Wave 3
+        Enrollment only
+      Wellpoint DC · 2,553 · Wave 3
+        Enrollment only
+    )ADT sources cut across all(
+      7 HL7 HIE feeds via Mirth
+        BronxRHIO, HiBridge, HealthIX
+        HealtheLink, HealtheConnection
+        PCC National and PCC IL
+      Particle Health API
+      Garage daily ADT
+      Fidelis UM and Optum UM flat files
+    </pre>
+  </div>
+
+  <table>
+    <tr><th>Population</th><th>Active lives</th><th>Contract type</th><th>Go-live</th></tr>
+    <tr><td>Fidelis NY (upstate + downstate)</td><td>64,201</td><td>Full Risk</td><td>Wave 1 — live</td></tr>
+    <tr><td>Centene IL</td><td>25,779</td><td>Full Risk</td><td>Wave 2 (Aug 2026)</td></tr>
+    <tr><td>Centene GA (Wellcare)</td><td>15,423</td><td>~300 Risk, rest MSO</td><td>Wave 3 (Sep 2026)</td></tr>
+    <tr><td>UHC MD (+WV)</td><td>14,000</td><td>Full Risk — new contract</td><td>Wave 2</td></tr>
+    <tr><td>ACO REACH D0284</td><td>6,973</td><td>Full Risk (CMS)</td><td>Wave 1 — live</td></tr>
+    <tr><td>Optum NY</td><td>6,939</td><td>Full Risk</td><td>Wave 2</td></tr>
+    <tr><td>Molina NY</td><td>6,463</td><td>Gain Share</td><td>Wave 3 — last</td></tr>
+    <tr><td>MSSP</td><td>5,363</td><td>Shared Savings (CMS)</td><td>Wave 1 — live</td></tr>
+    <tr><td>Optum GA</td><td>3,747</td><td>Engagement only</td><td>Wave 3</td></tr>
+    <tr><td>Wellpoint DC</td><td>2,553</td><td>Engagement only</td><td>Wave 3</td></tr>
+  </table>
+  <p class="note">Total ≈ 151,400 active lives across 10 contract rows — tracked operationally as 12 populations because Fidelis splits into upstate/downstate and the trackers group Wellcare (GA/NY/IL) and UHC (MD+WV) as their own rows. Wave status as of the July–August daily-status trackers.</p>
+</div>
+<script>mermaid.initialize({ startOnLoad:true, theme:'neutral', mindmap:{ padding:8 } });</script>
+</body>
+</html>

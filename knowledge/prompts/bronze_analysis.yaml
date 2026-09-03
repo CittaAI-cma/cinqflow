@@ -1,0 +1,47 @@
+version: 1
+updated: "2026-09-03"
+kind: prompt_spec
+prompt: analyze_bronze
+prompt_version: 1
+screen: bronze_analysis
+status: specified_not_implemented
+
+purpose: >
+  After rows land in Bronze, explain what the data says about the source: key uniqueness,
+  duplicates, drift against the registered contract, null and sentinel patterns, value-domain
+  changes, volume plausibility, date range versus the declared period, identity coverage, and
+  what any of it means for the contract the feed serves.
+
+inputs:
+  observations: "Bronze profile: row count, per-column stats computed on landed rows, candidate keys with uniqueness counts, duplicate counts (exact and by key), min/max of date-typed columns, row hash duplicates. No sample rows."
+  context:
+    source:      "sources/<source_system>__<feed>.yaml (expected_columns, natural_key, formats, phi_columns)"
+    canonical:   "canonical/<domain>.yaml entities, grain, PK (trimmed)"
+    domain:      "domains/<domain>.yaml grain rules and pathologies"
+    dq:          "dq/common.yaml + dq/<domain>.yaml rules with severity"
+    vbc:         "value_based_care/concepts.yaml + attribution.yaml (what the feed is for)"
+    contract:    "sources/organizations.yaml contract facts (lives, risk type, wave)"
+    history:     "prior batches' bronze facts for the same feed (volume band)"
+
+context_flow: "bronze profile + source schema + domain knowledge + canonical model + VBC semantics -> analyze_bronze@1 -> LangGraph -> insights"
+
+output_contract:
+  claims: "fields per intelligence/insight_types.yaml bronze_analysis"
+  risks: "each with the DQ rule id it maps to and the severity (block/quarantine/warn/observe)"
+  unknowns: "e.g. cannot judge volume band without prior deliveries"
+
+must:
+  - "Test the registered natural key and report uniqueness counts; propose the supported composite when it fails."
+  - "Report duplicates as evidence about the source; never suggest deduplicating in Bronze."
+  - "Classify every 100%-null column as layout fact vs drift by comparing with the registered contract."
+  - "Translate sentinel dates and literal null tokens into null rates."
+  - "Name the canonical fields and downstream numbers each finding affects."
+must_not:
+  - "Correct, filter or drop any row."
+  - "Offer a clinical explanation for a distribution."
+
+worked_examples:
+  - feed: "Centene GA Medicaid MWOV"
+    expected: "MEMBER_KEY unique; MEMBER_ELIG_END_DT 9999-12-31 on 96.5% = open-ended (null); 63 rows without PCP fail the enrollment 'PCP required' rule -> warn with count; 3 literal NULL in MEMBER_MEDICAID_ID; every field quoted (layout fact)."
+  - feed: "ADT data for Payors"
+    expected: "ID unique; (MemberID, EventDate, EventType) 30 duplicates -> multi-route duplicates, keep and flag; literal NULL/./MISSING/NA/None tokens per column; rn = ROW_NUMBER per RecordSource (sample artefact: top 50 per payer); ~60 workflow columns 100% NULL."

@@ -1,0 +1,45 @@
+version: 1
+updated: "2026-09-03"
+kind: dq_rules
+domain: claims
+
+# GROUNDED IN: Data_lake_data_model.xlsx 'Data Quality Rules' (claims rows DQ-006..014, DQ-023,
+# DQ-024, DQ-034..044, DQ-050..052, DQ-055..057, DQ-065, DQ-067, DQ-072..081, DQ-085..087, DQ-092,
+# DQ-097..100, DQ-102, DQ-108), BCDA_Handling_Claim_Adjustments_and_Claim_Status.docx, the
+# claims Silver Raw model, and the VBC knowledge pack (KB-BRZ-004, KB-SIL-003).
+grounded_in:
+  - "docs/03_data_source_schemas/lakehouse_and_layers/Data_lake_data_model.xlsx"
+  - "docs/05_business_logic_and_domain_rules/BCDA_Handling_Claim_Adjustments_and_Claim_Status.docx"
+  - "docs/03_data_source_schemas/claims/claims-model-final-raw.xlsx"
+
+rules:
+  - { id: DQ-C-01, legacy: DQ-006, rule: "source_claim_id not null on every header and line", action: block }
+  - { id: DQ-C-02, legacy: DQ-007, rule: "patient_id / member identifier not null on every claim", action: quarantine }
+  - { id: DQ-C-03, legacy: DQ-065, rule: "(source_system, source_claim_id, claim_version_num) unique; a claim appearing twice in one file is a version, not a duplicate", action: block, layer: silver_raw }
+  - { id: DQ-C-04, legacy: DQ-077, rule: "Every line references a header present in the same or an earlier batch (orphan lines across a month boundary are expected for CCLF; retain and count)", action: warn }
+  - { id: DQ-C-05, legacy: DQ-008, rule: "IP claims have a principal diagnosis", action: block }
+  - { id: DQ-C-06, legacy: [DQ-009, DQ-010, DQ-055], rule: "IP claims have admission and discharge dates and discharge >= admission", action: quarantine }
+  - { id: DQ-C-07, legacy: DQ-023, rule: "IP claims carry discharge_status", action: block, meaning: "Nulls silently drop readmission denominator exclusions" }
+  - { id: DQ-C-08, legacy: DQ-024, rule: "Institutional claims carry bill_type", action: quarantine }
+  - { id: DQ-C-09, legacy: DQ-034, rule: "NPI is 10 digits and Luhn-valid (80840 prefix)", action: quarantine }
+  - { id: DQ-C-10, legacy: [DQ-035, DQ-092], rule: "ICD-10-CM shape letter + 2-7 characters; stored raw, normalised without decimal downstream", action: warn }
+  - { id: DQ-C-11, legacy: DQ-038, rule: "discharge_status is a valid UB-04 patient status code", action: warn }
+  - { id: DQ-C-12, legacy: DQ-039, rule: "POA in {Y, N, U, W, 1}", action: observe }
+  - { id: DQ-C-13, legacy: [DQ-013, DQ-040], rule: "Pharmacy NDC present and normalisable to 11 digits", action: block }
+  - { id: DQ-C-14, legacy: [DQ-014, DQ-041], rule: "days_supply present and 1-365", action: quarantine, meaning: "PDC adherence denominators" }
+  - { id: DQ-C-15, legacy: [DQ-042, DQ-043, DQ-044, DQ-057], rule: "billed >= 0; allowed <= billed; paid <= allowed; allowed = paid + member cost share within tolerance", action: warn }
+  - { id: DQ-C-16, legacy: [DQ-086, DQ-087], rule: "No future service, admission or fill dates", action: quarantine }
+  - { id: DQ-C-17, legacy: DQ-085, rule: "No service date after the member's death date", action: warn }
+  - { id: DQ-C-18, legacy: DQ-108, rule: "Service date within a coverage span of the member", action: warn }
+  - { id: DQ-C-19, legacy: DQ-100, rule: "claim_status in the allowed set (submitted, paid, denied, pended, partial)", action: warn }
+  - { id: DQ-C-20, rule: "claim_adjustment_type_cd derived, never null: CCLF 0/1/2 -> original/void/replacement; BCDA related.relationship null/prior/replaces/replacedby -> ORIGINAL/ADJUSTMENT/ADJUSTMENT/CANCELLATION", action: block, meaning: "Without it net financial position double counts adjusted claims" }
+  - { id: DQ-C-21, rule: "Payment sign normalised by adjustment type (cancellation negative) only in ODS; raw amount preserved in Silver Raw", action: block }
+  - { id: DQ-C-22, legacy: DQ-102, rule: "Monthly claim volume within +/-20% of trailing 3-month average (CCLF annual baseline exempt)", action: warn }
+  - { id: DQ-C-23, legacy: DQ-067, rule: "Paid date within 30 days of received date for clean claims", action: observe }
+  - { id: DQ-C-24, legacy: DQ-097, rule: "IP lines carry a revenue code", action: warn }
+  - { id: DQ-C-25, legacy: DQ-098, rule: "Pharmacy claims carry a prescriber identifier", action: warn }
+  - { id: DQ-C-26, legacy: DQ-099, rule: "source_system populated on every claim (FIDELIS_NY, UHC_OPTUM_NY, D0284, MSSP)", action: block }
+  - { id: DQ-C-27, legacy: [DQ-051, DQ-052], rule: "Claim patient DOB and sex agree with enrollment", action: warn, layer: silver_ods }
+  - { id: DQ-C-28, legacy: [DQ-080, DQ-081], rule: "Outlier flags: total charge > $500,000; pharmacy cost per day > $1,000", action: observe }
+  - { id: DQ-C-29, rule: "Sentinel dates (Service_date year 1000, Admission_date 1753/1900 in legacy CinqDB) treated as null with raw preserved", action: quarantine }
+  - { id: DQ-C-30, rule: "Header and line files of the same delivery (Fidelis *ClaimHeader_FULL_* and *ClaimLine_FULL_* for IP/OP/Dental/Prof/Vision) arrive together and reconcile on claim id", action: block }

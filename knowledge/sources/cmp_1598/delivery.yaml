@@ -1,0 +1,12 @@
+version: 1
+updated: "2026-09-03"
+kind: delivery_convention
+source_system: cmp_1598
+file_naming:
+  observed: "<practice id>_<report id>_<YYYYMMDDHHMMSS>_dmhmreport_CCS_<run id>.csv"
+  example: "2461114_206_20260314032654_dmhmreport_CCS_53873287.csv"
+  regex: "^\\d+_\\d+_\\d{14}_dmhmreport_CCS_\\d+\\.csv$"
+business_date: { source: "file name", format: "YYYYMMDDHHMMSS in the third token", meaning: "report run timestamp", caution: "Only this token is a certain business date. The other numeric tokens are opaque and must not be parsed as dates or identifiers." }
+delivery: { cadence: on_demand, method: manual_upload }
+format: { container: "comma-separated values", delimiter: ",", quoting: "minimal, used for names with commas and multi-valued race", header: "row 1 with spaces in column names", line_terminator: CRLF, encoding: "ASCII, no BOM" }
+arrival_archetype: full_snapshot

@@ -1,0 +1,180 @@
+file: 07_data_quality_rules.yaml
+purpose: >
+  Rule library the agent evaluates and reasons about. Each rule states not just what to check but
+  what a failure means clinically or financially — the meaning is what makes the agent useful.
+
+severity_model:
+  block:      "Fails the cycle for this table. No promotion. Human notified."
+  quarantine: "Affected rows held, counted, visible, reprocessable. Cycle continues."
+  warn:       "Promote with a quality flag that propagates to every downstream consumer."
+  observe:    "Record and trend. No action this cycle; the signal is in the trajectory."
+
+threshold_policy: >
+  Thresholds are shop_specific and must be derived from at least three months of observed
+  behaviour per feed, then held as governed constants with an owner. Static thresholds copied
+  between clients produce alert fatigue in week one. Where a threshold is unset, the agent runs
+  the rule in observe mode and says so, rather than guessing a number.
+
+nodes:
+
+  - id: KB-DQ-001
+    title: "Landing: delivery integrity rules"
+    kind: dq_rule
+    layer: landing
+    confidence: conventional
+    volatile: false
+    body: |
+      DQ-L-01 file decrypts and is readable                     -> block
+      DQ-L-02 checksum matches manifest                          -> block
+      DQ-L-03 row count matches trailer or control record        -> block
+      DQ-L-04 sender and feed are on the delivery contract       -> block, security escalation
+      DQ-L-05 cycle sequence is contiguous with last accepted    -> block
+              meaning: a gap is a missing month of claims, invisible downstream forever
+      DQ-L-06 arrival within SLA window                          -> warn
+              meaning: current-period reporting is incomplete; label affected outputs
+      DQ-L-07 row count within seasonal historical band          -> block on large deficit
+              meaning: a valid file with a partial extract passes every other check; this is the
+              only rule that catches it
+      DQ-L-08 no duplicate file (same checksum previously seen)  -> block
+              meaning: reprocessing the same file double-counts everything it touches
+    depends_on: [KB-LND-002]
+
+  - id: KB-DQ-002
+    title: "Bronze: structural and typing rules"
+    kind: dq_rule
+    layer: bronze
+    confidence: conventional
+    volatile: false
+    body: |
+      DQ-B-01 schema matches registered contract                 -> warn + drift analysis
+      DQ-B-02 new column appeared                                -> observe + notify analyst
+              meaning: often a regulatory addition you are entitled to use
+      DQ-B-03 expected column missing or 100% null               -> block
+              meaning: downstream predicates silently evaluate false; the highest-severity drift
+      DQ-B-04 type cast failure rate above threshold             -> quarantine affected rows
+      DQ-B-05 row has no usable record identifier                -> quarantine
+      DQ-B-06 quarantine rate change versus trailing average     -> warn
+              meaning: a doubling is a source-side change, not a data-quality change
+      DQ-B-07 unexpected values in a closed-domain coded column  -> observe + enumerate
+              meaning: a code set version changed; every mapping table is now incomplete
+      DQ-B-08 duplicate row hash within batch                    -> observe only
+              meaning: Bronze never deduplicates; this is evidence about the source
+    depends_on: [KB-BRZ-002, KB-BRZ-003]
+
+  - id: KB-DQ-003
+    title: "Silver: conformance and grain rules"
+    kind: dq_rule
+    layer: silver
+    confidence: conventional
+    volatile: false
+    body: |
+      DQ-S-01 grain uniqueness violations = 0                    -> block
+              meaning: duplication inflates cost metrics indistinguishably from real growth
+      DQ-S-02 row reconciliation to Bronze balances exactly      -> block
+              (accepted + quarantined + deduplicated = arrived)
+      DQ-S-03 code set conformance rate within band              -> warn, enumerate unmapped
+      DQ-S-04 null rate on business-critical columns in band     -> warn
+              critical set: dates of service, member identifier, provider identifier, amounts,
+              discharge disposition, claim type, place of service
+      DQ-S-05 date sanity: service <= paid, DOB plausible,
+              discharge >= admit, no future service dates        -> quarantine
+      DQ-S-06 negative or zero allowed amounts                   -> observe
+              meaning: legitimate for adjustments and voids; only anomalous in volume
+      DQ-S-07 referential orphans against identity spine in band -> warn, retain orphans
+      DQ-S-08 dedup collapse rate change versus trailing average -> warn
+              meaning: earliest available signal of a source-side change
+      DQ-S-09 service date distribution has no unexpected gap    -> block
+              meaning: a missing week of service dates is a delivery failure that passed
+    depends_on: [KB-SIL-005]
+
+  - id: KB-DQ-004
+    title: "Identity: matching health rules"
+    kind: dq_rule
+    layer: identity
+    confidence: conventional
+    volatile: false
+    body: |
+      DQ-I-01 unmatched rate within band and not trending up     -> warn
+      DQ-I-02 auto-merge rate within band                        -> block on spike
+              meaning: a spike means placeholder or reformatted identifiers, not real merges
+      DQ-I-03 zero merges matching household/twin signature       -> block
+              (same DOB + same address + differing first name or suffix)
+      DQ-I-04 crosswalk is append-only in this cycle's diff      -> block
+      DQ-I-05 review queue depth and age within bounds           -> warn
+              meaning: a growing queue is silent record fragmentation
+      DQ-I-06 clinical implausibility on merged records          -> block affected merge
+              (conflicting sex-specific procedures, overlapping inpatient stays at different
+              facilities, death date preceding a service date)
+      DQ-I-07 surrogate key never reused, never updated in place -> block
+    depends_on: [KB-IDN-008]
+
+  - id: KB-DQ-005
+    title: "Silver ODS: population and integration rules"
+    kind: dq_rule
+    layer: silver_ods
+    confidence: conventional
+    volatile: false
+    body: |
+      DQ-O-01 member count change decomposed into new / ended /
+              merged / split, each within band                    -> block on unexplained net
+      DQ-O-02 member months reconcile to enrollment source        -> block
+      DQ-O-03 attribution count matches programme roster exactly
+              where a roster is supplied                          -> block, escalate difference
+      DQ-O-04 no overlapping spans of the same coverage type
+              for one member                                      -> block
+      DQ-O-05 claim dollar totals by service month reconcile to
+              Silver within tolerance                             -> block
+      DQ-O-06 paid-through date present on every cost fact        -> block
+      DQ-O-07 orphan clinical events (no resolvable member)       -> warn, retain and count
+      DQ-O-08 precedence rules applied match the registered
+              precedence configuration version                    -> block
+      DQ-O-09 every derived fact carries the reference data
+              versions used to derive it                          -> block
+    depends_on: [KB-ODS-004]
+
+  - id: KB-DQ-006
+    title: "Cross-layer: the rules that catch what per-layer rules miss"
+    kind: dq_rule
+    layer: cross
+    confidence: conventional
+    volatile: false
+    body: |
+      DQ-X-01 end-to-end volume reconciliation: rows arrived at Landing account fully for rows
+              present, quarantined, or deliberately collapsed at every subsequent layer. Any
+              unexplained loss is a block, at any magnitude. Small silent losses are how trust
+              dies.
+      DQ-X-02 metric stability monitor: every published metric is compared against its own
+              historical volatility band each cycle, and a breach triggers the triage playbook
+              (KB-PLY-002) automatically rather than waiting for a human to notice.
+      DQ-X-03 cross-source agreement: where two sources cover the same events (CCLF vs BCDA,
+              ADT vs institutional claims), divergence beyond band is a warn even when both
+              individually pass every rule. Disagreement between independent sources is the
+              highest-signal check available and almost nobody runs it.
+      DQ-X-04 reproducibility spot check: re-run a prior period's published metric from stored
+              inputs and confirm the same result. Run weekly. This is the only rule that
+              directly tests the audit claim.
+      DQ-X-05 downstream impact completeness: every schema or rule change is accompanied by a
+              lineage-derived list of affected metrics; a change with no impact assessment is a
+              block regardless of how minor it appears.
+    depends_on: [KB-XLR-001]
+
+  - id: KB-DQ-007
+    title: "How to reason about a failing rule rather than just reporting it"
+    kind: heuristic
+    layer: cross
+    decision_type: escalate
+    confidence: conventional
+    volatile: false
+    body: >
+      A rule failure is a symptom and the agent's value is in the differential. For each failure it
+      should produce: the rule and the observed versus expected value; the two or three most
+      likely causes ranked by base rate for that feed; the specific evidence that would
+      discriminate between them and whether the agent can gather it autonomously; the downstream
+      metrics affected, named from lineage rather than described generally; whether the failure is
+      loud or silent; and a recommended action with its reversibility. A report that says
+      "DQ-S-04 failed, discharge disposition null rate 22%" is engineering output. The analyst
+      output is "discharge disposition nulls jumped to 22%, concentrated in one facility starting
+      the 14th, which suppresses readmission denominator exclusions and will make our readmission
+      rate look artificially high for the month; likely an interface change at that facility;
+      I can confirm by checking whether their ADT message version changed."
+    depends_on: [KB-PLY-002, KB-ONT-012]

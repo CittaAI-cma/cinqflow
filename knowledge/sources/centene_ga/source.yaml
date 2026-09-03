@@ -1,0 +1,15 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: centene_ga
+organization:
+  payer: "Centene Georgia"
+  brands: ["Peach State Health Plan (Georgia Families Medicaid)", "Wellcare (Medicare Advantage)"]
+  programme_context: "Georgia Families is the state's Medicaid managed care programme, run by Georgia Department of Community Health with three care management organisations: Peach State Health Plan, Amerigroup and CareSource."
+contract: { id: centene_ga, risk_arrangement: "MSO with partial risk, approximately 300 lives at risk", lives: 15423, wave: "Wave 3, September 2026", priority: 9 }
+ownership: { analyst: Raveena, engineer: Khaja, business_uat: TBD, claims_analyst: Syed }
+silver_raw_source_system: "Centene GA"
+semantics:
+  two_rosters: "Medicaid and Medicare arrive as separate monthly rosters sharing a file-naming convention and a 34-column width but not a column set."
+  geography: "Every member is in the ATLANTA region. The Medicaid roster covers three counties; the Medicare roster covers 23."
+  mostly_administrative: "Because most lives are MSO rather than at risk, roster defects have a smaller financial blast radius here than at Fidelis or Centene IL, but the attribution and outreach uses are the same."

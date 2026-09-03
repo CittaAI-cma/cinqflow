@@ -1,0 +1,201 @@
+import Link from "next/link";
+import ApproveMapping from "@/components/ApproveMapping";
+import MappingStudio from "@/components/MappingStudio";
+import StartDraft from "@/components/StartDraft";
+import PreviewPanel from "@/components/PreviewPanel";
+import StatusWord from "@/components/StatusWord";
+import { getMappingDiff, getMappingVersion, getPreview, listMappingVersions } from "@/lib/api";
+import { mappingStatusWord } from "@/lib/statusWords";
+
+export const dynamic = "force-dynamic";
+
+export default async function MappingPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ feed: string }>;
+  searchParams: Promise<{ v?: string; proposal?: string }>;
+}) {
+  const { feed } = await params;
+  const { v, proposal } = await searchParams;
+
+  const { versions } = await listMappingVersions(feed).catch(() => ({ versions: [] }));
+  const selected = v ? Number(v) : versions[0]?.version;
+  const mapping = selected ? await getMappingVersion(feed, selected) : null;
+  const diff = selected ? await getMappingDiff(feed, selected) : null;
+  const preview = selected ? await getPreview(feed, selected) : null;
+  const analystEdited = new Set(diff?.diff.analyst_edited ?? []);
+
+  return (
+    <>
+      <p className="meta">
+        <Link href="/data/intake">← Data Intake</Link>
+      </p>
+
+      <h2 style={{ marginTop: 12 }}>
+        Mapping studio <span className="mono">{feed}</span>
+      </h2>
+
+      {versions.length ? (
+        <div className="chip-row">
+          {versions.map((version) => (
+            <Link
+              key={version.version}
+              href={`/mapping/${encodeURIComponent(feed)}?v=${version.version}`}
+              className={`chip${version.version === selected ? " on" : ""}`}
+            >
+              v{version.version} · {version.status}
+            </Link>
+          ))}
+        </div>
+      ) : null}
+
+      {!mapping ? (
+        <>
+          <p className="empty">
+            <StatusWord word="Expected" /> No mapping version for this feed yet. A draft starts
+            from an AI proposal — nothing in it is authoritative until it is approved.
+          </p>
+          <StartDraft feed={feed} proposalId={proposal} />
+        </>
+      ) : (
+        <>
+          <div className="card grid">
+            <div className="row">
+              <div>
+                <label>Version</label>
+                <span className="mono">v{mapping.version}</span>
+              </div>
+              <div>
+                <label>Status</label>
+                <StatusWord word={mappingStatusWord(mapping.status)} raw={mapping.status} />
+              </div>
+              <div>
+                <label>Origin</label>
+                <span className="mono">{mapping.origin}</span>
+              </div>
+              <div>
+                <label>Derived from</label>
+                <span className="mono">
+                  {mapping.derived_from ? `v${mapping.derived_from}` : "—"}
+                </span>
+              </div>
+              <div>
+                <label>Fields</label>
+                <span className="mono">{mapping.spec.fields.length}</span>
+              </div>
+              <div>
+                <label>Editable</label>
+                <span className="mono">{String(mapping.editable)}</span>
+              </div>
+            </div>
+          </div>
+
+          {diff && diff.against !== null ? (
+            <div className="card" style={{ marginTop: 14 }}>
+              <label>
+                Compared with v{diff.against} ({diff.against_status})
+              </label>
+              <div className="row">
+                <span className="meta">
+                  added <span className="mono">{diff.diff.added.length}</span>
+                </span>
+                <span className="meta">
+                  removed <span className="mono">{diff.diff.removed.length}</span>
+                </span>
+                <span className="meta">
+                  changed <span className="mono">{diff.diff.changed.length}</span>
+                </span>
+                <span className="meta">
+                  unchanged <span className="mono">{diff.diff.unchanged}</span>
+                </span>
+              </div>
+              {diff.diff.changed.length ? (
+                <ul className="plain" style={{ marginTop: 8 }}>
+                  {diff.diff.changed.map((change) => (
+                    <li key={change.source} className="mono small">
+                      {change.source}:{" "}
+                      {Object.entries(change.attributes)
+                        .map(
+                          ([attribute, move]) =>
+                            `${attribute} ${JSON.stringify(move.from)} → ${JSON.stringify(move.to)}`,
+                        )
+                        .join(" · ")}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="card" style={{ marginTop: 14 }}>
+            <label>Ownership</label>
+            <span className="meta">
+              <span className="tag edited">analyst-edited</span>{" "}
+              <span className="mono">{diff?.diff.analyst_edited.length ?? 0}</span> ·{" "}
+              <span className="tag proposal">from proposal</span>{" "}
+              <span className="mono">{diff?.diff.from_proposal.length ?? 0}</span>
+              {diff?.diff.analyst_edited.length ? (
+                <>
+                  {" "}
+                  — <span className="mono">{diff.diff.analyst_edited.join(", ")}</span>
+                </>
+              ) : null}
+            </span>
+          </div>
+
+          <h2>{mapping.editable ? "Edit the draft" : "Frozen version"}</h2>
+
+          {mapping.editable ? (
+            <MappingStudio mapping={mapping} />
+          ) : (
+            <>
+              <p className="empty">
+                v{mapping.version} is {mapping.status} and cannot be edited. Start v
+                {mapping.version + 1} from it to continue.
+              </p>
+              <StartDraft feed={feed} deriveFrom={mapping.version} />
+              <div className="card scroll" style={{ padding: 0, marginTop: 14 }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Source</th>
+                      <th>Target</th>
+                      <th>Cast</th>
+                      <th>Transform</th>
+                      <th>Origin</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mapping.spec.fields.map((field) => (
+                      <tr key={field.source}>
+                        <td className="mono">{field.source}</td>
+                        <td className="mono">{field.target}</td>
+                        <td className="mono">{field.cast}</td>
+                        <td className="mono">{field.transform?.op ?? "—"}</td>
+                        <td>
+                          <span className={`tag ${analystEdited.has(field.source) ? "edited" : "proposal"}`}>
+                            {analystEdited.has(field.source) ? "analyst-edited" : "proposal"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          <PreviewPanel feed={feed} version={mapping.version} preview={preview} />
+
+          <ApproveMapping
+            feed={feed}
+            version={mapping.version}
+            status={mapping.status}
+            preview={preview}
+          />
+        </>
+      )}
+    </>
+  );
+}

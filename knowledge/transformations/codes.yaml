@@ -1,0 +1,51 @@
+version: 1
+updated: "2026-09-03"
+kind: transformation_reference
+
+# Code-set normalisation rules. What may be normalised (representational variance) versus
+# what must be preserved (semantic variance). GROUNDED IN the VBC knowledge pack (KB-ONT-008,
+# KB-SIL-004), Data_lake_data_model.xlsx DQ rules (DQ-035, DQ-040, DQ-092) and the claims
+# model's source_*_code_system columns. Code-system detail is in healthcare/code_sets.yaml.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml"
+  - "docs/03_data_source_schemas/lakehouse_and_layers/Data_lake_data_model.xlsx"
+  - "docs/03_data_source_schemas/claims/claims-model-final-raw.xlsx"
+
+normalise_representation:
+  - code_system: ICD-10-CM
+    store: "raw as received in source_diagnosis_code; normalised (no decimal, upper case) is a Silver ODS derivation"
+    ops: [trim, upper]
+    note: "DQ-092: store without decimal for consistency; keep the source_diagnosis_code_system literal."
+  - code_system: NDC
+    store: "raw in ndc_code; 11-digit 5-4-2 normalisation in ODS"
+    note: "10-digit formats (4-4-2, 5-3-2, 5-4-1) pad a leading zero in the short segment."
+  - code_system: NPI
+    ops: [trim]
+    validate: "^[12]\\d{9}$ and Luhn with 80840 prefix"
+    note: "ParticleHealth attending_physician_npi may be a comma-separated list; first valid NPI wins."
+  - code_system: USPS state
+    ops: [trim, upper]
+    note: "Full state names are looked up (std.State_Codes); legacy free text (Bronx, Brooklyn) is not a state."
+  - code_system: ZIP
+    ops: [trim]
+    derive: "zip5 = first 5 digits; zip4 = trailing 4 after hyphen; strip trailing hyphen"
+  - code_system: sex
+    value_map_default: { F: female, M: male, U: unknown }
+    note: "Analyst-approved value_map in roster_stage3; ADT stores the raw M/F/U letter."
+  - code_system: HL7 patient class
+    allowed: [I, E, O, V, R]
+    note: "Source free text ('Inpatient Discharge', 'ED Discharge') is derived to a class in ODS, raw kept in VisitTypeDesc."
+
+preserve_semantic:
+  - "Payer-specific product / LOB codes (TANF Adult, HARP, MWOV): code sets differ by payer; never assume shared."
+  - "Local facility identifiers and MRNs: keep alongside any NPI/CCN match; the failure to match is a finding."
+  - "Free-text discharge disposition descriptions: keep next to the code; codes drive logic."
+  - "Race and ethnicity as supplied: OMB/CDC rollup is many-to-one and needs an owner."
+
+rules:
+  - id: CD-01
+    rule: "Every code column lands with its code-system literal (source_code_system, drg_code_system, source_diagnosis_code_system). A code without a system is ambiguous."
+  - id: CD-02
+    rule: "Unexpected values in a closed-domain column are enumerated and observed (DQ-B-07), never silently mapped to 'other'."
+  - id: CD-03
+    rule: "Reference-table lookups (DRG description, revenue code description, NDC drug name) are ODS enrichment via ref_ tables, not feed transforms."

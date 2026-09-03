@@ -1,0 +1,71 @@
+version: 1
+updated: "2026-09-03"
+kind: governance
+
+# The closed set of insight categories the AI may emit, per screen. Anything outside this
+# list is dropped by the deterministic assembler, not shown to the analyst.
+# GROUNDED IN: backend/src/cinqflow/intelligence/schemas.py (claim kinds, mapping statuses),
+# prompts/interpret_file_v1.md and recommend_mapping_v1.md, and the VBC knowledge pack
+# agent specs (08_agent_specs.yaml decision types).
+grounded_in:
+  - "backend/src/cinqflow/intelligence/schemas.py"
+  - "backend/src/cinqflow/intelligence/prompts/"
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/08_agent_specs.yaml"
+
+# Epistemic kind of every claim. Mirrors LlmClaim.kind exactly.
+claim_kinds:
+  observed_fact: "Comes from `observations` (deterministic profile). Never contradicted, never restated as inference."
+  governed_knowledge: "Comes from `context` (a knowledge YAML). Cited by file@version."
+  inference: "Model reasoning over observations plus context. Carries confidence."
+  recommendation: "A proposed action for the analyst. Never executed by the model."
+
+# What each screen may say. `field` values are the allowed claim.field names.
+screens:
+  file_understanding:   # Landing / upload screen (interpret_file graph)
+    required_fields: [likely_domain, likely_dataset, likely_grain]
+    optional_fields:
+      - likely_source_system      # which payer/program the layout matches
+      - likely_population         # e.g. CINQUpstate, MWOV, HouseCalls_GA
+      - arrival_archetype         # full_snapshot | incremental_delta | append_only_event_stream | restated_history | correction_in_place
+      - natural_key_candidate
+      - identifier_types_present  # CIN, MBI, payer member id, NPI, TIN
+      - business_date_source      # filename token | column | none
+      - format_anomaly            # e.g. xlsx that is really CSV, all-quoted txt, literal NULL tokens
+      - phi_exposure              # which columns are PHI/PII
+      - deid_artifact             # de-identification artefacts that must not drive rules
+    outputs: [claims, risks, unknowns]
+  bronze_analysis:      # Bronze screen (analyze_bronze worker)
+    required_fields: [likely_grain, key_uniqueness, row_reconciliation]
+    optional_fields:
+      - schema_drift              # new / missing / renamed / retyped column vs registered contract
+      - null_pattern              # columns 100% empty, literal-null tokens, sentinel dates
+      - value_domain_change       # new codes in a closed-domain column
+      - duplicate_pattern         # exact dups vs same-key-different-values
+      - volume_plausibility       # rows vs prior deliveries and contract band
+      - date_range                # min/max business dates vs filename period
+      - identity_coverage         # share of rows carrying a resolvable identifier
+      - contract_relevance        # what the feed means for the VBC contract it serves
+    outputs: [claims, risks, unknowns]
+  mapping:              # Mapping screen (recommend_mapping graph)
+    field_statuses: [candidate, ambiguous, unknown]   # `invalid` is assigned by _validate, never by the model
+    outputs: [fields, notes]
+    note_kinds:
+      - canonical_gap             # feed carries something the model has no home for
+      - pk_component_missing      # e.g. address_type / phone_type not supplied by the roster
+      - constant_required         # source_system or population literal chosen by the analyst
+      - transform_required        # date format, value_map, split
+      - exemplar_used             # which approved decision set informed a proposal
+
+# Ranking of insight value, so the assembler orders what the analyst sees first.
+priority:
+  1: "Anything that changes a settlement, submission or care-management number silently (blast radius)."
+  2: "Structural facts the analyst must decide on: grain, key, arrival archetype, canonical gaps."
+  3: "Quality signals with a named cause and a named affected metric."
+  4: "Descriptive summary."
+
+prohibited:
+  - "Clinical narratives about members (why a metric moved) at the file, bronze or mapping screens."
+  - "Any claim without evidence."
+  - "Any target not in the canonical model's legal_targets."
+  - "Restating an observed_fact as an inference, or a context fact as an inference."
+  - "Row-level values other than the bounded, PHI-scrubbed example values already in observations."

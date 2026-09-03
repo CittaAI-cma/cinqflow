@@ -1,0 +1,42 @@
+version: 1
+updated: "2026-09-03"
+kind: dq_severity_model
+
+# One severity model for every dq/*.yaml file.
+# GROUNDED IN: vbc_domain_knowledge_pack/07_data_quality_rules.yaml (severity_model,
+# threshold_policy) and Data_lake_data_model.xlsx 'Data Quality Rules' (Critical/High/Medium/Low
+# used by the client's 110 legacy rules). The mapping between the two vocabularies is explicit
+# so a legacy rule can be carried over without re-arguing its severity.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/07_data_quality_rules.yaml"
+  - "docs/03_data_source_schemas/lakehouse_and_layers/Data_lake_data_model.xlsx"
+
+actions:
+  block:      "Fails the cycle for this table. No promotion. Human notified."
+  quarantine: "Affected rows held, counted, visible, reprocessable. Cycle continues."
+  warn:       "Promote with a quality flag that propagates to every downstream consumer."
+  observe:    "Record and trend. No action this cycle; the signal is in the trajectory."
+
+legacy_severity_to_action:
+  Critical: block          # PK null, DOB null, claim id null, death before service
+  High: quarantine         # invalid NPI, name null, invalid state
+  Medium: warn             # allowed > billed, zip format
+  Low: observe             # whitespace in names, dots in ICD codes
+
+layer_defaults:
+  landing: "file-level only: block on unreadable/checksum/duplicate file/unknown sender; warn on late"
+  bronze: "never drop rows; quarantine only when the row cannot be typed or has no identifier; everything else accept-with-flag"
+  silver_raw: "block on grain violation or reconciliation mismatch; quarantine on date sanity; warn on conformance bands"
+  silver_ods: "population-level blocks (member count decomposition, member months, attribution roster match)"
+
+threshold_policy: >
+  Thresholds are shop_specific and are derived from at least three months of observed behaviour
+  per feed, then held as governed constants with an owner. Until a threshold exists the rule runs
+  in observe mode and says so. Bands recorded so far come from the client's legacy rules:
+  active member count +/-10% month over month (DQ-101), monthly claim volume +/-20% of trailing
+  3-month average (DQ-102), IP admission rate 150-400 per 1,000 Medicare members (DQ-103).
+
+failure_meaning_required: >
+  Every rule states what a failure means clinically or financially and which downstream number it
+  moves. "DQ-S-04 failed, discharge disposition null 22%" is engineering output; the analyst
+  output names the metric affected and the likely cause.

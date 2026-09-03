@@ -1,0 +1,49 @@
+[project]
+name = "cinqflow"
+version = "0.1.0"
+description = "CINQFLOW working foundation - Stage 1: upload, deterministic profiling, AI interpretation"
+requires-python = ">=3.12,<4.0"
+dependencies = [
+    "fastapi (>=0.115,<0.116)",
+    "uvicorn[standard] (>=0.34,<0.35)",
+    "python-multipart (>=0.0.20,<0.0.21)",
+    "pydantic (>=2.10,<3.0)",
+    "pydantic-settings (>=2.7,<3.0)",
+    "psycopg[binary] (>=3.2,<4.0)",
+    "openpyxl (>=3.1,<4.0)",
+    "PyYAML (>=6.0,<7.0)",
+    "langgraph (>=0.2.60,<0.3)",
+    "anthropic (>=0.42,<1.0)",
+    "openai (>=1.40,<2.0)",
+]
+
+[project.scripts]
+cinqflow = "cinqflow.cli:main"
+
+[tool.poetry]
+packages = [{ include = "cinqflow", from = "src" }]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+httpx = "^0.28"
+ruff = "^0.9"
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Depends/File/Form in argument defaults IS the FastAPI idiom; B008 is a false
+# positive here and working around it would obscure the handler signatures.
+"src/cinqflow/api/*.py" = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live_llm: hits a real LLM provider; requires an API key"]

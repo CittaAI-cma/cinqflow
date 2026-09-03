@@ -1,0 +1,82 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+confidence: authoritative
+volatile: true
+review_by: "2027-06-30"
+
+# The measure sets that actually gate CINQCARE's contracts, and the ones that do not.
+# Measure logic is versioned by measurement period; this file names measures and their owners,
+# it does not restate their specifications. Always compute from the authoritative release.
+grounded_in:
+  - "https://www.cms.gov/priorities/innovation/files/aco-reach-py26-qual-meas-meth-report.pdf"
+  - "CMS MSSP APP Plus measure set for PY2026"
+  - "CMS 2026 Part C and D Star Ratings measures and weights"
+  - "NCQA HEDIS MY2025 measure descriptions"
+
+aco_reach:
+  applies_to: cms_aco_reach_d0284
+  reporting_basis: "Claims and survey only. ACO REACH does not use the electronic clinical quality measure set."
+  py2026:
+    withhold: "5% of the benchmark, all pay-for-performance, split evenly at 1.25% per measure"
+    measures:
+      - { id: ACR, name: "Risk-Standardized All-Condition Readmission, 30 days", basis: "administrative claims", applies_to: "all ACO types" }
+      - { id: UAMCC, name: "All-Cause Unplanned Admissions for Patients with Multiple Chronic Conditions, per 100 person-years", basis: "administrative claims", applies_to: "all ACO types" }
+      - { id: DAH, name: "Days at Home for Patients with Complex, Chronic Conditions", basis: "administrative claims", applies_to: "High Needs ACOs only" }
+      - { id: TFU, name: "Timely Follow-Up After Acute Exacerbations of Chronic Conditions", basis: "administrative claims", applies_to: "Standard and New Entrant ACOs" }
+      - { id: CAHPS, name: "Consumer Assessment of Healthcare Providers and Systems survey", basis: "survey", applies_to: "all ACO types" }
+  py2025_note: "The same five measures with a 2% withhold."
+  cinqcare_py2024_results: { quality_score: 0.52, ACR: 15.8, UAMCC: 31.83, TFU: 72.07 }
+  data_dependency: "Every scored measure except CAHPS is computed by CMS from claims. CINQCARE's own computation is a check on CMS, not the submission."
+
+mssp_app_plus:
+  applies_to: cms_mssp
+  reporting_basis: "A mix of survey, administrative claims and electronic clinical quality measures reported through the Alternative Payment Model Performance Pathway."
+  py2026_measures:
+    - { quality_id: 321, name: "CAHPS for MIPS", basis: survey }
+    - { quality_id: 479, name: "Hospital-Wide 30-day All-Cause Unplanned Readmission", basis: "administrative claims" }
+    - { quality_id: 484, name: "Clinician and Group Risk-Standardized Hospital Admission Rates for Patients with Multiple Chronic Conditions", basis: "administrative claims" }
+    - { quality_id: 1, ecqm: CMS122, name: "Diabetes: Glycemic Status Assessment Greater Than 9%", basis: eCQM }
+    - { quality_id: 134, ecqm: CMS2, name: "Preventive Care and Screening: Screening for Depression and Follow-Up Plan", basis: eCQM }
+    - { quality_id: 236, ecqm: CMS165, name: "Controlling High Blood Pressure", basis: eCQM }
+    - { quality_id: 112, ecqm: CMS125, name: "Breast Cancer Screening", basis: eCQM }
+    - { quality_id: 113, ecqm: CMS130, name: "Colorectal Cancer Screening", basis: eCQM }
+  performance_standard: "The 40th percentile MIPS quality score."
+  data_dependency: >
+    Five of the eight are electronic clinical quality measures, which require clinical data.
+    CINQCARE's Phase 1 scope has no clinical feed, so these cannot be computed from the platform
+    today. That is a stated gap, not a defect to work around.
+
+hedis:
+  applies_to: "Medicaid and Medicare Advantage payer relationships (Fidelis, Molina, Centene, Optum)"
+  owner: NCQA
+  relevance: "CINQCARE does not submit HEDIS; its payers do. CINQCARE's performance feeds the payers' rates and often the shared-savings quality gate."
+  measures_of_interest:
+    chronic_care: [CBP, GSD, BPD, EED, KED, SPD, SPC, PBH, AMR, PCE]
+    prevention_ecds: [BCS-E, CCS-E, COL-E, AIS-E, ASF-E, SNS-E, DSF-E]
+    behavioural_health: [FUH, FUM, FUA, IET, SSD, SMD, POD, DMH, DSU]
+    access_and_transitions: [AAP, PPC, WCV, TRC, ACP]
+    utilisation: [PCR, AHU, EDU, HPC, AXR]
+    older_adults: [COA, OSW, FRM, MUI, DAE, DBO, PAO]
+  notes:
+    - "GSD replaced HBD as the diabetes glycemic measure."
+    - "AHU replaced IHU as the acute hospital utilisation measure."
+    - "The Annual Wellness Visit is not a HEDIS measure; it is a Medicare benefit. The nearest access measure is AAP."
+    - "For measurement year 2026 NCQA moved to a FHIR-aligned format, added seven measures, retired two and moved four more to ECDS reporting. Hybrid chart-chase reporting is on a published path to removal by measurement year 2029."
+
+medicare_stars:
+  applies_to: "Medicare Advantage payer relationships (Optum NY, Optum GA, Centene GA Medicare)"
+  owner: CMS
+  relevance: "Star Ratings drive plan revenue, so a payer's Star gaps become CINQCARE's outreach targets. The Optum GA HouseCalls programme exists largely to close them."
+  triple_weighted_2026: ["Diabetes Care - Blood Sugar Controlled", "Controlling Blood Pressure", "Plan All-Cause Readmissions", "Medication Adherence for Diabetes Medications", "Medication Adherence for Hypertension"]
+  note: "Medication adherence measures are computed as Proportion of Days Covered from pharmacy claims, which makes days supply a revenue-relevant field."
+
+measure_governance:
+  record_required: >
+    Every metric the platform serves carries a machine-readable definition record: identifier,
+    version, owner, effective from, numerator and denominator logic, exclusions, grain, source
+    tables and required layer, period basis and maturity requirement, population definition,
+    reference data versions used, known limitations and bias direction.
+  two_rules:
+    - "No metric is published without a definition record, which forces the ambiguity out before it reaches an executive rather than after."
+    - "Changing a definition creates a new version and the platform retains the ability to compute both, because 'the number changed' and 'the definition changed' must never be indistinguishable to a consumer."

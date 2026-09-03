@@ -1,0 +1,44 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: fidelis_ny_downstate
+
+organization:
+  payer: "Fidelis Care (New York)"
+  parent: "Centene Corporation, which acquired the Fidelis assets on 1 July 2018"
+  reach: "Statewide New York, more than 2.4 million members"
+  products: ["Medicaid Managed Care", "Essential Plan", "Child Health Plus", "HealthierLife (HARP)", "Qualified Health Plans (Ambetter)", "Medicare Advantage and D-SNP (Wellcare By Fidelis Care)", "Fidelis Care at Home (managed long term care)"]
+
+contract:
+  id: fidelis_ny
+  risk_arrangement: "Full Risk"
+  lives: 64201
+  wave: "Wave 1 - LIVE"
+  priority: 1
+  note: "The largest CINQCARE contract by lives and the first live. A defect here is a settlement defect."
+
+population:
+  label: CINQDownstate
+  carried_in: "the vbp_id column, which holds one distinct value per file"
+  region: "downstate New York"
+  regional_definition: "Downstate is the five New York City counties plus Nassau, Suffolk, Westchester, Rockland, Orange, Putnam and Dutchess. Upstate is every other county."
+
+ownership:
+  analyst: Karthik
+  engineer: "Khaja/Vinay"
+  business_uat: "Jonathan/David"
+  claims_analyst: Syed
+  claims_engineer: Monica
+
+silver_raw_source_system: "FIDELIS DOWNSTATE"
+
+semantics:
+  what_the_roster_is: >
+    A monthly full snapshot of members attributed to CINQCARE under the Fidelis value-based
+    payment arrangement, with the attributed PCP, care-management flags and Medicaid
+    recertification dates carried inline.
+  why_two_feeds: >
+    Upstate and downstate are separate value-based payment populations under one contract. They
+    share an identical 45-column layout and arrive in the same delivery, so a single file-name
+    expression must match both while the population is distinguished by vbp_id.
+  operational_use: "Recertification dates drive member outreach; the care-management and Health Home columns drive care-team worklists."

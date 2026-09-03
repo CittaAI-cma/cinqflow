@@ -1,0 +1,172 @@
+version: 1
+updated: "2026-09-03"
+
+# Loader-facing feed contract. YamlKnowledgeProvider.get_source() reads this exact path;
+# ContextBuilder injects it whole at file understanding and mapping. Richer organisational
+# knowledge for this source is in sources/centene_ga/.
+#
+# Columns, row counts, null rates and value shapes below were read from the de-identified
+# sample and its profile report, not inferred.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/4.GA CENTENE Medicare/"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/4.GA CENTENE Medicare/Centene GA Medicare MWOV Members Profile Report.pdf"
+
+source_system: centene_ga
+feed: medicare_mwov_members
+domain: enrollments
+payer: Centene Georgia (Wellcare Medicare Advantage)
+population: Medicare MWOV Members
+contract: centene_ga
+line_of_business: Medicare Advantage (LOB = MEDICARE on every row)
+file_pattern: "^Medicare MWOV Members - \\d{4}-\\d{2}-\\d{2}\\.txt$"
+cadence: monthly
+delivery: sftp
+arrival_archetype: full_snapshot
+
+format:
+  container: "comma-separated values in a .txt file"
+  delimiter: ","
+  quoting: "every field and every header cell is double-quoted"
+  header: row 1
+  line_terminator: CRLF
+  encoding: "ASCII, no BOM"
+  trailer: none
+
+business_date:
+  source: "file name suffix after ' - '"
+  format: "YYYY-MM-DD"
+  meaning: extract date
+
+grain: one row per active member (full snapshot)
+natural_key: [MEMBER_KEY]
+secondary_identifiers: [MEMBER_MEDICARE_Nbr]
+
+# Observed in the de-identified sample (7,731 rows, 34 columns).
+sample_observed:
+  rows: 7731
+  columns: 34
+  blank_rows: 0
+  rows_with_wrong_field_count: 0
+
+# The 34 columns as they actually arrive, in file order.
+expected_columns:
+  - LOB
+  - MEMBER_KEY
+  - MEMBER_MEDICARE_Nbr
+  - MEMBER_NAME
+  - MEMBER_SEX
+  - MEMBER_DOB
+  - MEMBER_ADDRESS_1
+  - MEMBER_ADDRESS_2
+  - MEMBER_CITY
+  - MEMBER_STATE
+  - MEMBER_ZIP
+  - MEMBER_COUNTY
+  - MEMBER_REGION
+  - MEMBER_PRIMARY_PHONE
+  - MEMBER_HOME_PHONE
+  - MEMBER_CELL_PHONE
+  - MEMBER_LANGUAGE
+  - MEMBER_ELIG_START_DT
+  - MEMBER_ELIG_END_DT
+  - MEMBER_ACTIVE_IND
+  - PCP_IRS_NBR
+  - PCP_IRS_NAME
+  - PCP_NPI
+  - PCP_PROV_KEY
+  - PCP_FIRST_NAME
+  - PCP_LAST_NAME
+  - PCP_ADDRESS1
+  - PCP_ADDRESS2
+  - PCP_CITY
+  - PCP_STATE
+  - PCP_ZIP
+  - PCP_PHONE
+  - PCP_FAX
+  - WELL_VISIT
+
+# Per-column facts the profiler measured. `null_pct` counts empty strings and literal
+# null tokens. `phi` marks member-identifying columns (HIPAA Safe Harbor).
+columns:
+  - { name: LOB, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: MEMBER_KEY, type: string, null_pct: 0.0, distinct: 7731, phi: true }
+  - { name: MEMBER_MEDICARE_Nbr, type: string, null_pct: 0.0, distinct: 7731, phi: true }
+  - { name: MEMBER_NAME, type: string, null_pct: 0.0, distinct: 7566, phi: true }
+  - { name: MEMBER_SEX, type: string, null_pct: 0.0, distinct: 2, phi: true }
+  - { name: MEMBER_DOB, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 5773, phi: true }
+  - { name: MEMBER_ADDRESS_1, type: string, null_pct: 0.0, distinct: 7719, phi: true }
+  - { name: MEMBER_ADDRESS_2, type: string, null_pct: 90.9, distinct: 607, phi: true }
+  - { name: MEMBER_CITY, type: string, null_pct: 0.0, distinct: 6256, phi: true }
+  - { name: MEMBER_STATE, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: MEMBER_ZIP, type: int, null_pct: 0.0, distinct: 555, phi: true }
+  - { name: MEMBER_COUNTY, type: string, null_pct: 0.0, distinct: 23, phi: true }
+  - { name: MEMBER_REGION, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: MEMBER_PRIMARY_PHONE, type: int, null_pct: 0.8, distinct: 7668, phi: true }
+  - { name: MEMBER_HOME_PHONE, type: int, null_pct: 58.0, distinct: 3247, phi: true }
+  - { name: MEMBER_CELL_PHONE, type: int, null_pct: 31.8, distinct: 5273, phi: true }
+  - { name: MEMBER_LANGUAGE, type: string, null_pct: 0.0, distinct: 8, phi: false }
+  - { name: MEMBER_ELIG_START_DT, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 16, phi: false }
+  - { name: MEMBER_ELIG_END_DT, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 7, phi: false }
+  - { name: MEMBER_ACTIVE_IND, type: string, null_pct: 0.0, distinct: 1, phi: false }
+  - { name: PCP_IRS_NBR, type: int, null_pct: 0.0, distinct: 477, phi: false }
+  - { name: PCP_IRS_NAME, type: string, null_pct: 0.0, distinct: 180, phi: false }
+  - { name: PCP_NPI, type: int, null_pct: 0.0, distinct: 1849, phi: false }
+  - { name: PCP_PROV_KEY, type: string, null_pct: 0.0, distinct: 2583, phi: false }
+  - { name: PCP_FIRST_NAME, type: string, null_pct: 4.8, distinct: 636, phi: false }
+  - { name: PCP_LAST_NAME, type: string, null_pct: 0.0, distinct: 977, phi: false }
+  - { name: PCP_ADDRESS1, type: string, null_pct: 0.0, distinct: 7724, phi: false }
+  - { name: PCP_ADDRESS2, type: string, null_pct: 75.4, distinct: 1229, phi: false }
+  - { name: PCP_CITY, type: string, null_pct: 0.0, distinct: 6173, phi: false }
+  - { name: PCP_STATE, type: string, null_pct: 0.0, distinct: 32, phi: false }
+  - { name: PCP_ZIP, type: int, null_pct: 0.0, distinct: 320, phi: false }
+  - { name: PCP_PHONE, type: int, null_pct: 0.0, distinct: 7731, phi: false }
+  - { name: PCP_FAX, type: int, null_pct: 31.6, distinct: 5285, phi: false }
+  - { name: WELL_VISIT, type: string, null_pct: 0.0, distinct: 1, phi: false }
+
+phi_columns:
+  - MEMBER_KEY
+  - MEMBER_MEDICARE_Nbr
+  - MEMBER_NAME
+  - MEMBER_SEX
+  - MEMBER_DOB
+  - MEMBER_ADDRESS_1
+  - MEMBER_ADDRESS_2
+  - MEMBER_CITY
+  - MEMBER_ZIP
+  - MEMBER_COUNTY
+  - MEMBER_PRIMARY_PHONE
+  - MEMBER_HOME_PHONE
+  - MEMBER_CELL_PHONE
+
+# Closed-domain columns and the values observed. A value outside these is DQ-B-07.
+value_domains:
+  LOB: [MEDICARE]
+  MEMBER_SEX: [F, M]
+  MEMBER_STATE: [GA]
+  MEMBER_REGION: [ATLANTA]
+  MEMBER_ACTIVE_IND: [Y]
+  WELL_VISIT: ["NO"]
+
+formats:
+  dates: "YYYY-MM-DD throughout"
+  open_ended_coverage: "MEMBER_ELIG_END_DT = 9999-12-31 (54%) or the plan-year end 2026-12-31 (44%)"
+  mbi: "MEMBER_MEDICARE_Nbr is an 11-character Medicare Beneficiary Identifier with no dashes"
+  member_name: "MEMBER_NAME is a single full-name field"
+  enrollment: "MEMBER_ELIG_START_DT is 2026-01-01 for 78% of members, which is plan-year enrolment rather than a true coverage start"
+
+# De-identification artefacts in the SAMPLE ONLY. Never tune a rule or threshold on
+# these; the production feed has a different shape.
+deid_artifacts:
+  - "MEMBER_KEY, MEMBER_MEDICARE_Nbr, PCP_IRS_NBR, PCP_NPI and PCP_PROV_KEY are hashed; names, addresses and phones are faked; MEMBER_DOB is date-faked."
+  - "Two rows carry an implausible MEMBER_ELIG_END_DT of 2198-12-31."
+
+quirks:
+  - "Shares the file-name convention and the 34-column width of the Medicaid sibling but not its columns: this feed drops EDW_MEMBER_CK and MEMBER_MEDICAID_ID and adds MEMBER_MEDICARE_Nbr and WELL_VISIT."
+  - "WELL_VISIT is NO on every row, which is consistent with a 'members without a wellness visit' worklist but does not confirm the MWOV expansion."
+  - "PCP_PROV_KEY is a long composite of up to 40 characters (QGXCLXP...-...-...-V......)."
+  - "PCPs are spread across 32 states, so out-of-state attribution is normal here."
+
+notes: >
+  The Medicare Advantage counterpart to the Medicaid MWOV roster. Its Medicare Beneficiary
+  Identifier is the cross-feed identity key that joins to the ACO REACH alignment roster, the
+  Optum eligibility files and the ADT extract for Medicare populations.

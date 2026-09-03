@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cinqflow / requirements/base.txt
+#
+# The runtime that ships at EVERY rung, 0.5 through 4. Organised by pin, because
+# that is the only organising principle that survives a socket climb.
+#
+# Note what is absent: no message broker, no cache, no cloud SDK, no API gateway
+# client. Those are ADR-0014's "measure first" seats, and their absence from the
+# image is what makes Law 1 true by construction rather than by lint.
+# ─────────────────────────────────────────────────────────────────────────────
+
+-r core.txt
+
+# ── http_edge pin ────────────────────────────────────────────────────────────
+# uvicorn locally, gunicorn+uvicorn workers in the chart, tenant ingress at
+# rung 3. The chip never depends on API Management (atlas FIG 04, traps_avoided).
+fastapi>=0.141,<1.0
+uvicorn[standard]>=0.52
+gunicorn>=26.0
+python-multipart>=0.0.32      # the upload-endpoint connector (FIG 09)
+
+# ── metadata_db · control_tables · queue · vector pins ───────────────────────
+# All four are ONE PostgreSQL 16 instance at rungs 0.5–1, and the queue pin uses
+# the identical implementation at rung 4 (ADR-0014: SELECT ... FOR UPDATE SKIP
+# LOCKED). Azure Database for PostgreSQL Flexible Server speaks the same
+# protocol to the same driver, so the metadata_db swap costs a connection string.
+psycopg[binary,pool]>=3.3,<4.0    # transactional control plane + binary COPY for Bronze
+sqlalchemy>=2.0.52,<2.1           # Core (expression builder) ONLY, and only inside adapters
+alembic>=1.19                     # migrations for registry/governance schemas
+pgvector>=0.5                   # vector pin; provisioned in Wave 0, populated in Wave 1
+croniter>=6.2                     # feed schedules for the rung-0.5 Postgres scheduler
+
+# ── storage pin: ONE adapter, three URL schemes ──────────────────────────────
+# file:// at rung 0.5, s3:// (MinIO) at rung 1, abfs:// (ADLS Gen2) at rung 3.
+# This is where "Azure Blob is not S3-compatible" gets absorbed — adlfs lives in
+# requirements/azure.txt and slots behind the same adapter.
+fsspec>=2026.7.0
+s3fs>=2026.7.0
+
+# ── authn pin: OIDC is OIDC ──────────────────────────────────────────────────
+# Keycloak now, Entra ID at rung 3. Same libraries, same code path; the profile
+# carries the discovery URL and the claim mapping.
+authlib>=1.7                    # OIDC discovery + authorization-code flow
+pyjwt[crypto]>=2.13                # resource-server verification against JWKS
+cryptography>=48.0.1,<49.0     # UPPER BOUND IS NOT OURS: presidio-anonymizer pins
+                                  # cryptography<49. Presidio is non-negotiable (ADR-0016 —
+                                  # identical scrubbing engine in both worlds), so it sets the
+                                  # ceiling for the whole platform. Re-check this cap whenever
+                                  # Presidio is upgraded; do not raise it unilaterally.
+
+# ── secrets pin ──────────────────────────────────────────────────────────────
+# Everything is a `secret://name` REFERENCE in the profile. Resolution is the
+# adapter's job: env/dotenv at rungs 0.5–1, Key Vault at rung 3.
+pydantic-settings>=2.15
+python-dotenv>=1.2
+
+# ── observability pin: OTLP is a protocol, not a brand ───────────────────────
+# The app emits OTLP either way. Grafana/Tempo/Loki in the twin, Azure Monitor
+# in the tenant — an exporter endpoint in the profile, never an SDK in app code.
+structlog>=26.1
+opentelemetry-sdk>=1.44
+opentelemetry-exporter-otlp-proto-grpc>=1.44
+opentelemetry-instrumentation-fastapi>=0.65b0
+opentelemetry-instrumentation-psycopg>=0.65b0
+opentelemetry-instrumentation-httpx>=0.65b0
+
+# ── notification pin ─────────────────────────────────────────────────────────
+# Slack, Teams, ticketing systems and generic webhooks are all an HTTP POST.
+# No vendor SDK earns its place here.
+httpx>=0.28,<1.0
+
+# ── orchestration pin (rung 1+) and the sftp connector / simulator ───────────
+# asyncssh serves BOTH sides: the simulator runs a real SFTP server, and the
+# sftp-poller connector is a real SFTP client. Connectors are therefore always
+# tested against a live counterpart (CF-V0-E8-08).
+asyncssh>=2.24
+
+# ── installer: provision · migrate · manifest · uninstall ────────────────────
+typer>=0.27
+rich>=15.0
+pyyaml>=6.0.3                     # connection profiles, the control-table DDL spec
+
+# ── adapter reliability primitives ───────────────────────────────────────────
+tenacity>=9.1                     # retry etiquette is part of connector conformance
+
+# ── Wave 1+: SLA calendars on the feed registry ──────────────────────────────
+holidays>=0.103

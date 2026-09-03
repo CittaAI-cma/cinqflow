@@ -1,0 +1,66 @@
+version: 1
+updated: "2026-09-03"
+kind: transformation_reference
+
+# Date and timestamp formats observed in CINQCARE feeds and the parse_date format each needs.
+# GROUNDED IN the sample files and profile reports under docs/04_source_data_samples_and_profiles/
+# and the HL7/Fidelis ADT mapping workbooks. Formats are observations, not assumptions: the
+# analyst confirms the format from the profile before a rule is saved.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/"
+  - "docs/03_data_source_schemas/adt/ADT_SilverRaw_HL7_Mapping.xlsx"
+  - "docs/03_data_source_schemas/adt/ADT_SilverRaw_Fidelis_Mapping.xlsx"
+  - "docs/03_data_source_schemas/lakehouse_and_layers/Table_Statistics.xlsx"
+
+formats:
+  - id: iso_date
+    example: "2017-10-01"
+    parse_date: "%Y-%m-%d"
+    seen_in: ["Fidelis NY member roster (member_dob, last_awv_date, recertification dates, coverage_end_date)"]
+  - id: iso_datetime_space
+    example: "2017-10-01 0:00:00"
+    parse_date: "%Y-%m-%d %H:%M:%S"
+    seen_in: ["Fidelis NY member roster enrollment_date (time component always midnight, only the date is meaningful)"]
+    note: "Hour may be a single digit."
+  - id: iso_datetime_millis
+    example: "2025-04-15 07:55:51.787"
+    parse_date: "%Y-%m-%d %H:%M:%S.%f"
+    seen_in: ["Garage ADT JSON MessageDate"]
+  - id: us_slash_date
+    example: "03/05/2026"
+    parse_date: "%m/%d/%Y"
+    seen_in: ["Fidelis UM date_of_birth (either MM/DD/YYYY or YYYY-MM-DD; confirm per file)", "Molina NY enrollment history"]
+  - id: compact_yyyymmdd
+    example: "20260421"
+    parse_date: "%Y%m%d"
+    seen_in: ["HL7 PV1-44/45 when length is 8", "Molina NY file names", "CCLF date fields"]
+  - id: compact_yyyymmddhhmm
+    example: "202604211015"
+    parse_date: "%Y%m%d%H%M"
+    seen_in: ["HL7 PV1-44/45 when length is 12"]
+  - id: compact_yyyymmddhhmmss
+    example: "20260421101500"
+    parse_date: "%Y%m%d%H%M%S"
+    seen_in: ["HL7 PV1-44/45 when length is 14 (Garage Admit_Date / Discharge_Date)"]
+  - id: compact_yyyymmddhhmmssfff
+    example: "20260421101500123"
+    parse_date: "%Y%m%d%H%M%S%f"
+    seen_in: ["HL7 PV1-44/45 when length is 17"]
+  - id: iso_datetime_tz
+    example: "2026-04-21 10:15:00.000000+00:00"
+    parse_date: "%Y-%m-%d %H:%M:%S.%f%z"
+    seen_in: ["ParticleHealth Transitions API visit_start_date_time / visit_end_date_time (UTC)"]
+
+rules:
+  - id: DT-01
+    rule: "Detect the format from the profile's observed pattern; when a column mixes formats, the rule is length- or regex-dispatched and must be recorded as such (HL7 PV1-44 is the canonical case: 8/12/14/17 characters)."
+  - id: DT-02
+    rule: "A DATE canonical column receiving a timestamp string keeps the date part only; the dropped time component is noted in the mapping note."
+  - id: DT-03
+    rule: "Sentinel dates are nulls in disguise. Legacy CinqDB carries Service_date year 1000 (2.2M rows), Admission_date 1753-01-01 (10,209 rows) and 1900-01-01; treat any year < 1900 or > current year + 1 as null with the raw value preserved."
+  - id: DT-04
+    rule: "Dates of service, admission and discharge are PHI when combined with an identifier; date-shift is never applied in Silver Raw, only masked in previews."
+  - id: DT-05
+    rule: "Discharge >= admission; service <= paid; DOB implies age 0-120 at service. Violations are quarantined (DQ-S-05), not corrected."
+  - id: DT-06
+    rule: "Time zone: HL7 and flat files are local time with no offset; ParticleHealth is UTC. Store as received, record the assumption on the feed."

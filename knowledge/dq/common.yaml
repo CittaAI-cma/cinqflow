@@ -1,0 +1,67 @@
+version: 1
+updated: "2026-09-03"
+kind: dq_rules
+domain: common
+
+# Cross-domain rules that apply to every feed at Landing, Bronze and Silver Raw.
+# GROUNDED IN: vbc_domain_knowledge_pack/07_data_quality_rules.yaml (DQ-L, DQ-B, DQ-S, DQ-X),
+# Technical_Architecture_Document_CinqCare_v2.docx §11-12 (error categories, quarantine tables,
+# restart-ability), the DigitalUrth controls catalogue (on-time arrival, structural validation,
+# schema drift; Freshness max_lag 60 / tolerance 30 / missing_after 120 minutes) and observed
+# behaviour of the ten sample feeds.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/07_data_quality_rules.yaml"
+  - "docs/07_client_technical_and_infra_design/Technical_Architecture_Document_CinqCare_v2.docx"
+  - "docs/06_incumbent_workflow_ground_truth/DIGITALURTH_WALKTHROUGH__feed_onboarding_end_to_end.md"
+  - "docs/04_source_data_samples_and_profiles/"
+
+landing:
+  - { id: DQ-L-01, rule: "File decrypts and is readable", action: block }
+  - { id: DQ-L-02, rule: "Checksum matches manifest where one is supplied", action: block }
+  - { id: DQ-L-03, rule: "Row count matches trailer/control record where one exists (none of the ten sample feeds carry a trailer)", action: block }
+  - { id: DQ-L-04, rule: "Sender, feed and population are on the delivery contract (file name matches the registered regex)", action: block, meaning: "An unexpected file is a security event, not a data opportunity" }
+  - { id: DQ-L-05, rule: "Cycle sequence contiguous with last accepted (monthly roster month, Molina period end, D0284 filedate)", action: block, meaning: "A gap is a missing month, invisible downstream" }
+  - { id: DQ-L-06, rule: "Arrival within SLA (Freshness: periodicity from cron, max_lag 60 min, tolerance 30, missing_after 120; enrollment monthly, ADT every 15 minutes)", action: warn }
+  - { id: DQ-L-07, rule: "Row count within seasonal historical band and within contract size band (Fidelis roster 5-30 MB)", action: block, meaning: "A valid file with a partial extract passes every other check" }
+  - { id: DQ-L-08, rule: "No duplicate file (same checksum or same processed file already in the control/input registry)", action: block, meaning: "Reprocessing double-counts; the incumbent's Freshness control treats a re-run as a duplicate" }
+  - { id: DQ-L-09, rule: "Declared format matches bytes (xlsx is a zip; .txt declared pipe is pipe)", action: warn, meaning: "D0284_AlignmentRoster.xlsx is CSV; Centene GA .txt is all-quoted CSV" }
+
+bronze:
+  - { id: DQ-B-01, rule: "Schema matches the registered contract (expected_columns, in order)", action: warn, meaning: "Drift analysis; name affected canonical fields" }
+  - { id: DQ-B-02, rule: "New column appeared", action: observe, meaning: "Often a regulatory or payer addition you are entitled to use" }
+  - { id: DQ-B-03, rule: "Expected column missing or 100% null when previously populated", action: block, meaning: "Downstream predicates silently evaluate false - the highest-severity drift" }
+  - { id: DQ-B-04, rule: "Type cast failure rate above threshold", action: quarantine }
+  - { id: DQ-B-05, rule: "Row has no usable record identifier (no payer id, CIN, MBI or internal id)", action: quarantine }
+  - { id: DQ-B-06, rule: "Quarantine rate change versus trailing average", action: warn, meaning: "A doubling is a source-side change" }
+  - { id: DQ-B-07, rule: "Unexpected value in a closed-domain coded column (sex, LOB, alignment status, dual status, event type)", action: observe, meaning: "Code set version changed; every value_map is now incomplete" }
+  - { id: DQ-B-08, rule: "Duplicate row hash within batch", action: observe, meaning: "Bronze never deduplicates; this is evidence about the source (D0284: 4 exact dups + 5,131 December pairs)" }
+  - { id: DQ-B-09, rule: "Literal null tokens present (NULL, None, NaN, '.', MISSING, NA, 40-space blanks)", action: observe, meaning: "Null rates are understated until tokens are treated as null; the ADT extract and D0284 need this" }
+  - { id: DQ-B-10, rule: "Header present and column count constant on every row", action: block, meaning: "Molina lines end in 12 empty pipes; a reader that trims them breaks the contract" }
+
+silver_raw:
+  - { id: DQ-S-01, rule: "Grain uniqueness violations = 0 on the declared PK", action: block, meaning: "Duplication inflates counts indistinguishably from real growth" }
+  - { id: DQ-S-02, rule: "accepted + quarantined + deduplicated = Bronze arrival", action: block }
+  - { id: DQ-S-03, rule: "Code set conformance within band; unmapped values enumerated", action: warn }
+  - { id: DQ-S-04, rule: "Null rate on business-critical columns in band (identifier, DOB, sex, dates of service, amounts, discharge disposition, claim type, place of service, PCP NPI)", action: warn }
+  - { id: DQ-S-05, rule: "Date sanity: service <= paid; discharge >= admit; DOB implies age 0-120; no future service dates; sentinel years (1000, 1753, 1900, 2078, 2198, 9999) treated as null", action: quarantine }
+  - { id: DQ-S-06, rule: "Negative or zero amounts", action: observe, meaning: "Legitimate for voids/adjustments; anomalous only in volume" }
+  - { id: DQ-S-07, rule: "Referential orphans against identity spine within band; orphans retained", action: warn }
+  - { id: DQ-S-08, rule: "Dedup collapse rate change versus trailing average", action: warn, meaning: "Earliest signal of a source-side change" }
+  - { id: DQ-S-09, rule: "Service/business date distribution has no unexpected gap versus the declared period", action: block }
+  - { id: DQ-S-10, rule: "Every applied rule and transform has a version in the run manifest", action: block }
+
+cross_layer:
+  - { id: DQ-X-01, rule: "End-to-end volume reconciliation: rows arrived account for rows present, quarantined or deliberately collapsed at every layer", action: block }
+  - { id: DQ-X-02, rule: "Metric stability monitor against each metric's own volatility band", action: warn }
+  - { id: DQ-X-03, rule: "Cross-source agreement where two sources cover the same events (CCLF vs BCDA, ADT vs institutional claims, roster vs ADT membership)", action: warn }
+  - { id: DQ-X-04, rule: "Weekly reproducibility spot check of a prior period's published metric", action: block }
+  - { id: DQ-X-05, rule: "Every schema or rule change carries a lineage-derived impact list", action: block }
+
+format_conventions_observed:
+  # Facts the structural-validation control should assert per feed family.
+  line_terminator: CRLF
+  bom: none
+  header_row: 1
+  trailer: none
+  quoting: { fidelis_csv: rfc_minimal, molina_txt: none, centene_ga_txt: every_field, optum_ny_csv: none, centene_il_csv: none, d0284_csv: rfc_minimal, cmp_csv: rfc_minimal, adt_csv: rfc_minimal }
+  xlsx_cells: "all text, including dates (Fidelis downstate, Optum GA)"

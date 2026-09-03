@@ -1,0 +1,165 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+confidence: authoritative
+volatile: true
+review_by: "2027-06-30"
+
+# Code systems, who owns them, when they change, and the value sets actually observed in
+# CINQCARE feeds. Reference data is a source, not a lookup: it is versioned external data on a
+# regulatory calendar and must be ingested with effective dates, never hardcoded in transforms.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml"
+  - "docs/03_data_source_schemas/reference_data/Reference_Data_Design.docx"
+  - "CMS, CDC/NCHS, AMA, NUBC, NUCC, Regenstrief, NLM, FDA published specifications (accessed 2026-09-03)"
+  - "docs/04_source_data_samples_and_profiles/ (observed values)"
+
+governing_rule: >
+  Every derived clinical or financial fact carries the reference version used to derive it. The
+  test is whether the platform can answer "what would this metric have been under last year's
+  value set?" - a platform that hardcoded reference data cannot, and in this domain that question
+  is asked every year at audit.
+
+diagnosis_and_procedure:
+  icd_10_cm:
+    what: "Diagnosis codes. Drives risk adjustment and measure denominators."
+    owner: "CDC/NCHS"
+    calendar: "Fiscal year updates effective 1 October, with an April addendum."
+    format: "3 to 7 characters, letter first. Decimal placement varies by source."
+    rule: "Store raw as received and normalised without the decimal; keep the code system literal."
+  icd_10_pcs:
+    what: "Inpatient procedures only. Not used on professional claims."
+    owner: CMS
+    format: "7 characters, alphanumeric."
+  cpt:
+    what: "Professional and outpatient procedures. HCPCS Level I."
+    owner: "AMA"
+    format: "5 digits; Category II ends in F, Category III ends in T."
+  hcpcs_level_ii:
+    what: "Supplies, drugs and many care-management services."
+    owner: CMS
+    format: "One letter followed by four digits."
+    calendar: "Drugs and biologicals update quarterly; other items biannually."
+  drg:
+    what: "Inpatient payment grouping. MS-DRG for Medicare, APR-DRG common in Medicaid."
+    calendar: "MS-DRG grouper version changes each fiscal year."
+    rule: "Store the grouper version alongside the code; drg_code_system exists for this."
+
+billing_and_setting:
+  revenue_code:
+    what: "UB-04 institutional billing category. Essential for identifying ED, ICU, observation and SNF; the claim type alone will not tell you."
+    owner: NUBC
+    format: "4 digits."
+    landmarks: { "0001": "total charges", "011X-013X": "room and board", "020X": "ICU", "021X": "CCU", "025X": "pharmacy", "030X": "laboratory", "032X": "radiology", "036X": "operating room", "045X": "emergency room", "051X": "clinic", "052X": "FQHC", "076X": "treatment or observation room", "090X": "behavioural health" }
+  place_of_service:
+    owner: CMS
+    format: "2 digits."
+    landmarks: { "02": "telehealth other than home", "10": "telehealth in home", "11": "office", "12": "home", "20": "urgent care", "21": "inpatient hospital", "22": "on-campus outpatient hospital", "23": "emergency room", "24": "ambulatory surgical centre", "31": "skilled nursing facility", "32": "nursing facility", "34": "hospice", "50": "FQHC", "72": "rural health clinic", "81": "independent laboratory" }
+  type_of_bill:
+    what: "UB-04 field 4. Facility type, bill classification and frequency."
+    format: "4 characters; the leading zero is ignored by CMS."
+    structure:
+      second_digit: { "1": hospital, "2": "skilled nursing", "3": "home health", "6": "intermediate care", "7": "clinic or ESRD", "8": "special facility" }
+      third_digit: "bill classification, for example hospital 1 inpatient Part A, 2 inpatient Part B, 3 outpatient"
+      fourth_digit: { "1": "admit through discharge", "2": "interim first", "3": "interim continuing", "4": "interim last", "7": "replacement", "8": "void or cancel" }
+    note: "CCLF supplies the facility type and classification digits separately, so the composite is built by concatenation."
+  discharge_status:
+    what: "UB-04 patient discharge status, field 17. Drives readmission exclusions, so nulls distort the rate in both directions."
+    owner: "NUBC / AHA"
+    landmarks: { "01": "home or self-care", "02": "transferred to a short-term general hospital", "03": "transferred to a skilled nursing facility", "06": "home with organised home health", "07": "left against medical advice", "20": "expired", "30": "still a patient", "40-42": "expired at home, in a medical facility, or place unknown", "50": "hospice at home", "51": "hospice in a medical facility", "62": "inpatient rehabilitation facility", "63": "long-term care hospital", "65": "psychiatric hospital or unit", "66": "critical access hospital", "81-95": "the same destinations as 01-70 but with a planned acute readmission" }
+    caution: "The ADT working table mixes these codes with free text such as 'Home or Self Care' and 'N/A' across 54 distinct values."
+  nch_claim_type:
+    landmarks: { "10": "home health agency", "20": "non-swing-bed SNF", "30": "swing-bed SNF", "40": "hospital outpatient", "50": "hospice", "60": "inpatient", "71": "local carrier non-DMEPOS", "72": "local carrier DMEPOS", "81": "DMERC non-DMEPOS", "82": "DMERC DMEPOS" }
+
+pharmacy:
+  ndc:
+    what: "Drug product at package level."
+    owner: FDA
+    format: "10 digits as 4-4-2, 5-3-2 or 5-4-1; the HIPAA form is 11 digits as 5-4-2, made by padding a leading zero into the short segment."
+    rule: "Normalise on ingest and keep the source form."
+  rxnorm:
+    owner: "NLM"
+    what: "Normalised drug naming; RXCUI is the concept identifier."
+
+clinical_terminology:
+  loinc:
+    owner: "Regenstrief Institute"
+    what: "Laboratory and clinical observations, including screening instruments. Central to ECDS quality reporting."
+    format: "Numeric with a trailing check digit after a hyphen."
+  snomed_ct:
+    owner: "SNOMED International; NLM is the US release centre"
+    what: "Clinical findings in EHR and FHIR data."
+    rule: "Mapping SNOMED to ICD-10 for claims-based logic is lossy and must be governed, not improvised."
+  cvx:
+    owner: "CDC NCIRD"
+    what: "Vaccine administered codes."
+
+demographics:
+  race_ethnicity:
+    cdcrec:
+      owner: "CDC / HL7"
+      oid: "2.16.840.1.113883.6.238"
+      top_level: { "1002-5": "American Indian or Alaska Native", "2028-9": "Asian", "2054-5": "Black or African American", "2076-8": "Native Hawaiian or Other Pacific Islander", "2106-3": "White", "2131-1": "Other Race", "2135-2": "Hispanic or Latino", "2186-5": "Not Hispanic or Latino" }
+    omb:
+      note: "Statistical Policy Directive 15 was revised in March 2024 to a single combined race and ethnicity question with seven minimum categories, adding Middle Eastern or North African."
+    cms_rti_code:
+      seen_in: cms_aco_reach_d0284__alignment_roster
+      values: { "0": UNKNOWN, "1": WHITE, "2": BLACK, "3": OTHER, "4": ASIAN, "5": HISPANIC, "6": "NORTH AMERICAN NATIVE" }
+    observed_payer_vocabularies:
+      fidelis: ["White", "Black or African American", "Not Available/Not Provided", "Some Other Race", "Asian", "Two or More Races"]
+      molina: ["Molina codes in Member_Ethnicity_or_Race (WHITE/CAUCASIAN, BLACK/AFRICAN AMERICAN, 2 or more races, Other Asian) and OMB-style categories in Member_Race with inconsistent casing"]
+    rule: "Rolling any of these up to OMB categories is many-to-one and needs an owner and a recorded rationale."
+  sex_gender:
+    observed: { single_letter: "F, M, U", words: "Female, Male, Unknown", lower_words: "female, male", cclf_numeric: "1 male, 2 female, 0 unknown" }
+    rule: "Value-map to a single vocabulary and quarantine unmapped values; blank is unknown, not a default."
+  state:
+    owner: USPS
+    format: "Two letters."
+    caution: "Legacy CINQCARE data contains free text such as Bronx, Brooklyn, Buffalo, NewYork and N.Y.Y in the state column. Standardise before any region derivation."
+
+eligibility_codes:
+  dual_status:
+    owner: CMS
+    values:
+      "00": "Not a Medicare beneficiary"
+      "01": "QMB only - Qualified Medicare Beneficiary without other Medicaid"
+      "02": "QMB Plus - QMB with full Medicaid"
+      "03": "SLMB only - Specified Low-Income Medicare Beneficiary"
+      "04": "SLMB Plus - SLMB with full Medicaid"
+      "05": "QDWI - Qualified Disabled and Working Individual"
+      "06": "QI - Qualifying Individual"
+      "08": "Other full-benefit dual"
+      "09": "Medicare without Medicaid"
+      "10": "Separate CHIP eligible entitled to Medicare"
+    groupings: { full_benefit: ["02", "04", "08"], partial_benefit: ["01", "03", "05", "06"] }
+    seen_in: "cms_aco_reach_d0284__alignment_roster carries the code plus short and long descriptions, a benefit type and a category."
+  medicare_status:
+    values: { "10": "Aged without ESRD", "11": "Aged with ESRD", "20": "Disabled without ESRD", "21": "Disabled with ESRD", "31": "ESRD only" }
+
+programme_codes:
+  aco_reach_alignment_status:
+    AL: Aligned
+    MC: "Moved to Medicare Advantage"
+    DY: "Death in the payment year"
+    MS: "Moved to Medicare as secondary payer"
+    CO: "Moved outside the service area"
+    NV: "Eligibility could not be verified"
+    DD: "Death prior to the payment year"
+    AB: "Lost Part A or Part B coverage"
+  voluntary_alignment_type: [No, Paper, Electronic]
+  benchmark_type: { A: Prospective, E: Expenditure }
+
+hl7_v2:
+  adt_event_types: { A01: "admit", A02: "transfer", A03: "discharge", A04: "register", A05: "pre-admit", A06: "outpatient to inpatient", A07: "inpatient to outpatient", A08: "update", A11: "cancel admit", A12: "cancel transfer", A13: "cancel discharge", A34: "merge patient id", A40: "merge patient identifier list" }
+  patient_class: { B: Obstetrics, C: "Commercial account", E: Emergency, I: Inpatient, N: "Not applicable", O: Outpatient, P: Preadmit, R: "Recurring patient", U: Unknown }
+
+adjudication:
+  carc: "Claim Adjustment Reason Codes, maintained by X12, explain why an adjustment occurred."
+  rarc: "Remittance Advice Remark Codes, maintained by X12, add detail to a CARC."
+  adjustment_groups: { PR: "Patient responsibility", CO: "Contractual obligation", OA: "Other adjustment", PI: "Payer initiated reduction" }
+  fhir_categories: "submitted, eligible (allowed), benefit (paid), copay, deductible, coinsurance"
+
+reference_data_handling_at_cinqcare:
+  approach: "External reference files load from Landing directly into the ODS as full truncate-and-load, each with its own Airflow DAG, and carry ODS metadata columns."
+  naming: "Reference tables in the ODS take a ref_ prefix."
+  proactive_dq: "When a master load meets a code absent from its reference table, a proactive alert triggers a reference refresh. Planned for Phase 2."

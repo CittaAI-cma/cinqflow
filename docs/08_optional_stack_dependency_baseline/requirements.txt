@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cinqflow / requirements.txt
+#
+# THE DEFAULT RUNTIME IMAGE — rungs 0.5 and 1. This is what runs today, with no
+# Azure subscription and no Databricks workspace, on a laptop with PostgreSQL 16.
+#
+# The layering is not tidiness. It is the architecture:
+#
+#   core.txt        what core/ may import. No I/O. Law 1, as a file.
+#   base.txt        every pin that ships at every rung, 0.5 through 4.
+#   ai.txt          the intelligence plane — real from Wave 0 (ADR-0003).
+#   formats.txt     parsers beyond delimited/xlsx (Wave 1+).
+#   databricks.txt  rung 2+ ONLY. Absent from this image on purpose.
+#   agents.txt      WAVE 2+ ONLY. LangGraph. Absent from this image on purpose.
+#   azure.txt       rungs 3–4 ONLY. Absent from this image on purpose.
+#   dev.txt         the toolchain that makes the five laws mechanical.
+#
+# The three absences are the load-bearing part. A dependency that is not installed
+# cannot be imported by accident, which makes "no vendor SDK in core" true by
+# construction — the lint then only has to catch intent.
+#
+# Install:
+#     python -m venv .venv && source .venv/bin/activate     # Python 3.12
+#     pip install -r requirements.txt
+#     python -m spacy download en_core_web_lg
+#
+# Develop:
+#     pip install -r requirements/dev.txt
+#
+# Climb a rung (CI only — never the dev image):
+#     pip install -r requirements/databricks.txt            # rung 2, nightly
+#     pip install -r requirements/azure.txt                 # rungs 3–4, client tenant
+#     pip install -r requirements/agents.txt                # Wave 2, the LangGraph runtime
+#
+# Versions here are FLOORS. Commit generated locks per rung — see dev.txt.
+# ─────────────────────────────────────────────────────────────────────────────
+
+-r requirements/base.txt
+-r requirements/ai.txt
+-r requirements/formats.txt

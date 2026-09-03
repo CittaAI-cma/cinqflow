@@ -1,0 +1,26 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: optum_ny
+date_formats:
+  dob: "BTH_DT as YYYY-MM-DD"
+  spans: "RECORD_START_DT and RECORD_END_DT as MM/DD/YYYY"
+  death: "DTH_DT as YYYY-MM-DD HH:MM:SS.fff, empty on 96.3% of rows"
+span_behaviour: "Spans are mostly calendar-year with mid-year plan changes. A subscriber holds up to eleven spans."
+gender_vocabulary: "MBR_GDR_CD arrives as lower-case words, female and male. Every other feed in the corpus uses letters or capitalised words."
+flag_vocabulary: { MBR_DO_NOT_CNTC_FLG: "N, Y or blank; blank on 11.5% of rows" }
+identifier_conventions:
+  SBSCR_NBR: "Nine-digit subscriber number and part of the natural key"
+  SOURCE_PATIENT_ID: "A five-digit source prefix, a hyphen, then a twelve-character token"
+  EMPI: "Optum's ten-digit enterprise master patient index identifier; absent for 173 subscribers"
+  CURR_MBI: "Current Medicare Beneficiary Identifier, the cross-feed Medicare identity key"
+plan_identifiers:
+  CONTR_NBR: "Medicare Advantage contract number"
+  CONTR_PBP: "Three-digit zero-padded plan benefit package"
+  CONTR_NBR_PBP: "The combined contract and plan benefit package"
+known_exceptions:
+  - "Coverage span start and end have no home in the canonical enrollment model, which is the central gap this feed exposes."
+  - "SBSCR_CNTY_NM is empty on 88.5% of rows, so county must come from a ZIP crosswalk rather than from the feed."
+sample_caveats:
+  - "CONTR_NBR was hashed independently of CONTR_NBR_PBP, so the two no longer agree and one must not be derived from the other in this sample."
+  - "The de-identification table does not list EMPI, MBR_LST_NM, CURR_MBI or DTH_DT, so their treatment is unstated."

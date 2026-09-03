@@ -1,0 +1,19 @@
+version: 1
+updated: "2026-09-03"
+kind: delivery_convention
+source_system: adt_hl7_sources
+transports:
+  mirth_hl7: { format: "HL7 v2.5 messages batched into JSON", landing: "Azure blob, picked up by Auto Loader", bronze: "one table per source, append only, raw payload preserved" }
+  api: { source: ParticleHealth, format: "JSON from the Transitions API" }
+  flat_file: { sources: [Optum_UM, Fidelis_UM], format: "structured flat file and Excel respectively, all columns preserved as received" }
+business_date:
+  message_date: "MSH-7 for HeC; the Mirth received timestamp for every other HL7 source"
+  event_dates: "PV1-44 admission and PV1-45 discharge"
+  format_dispatch: "Admit and discharge timestamps arrive without separators in four lengths: 8 gives a date, 12 adds hours and minutes, 14 adds seconds, 17 adds milliseconds. The parse format is selected by string length."
+  flat_file_dates: "Optum and Fidelis supply a file date and a date only, with no time component."
+delivery_cadence:
+  hl7: "continuous, message by message"
+  fidelis_um: "every 15 minutes, which is why the incumbent leases a warm compute cluster for this feed"
+  optum_um: daily
+arrival_archetype: append_only_event_stream
+implies: "Out-of-order and duplicate delivery are normal. Idempotency by message control identifier is mandatory, and cancellations must reverse a prior event rather than append."

@@ -1,0 +1,44 @@
+version: 1
+updated: "2026-09-03"
+kind: schema_pointer
+source_system: fidelis_ny_downstate
+
+# The authoritative column list, types, null rates and PHI flags live in the loader-facing
+# feed contract, generated from the profiled sample rather than retyped here:
+contract_file: "sources/fidelis_ny_downstate__member_roster.yaml"
+
+# What the columns mean, grouped for an analyst. Only fields whose meaning is not obvious from
+# the name, or whose canonical destination is contested, are listed.
+field_semantics:
+  identity:
+    vbp_id: "Population label (CINQDownstate). Not a member identifier despite the name."
+    member_id: "Fidelis member identifier with the plan code appended. The natural key."
+    medicaid_id: "New York Medicaid Client Identification Number. The cross-payer identity key."
+  plan:
+    product: "Line of business. TANF Adult, TANF Child, Essential Plan 1 to 4, Essential Plan 200-250, HARP, SSI. Payer-specific vocabulary."
+    member_status: "The payer's view of enrolment state, such as Active Member or Reinstated by Medicaid. Not a coverage period."
+  attribution:
+    tin: "Tax identification number of the attributed provider group."
+    group_name: "Provider group or practice name."
+    provider_id: "Fidelis internal provider identifier, distinct from the NPI."
+    provider_npi: "National Provider Identifier of the attributed PCP."
+    ep_assignment_flag: "Marks Essential Plan members attributed at group level."
+    pcp_assignment_type: "How the member was attributed: Manual or Auto."
+  care_management:
+    in_care_management_with_fidelis: "Member is in the payer's own care-management programme."
+    health_homes_enrolled: "The name of the Health Home the member is enrolled with."
+    health_home_status: "E for enrolled, A otherwise."
+    health_home_start_date: "Health Home enrolment start."
+    health_homes_plus_eligible: "Eligible for the intensive Health Home Plus service."
+    harp_eligible: "Eligible for a Health and Recovery Plan (behavioural health managed care)."
+    high_need_status: "Comma-joined list of high-need markers."
+    last_awv_date: "Date of the most recent Annual Wellness Visit. A quality and revenue input."
+  eligibility:
+    enrollment_date: "Date attribution or coverage begins. No canonical home."
+    coverage_end_date: "Date coverage ends; blank while coverage is open. No canonical home."
+    recertification_start_date: "Start of the Medicaid recertification window."
+    recertification_end_date: "End of the recertification window. The operational deadline that drives outreach."
+    recertification_source: "Who is handling the recertification: NYS, LDSS/HRA, or no outreach needed."
+  coordination_of_benefits:
+    primary_coverage_not_with_fidelis: "Another payer holds primary coverage."
+    primary_coverage_payor: "That other payer."

@@ -1,0 +1,14 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: optum_ny
+organization:
+  payer: "Optum and UnitedHealthcare, New York"
+  products: "Medicare Advantage and Dual Eligible Special Needs Plans, including UHC Dual Complete and AARP Medicare Advantage lines"
+contract: { id: optum_ny, risk_arrangement: "Full Risk", lives: 6939, wave: "Wave 2, sequence 5", priority: 4 }
+ownership: { analyst: Karthik, engineer: Vinay, business_uat: "David and Jonathan", claims_analyst: Ashwin }
+silver_raw_source_system: Optum
+semantics:
+  what_it_is: "A coverage-span history restated each month, and the only enrollment feed in the corpus shaped that way."
+  why_it_matters: "It is the natural test case for the canonical enrollment model's missing coverage-period fields, because span start and end are the point of the feed rather than an attribute of it."
+  related_feeds: "Optum also supplies a claims feed and the Optum UM census that lands as an ADT source."

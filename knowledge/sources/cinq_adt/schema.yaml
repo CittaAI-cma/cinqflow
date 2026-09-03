@@ -1,0 +1,14 @@
+version: 1
+updated: "2026-09-03"
+kind: schema_pointer
+source_system: cinq_adt
+contract_file: "sources/cinq_adt__clinical_events.yaml"
+field_semantics:
+  event_identity: { ID: "Event record identifier", RecordSource: "The payer or programme population the event was matched to", rn: "Row number per RecordSource, a sampling artefact", CurrentFileFlag: "Row is from the current file" }
+  member_identity: { OurID: "CINQCARE internal member identifier", MemberID: "Payer member identifier", MemberMedicaidNumber: "Medicaid CIN or Medicare identifier", InsuranceIDPrimary: "Primary coverage identifier", InsuranceIDSecondary: "Secondary coverage identifier", MedentIDGBU: "MEDENT electronic health record identifier" }
+  event: { EventType: "CINQCARE care-alert event vocabulary", VisitType: "Care alert visit description", EventDate: "When the event occurred", AdmissionDate: "Admission", DischargeDate: "Discharge", AdmitTime: "Admission time of day", SERVCAT01: "Inpatient or outpatient", SERVCAT02: "Emergency room, acute or skilled nursing", DischargeDispositionCode: "Mixed codes and free text" }
+  clinical: { DiagnosisList: "Comma-joined codes and descriptions", AdmissionReason: "Reason for admission", ChiefComplaint: "Presenting complaint", HeadInBed: "Currently occupying a bed" }
+  provider_facility: { Facility: "Facility name", Practice: "Practice name", GroupName: "Provider group", ProviderName: "Attributed provider", AttendingPhyNPI: "Attending physician", AdmittingPhyNPI: "Admitting physician", IPA: "Independent practice association" }
+  risk: { RiskCat: "Risk category", RiskCatHCC: "Hierarchical condition category tier", RiskCatCRG: "Clinical risk group tier", Top20HCC: "In the top 20 by condition category", QuintileRankforRAWRISKSCORE: "Risk score quintile", CaseAssignment_RiskType: "Assignment rule applied", CaseAssignment_RiskCalculation: "Resulting tier" }
+  readmission: { Readmit_7: "Readmitted within 7 days", Readmit_15: "Within 15 days", Readmit_30: "Within 30 days" }
+  care_management_from_cinq_app: "PHN_Contact, MD_Visit_Scheduled, Medication_Reconcilliation, Transition_of_Care, Disch_Summary_Medent_Upload, the DME columns and the SDOH columns, each with an EntryID and LastEdit pair. Entirely empty in the sample."

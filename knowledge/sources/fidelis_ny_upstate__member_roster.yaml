@@ -1,0 +1,102 @@
+version: 1
+updated: "2026-09-02"
+
+# Grounded in the reference corpus, not inferred:
+#   docs/04_source_data_samples_and_profiles/1-Enrollment/1.Fedelis_NY/
+#     deidentified_CINQUPSTATE_Member_Roster_03_05_2026_1.csv        (column list, formats)
+#     "Fidelis NY _CINQUPSTATE_Member_Roster Health Data Profile.pdf" (profile report)
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/1.Fedelis_NY/deidentified_CINQUPSTATE_Member_Roster_03_05_2026_1.csv"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/1.Fedelis_NY/Fidelis NY _CINQUPSTATE_Member_Roster Health Data Profile.pdf"
+
+source_system: "fidelis_ny_upstate"
+feed: "member_roster"
+domain: "enrollments"
+payer: "Fidelis Care (NY)"
+population: "CINQUpstate"
+file_pattern: ".*CINQUPSTATE_Member_Roster.*\\.(csv|xlsx)$"
+cadence: monthly
+delivery: manual_upload
+
+# The 45 columns as they actually arrive, in file order.
+expected_columns:
+  - vbp_id
+  - medicaid_id
+  - member_id
+  - product
+  - member_first_name
+  - member_last_name
+  - member_dob
+  - member_age
+  - member_sex
+  - member_language
+  - member_race
+  - member_address_line_1
+  - member_address_line_2
+  - member_city
+  - member_state
+  - member_zip_code
+  - member_county
+  - member_phone_number
+  - member_email
+  - guardian_name
+  - guardian_phone_number
+  - guardian_email
+  - tin
+  - group_name
+  - provider_id
+  - provider_npi
+  - provider_name
+  - ep_assignment_flag
+  - last_awv_date
+  - in_care_management_with_fidelis
+  - harp_eligible
+  - health_homes_enrolled
+  - health_home_status
+  - health_home_start_date
+  - health_homes_plus_eligible
+  - high_need_status
+  - pcp_assignment_type
+  - member_status
+  - primary_coverage_not_with_fidelis
+  - primary_coverage_payor
+  - recertification_start_date
+  - recertification_end_date
+  - coverage_end_date
+  - recertification_source
+  - enrollment_date
+
+grain: "one row per member per monthly roster delivery"
+natural_key: ["member_id"]
+secondary_identifiers: ["medicaid_id", "vbp_id"]
+
+formats:
+  dates: "ISO yyyy-mm-dd (member_dob, last_awv_date, recertification_*, coverage_end_date)"
+  timestamps: "enrollment_date arrives as 'yyyy-mm-dd H:MM:SS'"
+  booleans: "Yes/blank rather than true/false (in_care_management_with_fidelis, harp_eligible)"
+
+phi_columns:
+  - medicaid_id
+  - member_id
+  - member_first_name
+  - member_last_name
+  - member_dob
+  - member_age
+  - member_sex
+  - member_race
+  - member_address_line_1
+  - member_address_line_2
+  - member_city
+  - member_zip_code
+  - member_county
+  - member_phone_number
+  - member_email
+  - guardian_name
+  - guardian_phone_number
+  - guardian_email
+
+notes: >
+  vbp_id carries the population label ("CINQUpstate"), which is why the same layout
+  arrives as two feeds (upstate/downstate). `product` is the line of business and its
+  code set is payer-specific. Many operational flags are sparsely populated; blanks
+  are expected, not defects.

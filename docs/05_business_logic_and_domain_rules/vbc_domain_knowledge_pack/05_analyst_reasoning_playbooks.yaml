@@ -1,0 +1,289 @@
+file: 05_analyst_reasoning_playbooks.yaml
+purpose: >
+  How a VBHC analyst actually reasons. These are the chunks that convert an LLM from a fluent
+  describer of healthcare data into something that behaves like a sceptical colleague.
+
+nodes:
+
+  - id: KB-PLY-001
+    title: "The prior: data changed before reality changed"
+    kind: heuristic
+    layer: cross
+    confidence: conventional
+    volatile: false
+    body: >
+      When a metric moves, the experienced analyst's first hypothesis is never clinical. Human
+      health at population scale moves slowly; pipelines move overnight. So the ordered prior is:
+      pipeline change, source change, identity or attribution change, definitional change, then
+      finally real change. This ordering is not cynicism, it is base rates — most sudden movements
+      in a VBHC dashboard are artifacts. Two exceptions where the ordering flips: a movement
+      concentrated in a small, clinically coherent subgroup with a plausible mechanism (a facility
+      closure, a new drug, a seasonal outbreak), and a movement that appears simultaneously and
+      consistently in independent sources. The agent must state which hypothesis it is testing and
+      why, rather than jumping to a clinical narrative, which is the failure mode LLMs are most
+      prone to because clinical narratives are more fluent to generate.
+    depends_on: [KB-ONT-012]
+
+  - id: KB-PLY-002
+    title: "Playbook: a metric moved — triage sequence"
+    kind: playbook
+    layer: cross
+    decision_type: interpret
+    confidence: conventional
+    volatile: false
+    body: |
+      Run in order and stop when the movement is explained, but record every step attempted.
+        1. Is the movement real in magnitude? Compare against the metric's historical volatility,
+           not against zero. A 6% move on a metric with 8% month-to-month noise is nothing.
+        2. Is the period mature? Check paid-through date and claims lag. Most "declines" in
+           recent-month cost are immaturity. (KB-ONT-011)
+        3. Did the denominator move? Decompose numerator and denominator separately. A rate change
+           with a stable numerator is a population problem, not a clinical one.
+        4. Did the population change? Check member months, attribution version, identity merges,
+           and enrollment file behaviour. (KB-IDN-008, KB-ONT-003)
+        5. Did the pipeline change? Query the run manifest and change log for the affected window:
+           new source, schema drift, rule version change, reference data version change,
+           backfill, or a re-run.
+        6. Did the definition change? Measure specification year, value set version, code set
+           annual update, grouper version.
+        7. Is it concentrated? Decompose by facility, provider, TIN, product, region, and member
+           cohort. Artifacts concentrate on a source or a facility; real change concentrates on a
+           clinical or geographic subgroup.
+        8. Only now, form a clinical hypothesis, and state what evidence would falsify it.
+      The output of this playbook is never "cost went up". It is "cost went up, driven by X,
+      confirmed by Y, and here is what I could not rule out".
+    depends_on: [KB-PLY-001]
+
+  - id: KB-PLY-003
+    title: "Playbook: can I trust this number enough to publish it?"
+    kind: playbook
+    layer: cross
+    decision_type: promote
+    confidence: conventional
+    volatile: false
+    body: |
+      Before any number leaves the platform toward a human decision:
+        - Grain: do I know the grain of every table in the lineage, and is uniqueness enforced?
+        - Denominator: is it member months or members, and does it match the metric definition?
+        - Period: service date or paid date, and what is the paid-through date?
+        - Population: which attribution version, which programme, which performance year?
+        - Exclusions: are the required denominator exclusions applied, and which spec version?
+        - Completeness: which sources contributed, and was any feed late or short this cycle?
+        - Comparability: has anything in the lineage changed since the prior period this will be
+          compared against? If yes, the comparison is invalid until restated.
+        - Reproducibility: can I regenerate this exact number in six months at audit?
+      A number failing reproducibility may still be used operationally but must never be used for
+      settlement, submission, or an external commitment. The agent should apply this checklist
+      silently and surface only the failures, with the specific gap named.
+    depends_on: [KB-PLY-002]
+
+  - id: KB-PLY-004
+    title: "Playbook: onboarding a new source feed"
+    kind: playbook
+    layer: landing
+    decision_type: define
+    confidence: conventional
+    volatile: false
+    body: |
+      The questions an analyst asks before a single row is loaded, in the order that saves the
+      most rework:
+        1. What business question does this feed answer that we cannot answer today? If there is
+           no answer, do not onboard it.
+        2. What is the grain, and what is the natural key at that grain?
+        3. Which arrival archetype is it? (KB-SRC-008) This determines the merge strategy and
+           nothing can be designed until it is known.
+        4. What is the population scope — everyone, or a subset? A subset feed silently biases
+           every metric it touches unless the scope is modelled explicitly.
+        5. What identifiers does it carry, and can they resolve to the identity spine? A feed with
+           only local MRNs needs a matching strategy before it has value.
+        6. What is the lag between event and delivery, and is it stable?
+        7. Does it restate history? If yes, bitemporal storage is mandatory.
+        8. What overlaps with existing sources, and what is the precedence rule where they
+           disagree? (KB-ODS-003)
+        9. What is the PHI classification and the minimum necessary scope?
+        10. Who at the source do we contact when it breaks, and what is the SLA?
+      Question 8 is the one most often skipped and most expensive to retrofit, because by the time
+      the disagreement is noticed the metrics are already in front of executives.
+    depends_on: [KB-SRC-008]
+
+  - id: KB-PLY-005
+    title: "Playbook: cohort construction"
+    kind: playbook
+    layer: silver_ods
+    decision_type: define
+    confidence: conventional
+    volatile: false
+    body: |
+      Every cohort is four explicit decisions, and ambiguity in any one makes results
+      irreproducible:
+        Population base   attributed members, enrolled members, or all members with any claim?
+                          These differ by large margins and are routinely conflated.
+        Continuity        what enrollment continuity is required, and how are gaps treated? A
+                          common convention allows one gap of up to a set length; whichever is
+                          used must be stated, because it changes the denominator materially.
+        Anchor            what event or date defines entry — first diagnosis, index admission,
+                          enrollment start, or the start of the measurement period?
+        Look-back / follow-up   how much history is required to classify someone, and is that
+                          history actually available? Requiring 12 months of look-back silently
+                          excludes every newly enrolled member, which biases the cohort toward
+                          the stable and typically healthier.
+      The agent must refuse to compute a cohort metric until all four are specified, and must
+      never silently default them. When a user gives an underspecified request, the correct
+      behaviour is to state the assumption it would use and ask for confirmation of that one
+      assumption, not to ask four questions.
+    depends_on: [KB-ONT-003]
+
+  - id: KB-PLY-006
+    title: "Playbook: reconciling two numbers that should agree"
+    kind: playbook
+    layer: cross
+    decision_type: reconcile
+    confidence: conventional
+    volatile: false
+    body: |
+      Someone reports a different number than the platform. The analyst decomposes the difference
+      rather than defending the number. Checked in order, because each explains more variance
+      than the next:
+        1. Different period basis (service vs paid, calendar vs performance year).
+        2. Different paid-through date — the same query run two weeks apart gives different
+           answers and both are correct.
+        3. Different population (attribution version, continuity requirement, product line).
+        4. Different amount field (allowed vs paid vs billed).
+        5. Different exclusions (spec version, hospice, ESRD, dual status, out-of-area).
+        6. Different deduplication or version resolution of adjusted claims.
+        7. Different reference data version (HCC model, value set, grouper).
+        8. Genuine data difference — one side has a source the other lacks.
+      Reconciliation output must be an itemised bridge from their number to ours with a dollar or
+      count on each line, not a verdict. A bridge that leaves an unexplained residual above a
+      small threshold is an open finding, not a rounding difference.
+    depends_on: [KB-PLY-003]
+
+  - id: KB-PLY-007
+    title: "Worked scenario: readmission rate improves suddenly"
+    kind: playbook
+    layer: cross
+    confidence: conventional
+    volatile: false
+    body: >
+      Observed: 30-day all-cause readmission drops from 15.8% to 11.2% in one month. Analyst
+      reasoning: a 4.6 point single-month improvement is clinically implausible at population
+      scale, so this is an artifact until proven otherwise. Readmission requires linking an index
+      discharge to a subsequent admission, so the defect is likely in the linkage, not the
+      counting. Test the numerator first: are subsequent admissions being found? Check whether
+      discharge disposition went null (transfers and deaths are excluded from the denominator, so
+      a null disposition can move it either way), whether a facility stopped sending ADT, whether
+      identity fragmentation increased so the readmission attaches to a different surrogate key,
+      and whether the 30-day window crosses a period boundary that a recent partition change now
+      truncates. Then test maturity: readmissions occurring in the second half of the window may
+      not have arrived yet, so the most recent month is structurally understated in any
+      claims-based readmission metric. Only if all of these clear does an improvement in
+      transitional care become the candidate explanation, and even then it should show as a
+      concentrated effect in the facilities where the programme ran.
+    depends_on: [KB-PLY-002, KB-IDN-001]
+
+  - id: KB-PLY-008
+    title: "Worked scenario: PMPM rises with flat utilisation"
+    kind: playbook
+    layer: cross
+    confidence: conventional
+    volatile: false
+    body: >
+      Observed: PMPM up 9% year over year while admits/1000 and ED visits/1000 are flat. Because
+      PMPM is dollars over member months, and utilisation is stable, the movement is in unit cost,
+      case mix, denominator, or the amount field. Decompose: first check member months, since a
+      shrinking denominator raises PMPM with no change in spend at all — this happens when
+      enrollment file processing drops spans or when an attribution restatement removes members
+      retroactively while their claims remain. Second, check whether the amount basis changed
+      (allowed vs paid) or whether benefit design changed, moving cost share. Third, check unit
+      cost by service category; a contract renegotiation or a site-of-care shift from office to
+      hospital outpatient raises cost with identical utilisation counts. Fourth, check pharmacy
+      separately, since a single high-cost specialty drug can move total PMPM without touching
+      medical utilisation. Fifth, check case mix via RAF; a sicker attributed population costs
+      more legitimately. Only after these is "cost growth" a finding, and it should always be
+      reported decomposed rather than as a single percentage.
+    depends_on: [KB-ONT-010, KB-MET-002]
+
+  - id: KB-PLY-009
+    title: "Worked scenario: quality gap closure rate jumps"
+    kind: playbook
+    layer: cross
+    confidence: conventional
+    volatile: false
+    body: >
+      Observed: a screening measure's compliance rate jumps 12 points between refreshes. Gap
+      closure is a numerator-over-denominator with an enormous number of ways to move for
+      non-clinical reasons. Check the denominator first: did an eligibility or continuous
+      enrollment rule change, did the age window shift with the measurement period rollover, or
+      did denominator exclusions begin applying that were previously missing? Then the numerator:
+      did a supplemental clinical data feed onboard or backfill, which is the single most common
+      cause of a genuine step change in ECDS-reported measures? Did the value set version update
+      and add codes? Did a lab feed begin mapping to LOINC where it previously failed? Then the
+      measurement period: comparing a partial current year against a complete prior year always
+      shows the current year as worse, and correcting that comparison mid-cycle produces an
+      apparent jump. A rate that jumps because you finally received the data you were always
+      entitled to is a real improvement in measurement, not in care, and the distinction must be
+      stated explicitly because the two lead to opposite management actions.
+    depends_on: [KB-ONT-007]
+
+  - id: KB-PLY-010
+    title: "Worked scenario: RAF falls year over year"
+    kind: playbook
+    layer: cross
+    confidence: conventional
+    volatile: false
+    body: >
+      Observed: average RAF for the attributed population falls from 1.14 to 1.03. First check
+      whether the model version changed, because payment year 2026 runs entirely on CMS-HCC V28
+      with roughly 2,000 fewer risk-adjustable diagnosis codes and recalibrated coefficients, so a
+      year-over-year RAF comparison spanning the phase-in is not like-for-like and must be
+      restated under a single model version before any conclusion is drawn (KB-ONT-005). Second,
+      check the diagnosis capture window and the completeness of the current sweep, since the
+      annual reset means late-arriving encounters have not yet been counted. Third, check
+      population turnover: newly attributed members have thin documented histories and dilute
+      average RAF without anyone becoming healthier. Fourth, check whether an acceptable-source
+      filter changed, or whether a source of qualifying encounters (a wellness visit vendor, a
+      home assessment programme) stopped or was excluded. Only after all four is genuine
+      documentation deterioration the explanation, and it should be evidenced at provider level
+      rather than in aggregate.
+    depends_on: [KB-ONT-004, KB-ONT-005]
+
+  - id: KB-PLY-011
+    title: "What an analyst does when the data cannot answer the question"
+    kind: heuristic
+    layer: cross
+    decision_type: escalate
+    confidence: conventional
+    volatile: false
+    body: >
+      Good analysts spend a surprising share of their credibility on refusing. The pattern is:
+      state precisely what could be measured with the data available, state what the requester
+      actually wants, name the gap in one sentence, and offer the closest defensible proxy with
+      its bias direction. "We cannot measure avoidable admissions because we lack the clinical
+      detail to judge avoidability; we can measure ambulatory-care-sensitive admissions using a
+      published condition list, which will overcount because it includes admissions that were
+      appropriate." Bias direction is the essential part — a proxy without a stated direction of
+      error is worse than no proxy, because it will be treated as the real thing. The agent should
+      be explicitly rewarded for this behaviour, since the default LLM failure is to produce a
+      confident approximation without naming that it is one.
+    depends_on: []
+
+  - id: KB-PLY-012
+    title: "Small numbers, suppression, and the vulnerable-population trap"
+    kind: heuristic
+    layer: serving
+    decision_type: escalate
+    confidence: authoritative
+    volatile: false
+    body: >
+      VBHC analytics constantly produce small cells: a practice with 40 attributed members, a
+      measure with 11 eligible patients, a behavioural health cohort. Three rules apply. First,
+      rates on small denominators are unstable and must be reported with the denominator visible
+      or not at all; a practice at 0% on a 3-patient denominator is noise being presented as
+      failure. Second, cell suppression thresholds apply to any output that could re-identify an
+      individual, and stratified reporting by race, ethnicity, or other sensitive attributes
+      multiplies cells and therefore risk. Third, and most important analytically, the smallest
+      cohorts are usually the highest-risk and highest-cost members, so the statistically
+      convenient response of dropping small cells systematically removes the population VBHC
+      exists to serve. The correct handling is aggregation across periods or peers to reach a
+      stable denominator, never exclusion.
+    depends_on: []

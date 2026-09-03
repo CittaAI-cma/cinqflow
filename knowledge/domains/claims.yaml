@@ -1,0 +1,84 @@
+version: 1
+updated: "2026-09-03"
+kind: domain_knowledge
+domain: claims
+
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/"
+  - "docs/05_business_logic_and_domain_rules/BCDA_Handling_Claim_Adjustments_and_Claim_Status.docx"
+  - "docs/03_data_source_schemas/claims/"
+
+what_it_answers: >
+  What care was delivered, what it cost, and who delivered it. Claims are the basis of total
+  cost of care, utilisation and most risk adjustment, and they are billing artifacts rather
+  than clinical facts.
+
+core_entities:
+  claim_header: "one row per adjudicated claim per version - a billing event"
+  claim_line: "one row per service line within a claim"
+  claim_diagnosis: "one row per diagnosis, ordered; principal, admitting and secondary are roles, not separate tables"
+  claim_procedure: "header-level procedures, distinct from the procedure code on a line"
+  claim_provider: "one row per provider role per claim or line (billing, rendering, attending, operating, referring, facility)"
+  adjudication: "one row per amount per category - submitted, allowed, paid, copay, deductible, coinsurance"
+  pharmacy_claim: "one row per dispense; never mixed with medical claims"
+
+claim_settings:
+  IP: "Institutional inpatient. Carries admission and discharge dates, DRG, bill type, discharge status."
+  OP: "Institutional outpatient. Revenue codes identify the department; the claim type alone will not tell you it was an ED visit."
+  PROF: "Professional. Place of service and CPT/HCPCS identify the setting."
+  DENTAL / VISION: "Separate benefit, separate file, usually a separate contract."
+  RX: "Pharmacy, always on pharmacy_claim with claim_type RX."
+
+version_and_lineage:
+  principle: "A claim is not a row, it is a chain of versions. Bronze keeps every version; Silver resolves to the current one; the difference between original and adjusted is itself an analytic asset."
+  cclf_model:
+    field: CLM_ADJSMT_TYPE_CD
+    values: { "0": "Original claim", "1": "Cancellation claim", "2": "Adjustment claim" }
+    final_action: "Match each cancellation with an original or an adjustment and remove the matched pair; what remains is final action."
+  bcda_fhir_model:
+    principle: "FHIR carries no adjustment type. Lineage is expressed through EOB.related.relationship and must be derived."
+    derivation:
+      no_related_claim: ORIGINAL
+      prior: ADJUSTMENT
+      replaces: ADJUSTMENT
+      replacedby: CANCELLATION
+      status_cancelled: CANCELLED
+    warning: "EOB.status is operational state (active, cancelled, entered-in-error). Lineage is relationship. They are not the same thing and conflating them double counts."
+  consequence: "Any count of claims taken from Bronze is a count of claim versions, and must be described as such whenever it is shown to a person."
+
+financial_vocabulary:
+  billed: "Provider list price. Analytically almost meaningless; never trend it."
+  allowed: "Contractually permitted amount. The correct basis for cost of care."
+  paid: "What the payer actually paid. Plan liability, not cost of care."
+  member_cost_share: "Deductible plus copay plus coinsurance. Allowed = paid + cost share."
+  capitation: "Fixed prepayment produces encounters without dollars; cost analytics on capitated services needs shadow pricing or it understates."
+
+completeness_and_lag:
+  principle: "Claims arrive over months, not days. Professional completes fastest; inpatient, SNF, behavioural health and out-of-network are slowest."
+  consequence: "The most recent three to six months of any cost or utilisation metric are understated, and the understatement decays predictably."
+  requirement: "Every cost fact carries a date of service and a paid-through date, and no cost metric is served without the paid-through date attached."
+  failure_mode: "A dashboard showing cost declining in recent months when the period is only immature."
+
+setting_inference:
+  principle: "Care setting is inferred, never given, and the inference rule is a governed artifact."
+  inputs: [claim_type, bill_type, revenue_code, place_of_service, DRG]
+  examples:
+    - "An inpatient admission is identified from claim type, bill type and revenue codes together."
+    - "Observation is outpatient by billing and inpatient by experience; report it separately."
+    - "ED visits that lead to admission are conventionally excluded from ED counts and included in admissions; whichever convention is used must be consistent everywhere."
+
+sources_at_cinqcare:
+  cclf: "CMS pipe-delimited monthly files, CCLF0 through CCLF9 plus CCLFA and CCLFB, with a three-month run-out after the performance year. Header and detail arrive in separate files, so orphan detail across a month boundary is expected."
+  bcda: "The same Medicare content as FHIR R4 NDJSON bulk export - ExplanationOfBenefit, Patient, Coverage. Weekly for adjudicated claims. Where both CCLF and BCDA are available, run both and reconcile; disagreement between them is a high-signal alarm."
+  payer_files: "Fidelis delivers header and line files per setting (IP, OP, Prof, Dental, Vision) plus pharmacy, membership and member PCP, monthly, as full loads."
+
+failure_modes:
+  - id: adjustment_double_count
+    description: "Adjusted claims counted alongside their originals inflates cost with no change in care."
+    detection: "Resolve by claim control number plus adjustment sequence, keeping the latest non-voided version. A void with no replacement means the service did not happen financially."
+  - id: orphan_lines
+    description: "Lines whose header has not yet arrived are dropped instead of retained."
+    detection: "Retain and count orphans; they resolve next cycle."
+  - id: immature_period_reported_as_improvement
+    description: "Recent months look cheap because claims have not completed."
+    detection: "Paid-through date on every cost fact; label provisional figures."

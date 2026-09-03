@@ -1,0 +1,6 @@
+version: 1
+updated: "2026-09-03"
+kind: feed_inventory
+source_system: cmp_1598
+feeds:
+  - { feed: patient_demographics, domain: enrollments, status: registered, contract_file: "sources/cmp_1598__patient_demographics.yaml", grain: "one row per patient account per primary insurance", cadence: on_demand, delivery: manual_upload, columns: 29, natural_key: [Account, "Primary Insurance"] }

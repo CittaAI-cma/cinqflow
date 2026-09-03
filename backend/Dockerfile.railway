@@ -1,0 +1,35 @@
+# Railway-only image: api + worker combined (see backend/railway/start.sh) and
+# knowledge/ baked in as a one-time seed for an empty volume (see
+# backend/railway/bootstrap.sh). Build context is the REPO ROOT, not
+# backend/ - that's the only way a Dockerfile can reach ../knowledge at all
+# (Docker refuses COPY from outside its build context). Local dev keeps using
+# plain backend/Dockerfile with knowledge/ bind-mounted live instead of baked
+# in; this file exists only for the Railway deployment target.
+#
+# Railway service setting this pairs with: Root Directory = repository root,
+# Dockerfile path = backend/Dockerfile.railway.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_NO_INTERACTION=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN pip install --no-cache-dir "poetry==2.4.1"
+
+WORKDIR /app/backend
+
+COPY backend/pyproject.toml backend/poetry.lock ./
+RUN poetry install --no-root
+
+COPY backend/ .
+RUN poetry install
+
+# Reference copy only - the running app reads CINQFLOW_KNOWLEDGE_ROOT on the
+# volume (bootstrap.sh), never this path directly.
+COPY knowledge/ /app/knowledge-seed/
+
+RUN chmod +x railway/start.sh railway/bootstrap.sh
+
+EXPOSE 8000
+CMD ["railway/start.sh"]

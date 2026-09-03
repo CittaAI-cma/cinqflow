@@ -1,0 +1,43 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: cms_aco_reach_d0284
+volatile: true
+review_by: "2027-01-31"
+organization:
+  payer: "Centers for Medicare and Medicaid Services, Innovation Center"
+  programme: "ACO REACH"
+  entity: "CINQCARE ACO REACH LLC"
+  aco_id: D0284
+contract:
+  id: cms_aco_reach_d0284
+  aco_type: "Standard ACO"
+  risk_option: "Global, 100% of shared savings and losses"
+  payment_mechanism: "Primary Care Capitation with the Advanced Payment Option; Enhanced Primary Care Capitation elected at 7%"
+  alignment: "Prospective Plus Alignment"
+  first_performance_year: 2023
+  service_areas_py2024: [CA, DC, GA, IL, MD, MI, NJ, NY, TN, VA]
+  lives_client_tracker: 6973
+  lives_cms_py2024: 10607
+  lives_note: "The client tracker and the CMS public use file disagree because they are different vintages and different definitions. Do not reconcile them silently."
+  wave: "Wave 1 - LIVE"
+  priority: 2
+py2024_published_results:
+  final_benchmark: 150054231.40
+  total_cost_of_care: 150474686.20
+  gross_savings: 5417367.66
+  normalised_risk_score: 1.17563887
+  quality_score: 0.52
+  source: "CMS ACO REACH Financial and Quality Results public use file, performance year 2024"
+model_end:
+  date: "2026-12-31"
+  consequence: >
+    ACO REACH ends after performance year 2026 and does not automatically continue. A hard
+    discontinuity in benchmark methodology, attribution rules and data feeds follows, so
+    programme, performance year and rule version must be part of the key on every financial and
+    attribution fact rather than assumed constant.
+ownership:
+  enrollment: { analyst: Karthik, engineer: "Khaja/Vinay", business_uat: Christine }
+  claims_cclf: { analyst: Syed, engineer: Monica }
+  claims_bcda: { analyst: "Ashwin/Saanie", engineer: Bhargavi }
+silver_raw_source_system: ACO_REACH_D0284

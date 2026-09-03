@@ -1,0 +1,21 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: molina_ny
+organization:
+  payer: "Molina Healthcare of New York"
+  sender_prefix: "MHI, Molina Healthcare Inc."
+  products: ["Medicaid Managed Care", "Molina Healthcare PLUS (HARP)", "Essential Plan", "Child Health Plus"]
+  note: "Since 1 April 2023 New York Medicaid managed care pharmacy benefits are carved out to NYRx, so pharmacy will not appear in Molina claims for these populations."
+contract: { id: molina_ny, risk_arrangement: "Gain Share", lives: 6463, wave: "Wave 3 - last", priority: 11 }
+populations:
+  - { label: "NYCINQ- Down - HARP", region: downstate, product: HARP }
+  - { label: "NYCINQ- Down - MEDICAID", region: downstate, product: Medicaid }
+  - { label: "NYCINQ- Up - MEDICAID", region: upstate, product: Medicaid }
+  - { label: "NYCINQUpstate_HARP", region: upstate, product: HARP }
+ownership: { analyst: Raveena, engineer: Khaja, business_uat: TBD, claims_analyst: Ashwin }
+silver_raw_source_system: MOLINA
+semantics:
+  what_it_is: "A member-month enrollment history restated in full each delivery, not a snapshot."
+  program_identifiers: "Program_ID, Plan_ID and Program_Description travel as a triple, for example QMT2HPQ0166 / QMT2BP0215 / MHNY HARP."
+  rate_cells: "Ratecode carries the New York capitation rate cell in its leading four digits, which encode age, sex and aid category, plus a regional suffix."

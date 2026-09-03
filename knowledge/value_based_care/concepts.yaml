@@ -1,0 +1,92 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+confidence: authoritative
+volatile: true
+review_by: "2027-03-31"
+
+# What value-based care is measuring and how the contracts CINQCARE holds actually settle.
+grounded_in:
+  - "docs/05_business_logic_and_domain_rules/vbc_domain_knowledge_pack/01_domain_ontology.yaml"
+  - "docs/05_business_logic_and_domain_rules/CINQCARE_VBC_Contract_MindMap.html"
+  - "https://www.cms.gov/priorities/innovation/innovation-models/aco-reach"
+  - "https://www.cms.gov/Medicare/Medicare-Fee-for-Service-Payment/sharedsavingsprogram/ (participation options)"
+  - "https://www.health.ny.gov (NYS Value Based Payment roadmap)"
+
+the_four_quantities: >
+  Every value-based question reduces to four things measured over an attributed population for
+  a defined period: who was mine (attribution), how sick were they (risk), what did they cost
+  (total cost of care), and did they get good care (quality). Settlement compares actual cost
+  against a risk-adjusted benchmark, gated by quality performance. This is why the domain is
+  unusually paranoid about denominators: in fee-for-service a missing claim costs one row, in
+  value-based care a missing member changes the denominator that determines shared savings.
+
+risk_arrangements:
+  full_risk:
+    means: "The organisation bears the total cost of care against a benchmark, up and down."
+    at_cinqcare: [fidelis_ny, cms_aco_reach_d0284, uhc_md, optum_ny, centene_il]
+    lives: "approximately 118,000 of roughly 151,400"
+  shared_savings:
+    means: "Upside participation, and downside in two-sided tracks."
+    at_cinqcare: [cms_mssp]
+  gain_share:
+    means: "Upside participation without downside."
+    at_cinqcare: [molina_ny]
+  mso_partial_risk:
+    means: "Management services with a small at-risk subset."
+    at_cinqcare: [centene_ga]
+  engagement_only:
+    means: "Outreach and assessment with no financial risk. Eligibility and attribution rules are weaker by design and rules written for a risk roster do not apply."
+    at_cinqcare: [optum_ga, wellpoint_dc]
+
+aco_reach:
+  status: "CMS Innovation Center model running 1 January 2023 through performance year 2026. It does not automatically continue."
+  aco_types:
+    standard: "Experienced serving Original Medicare patients. CINQCARE's D0284 is a Standard ACO."
+    new_entrant: "Has not traditionally served Original Medicare; relies initially on voluntary alignment."
+    high_needs: "Serves Original Medicare patients with complex needs, including dual eligibles."
+  risk_options:
+    professional: "50% of savings and losses; Primary Care Capitation only."
+    global: "100% of savings and losses; Primary Care Capitation or Total Care Capitation. CINQCARE elected Global."
+  payment_mechanisms:
+    primary_care_capitation: "A risk-adjusted monthly payment for primary care services. CINQCARE elected the Enhanced option at 7%."
+    total_care_capitation: "A monthly payment for all covered services."
+    advanced_payment_option: "An additional prospective payment mechanism, elected by CINQCARE."
+  py2026_changes:
+    quality_withhold: "raised from 2% to 5%, all pay-for-performance"
+    global_risk_corridor: "first corridor narrowed from 25% to 10%"
+    benchmark_blend: "60% historical and 40% regional for Standard ACOs, previously 55/45"
+    risk_score_constraints: "a symmetric 3% cap for 2022 to 2026, a model-wide coding intensity factor ceiling of 1.01, and a new asymmetric 3% growth cap for 2019 to 2026"
+  pipeline_consequence: >
+    A participant faces a hard year-end 2026 discontinuity in benchmark methodology, attribution
+    rules and data feeds. Programme, performance year and rule version belong together as a
+    composite key on every financial and attribution fact, so results under different programmes
+    can coexist without silently blending.
+
+mssp:
+  agreement: "At least five years."
+  tracks:
+    basic: "A glide path with levels A to E. A and B are upside only at 40% shared savings; C, D and E are two-sided at 50% savings and 30% losses, with loss limits of 1%, 2% and 4% of the updated benchmark."
+    enhanced: "Two-sided at 75% shared savings and 40 to 75% losses, with a 15% loss limit."
+  note: "Levels C through E and ENHANCED require a repayment mechanism. Level E and ENHANCED qualify as Advanced Alternative Payment Models."
+
+ny_vbp_roadmap:
+  note: "New York classifies Medicaid value-based arrangements by level; CINQCARE's Medicaid contracts sit within this framework."
+  levels:
+    level_0: "Fee for service only. Not counted as a move away from fee-for-service incentives."
+    level_1: "Fee for service with retrospective reconciliation, upside only. At least 40% of potential savings to the contractor if quality goals are met."
+    level_2: "Fee for service with retrospective reconciliation, upside and downside. At least 20% of potential losses to the contractor, with a shared-loss cap of 3% of the target budget in year one and 5% thereafter."
+    level_3: "Prospective payment with full responsibility for savings and losses."
+
+settlement_mechanics:
+  benchmark: "The risk-adjusted expected spend the contract compares actual spend against. Methodology is programme-specific, so a variance computed under one programme's methodology is meaningless under another."
+  discount: "ACO REACH applies a discount to the benchmark before savings are computed."
+  quality_gate: "Quality performance gates the payout. In ACO REACH PY2026 the withhold is 5%, split evenly across five measures."
+  truncation: "Most methodologies truncate high-cost outliers. Omitting truncation overstates variance."
+  run_out: "The settlement view uses a defined claims run-out period, so in-year variance is always provisional and must be labelled as such."
+
+analyst_consequences:
+  - "Do not model programme rules as immutable dimensions. Programme, performance year and rule version are part of the key."
+  - "A risk-score change moves benchmark variance without any change in spend."
+  - "Attribution lists are versioned and restated quarterly, so any metric computed against current attribution is not comparable to the same metric last quarter unless the version is pinned."
+  - "An organisation with only partial network visibility systematically undercounts cross-facility events such as readmissions."

@@ -1,0 +1,167 @@
+version: 1
+updated: "2026-09-03"
+
+# Loader-facing feed contract. YamlKnowledgeProvider.get_source() reads this exact path;
+# ContextBuilder injects it whole at file understanding and mapping. Richer organisational
+# knowledge for this source is in sources/optum_ga/.
+#
+# Columns, row counts, null rates and value shapes below were read from the de-identified
+# sample and its profile report, not inferred.
+grounded_in:
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/5.Optum GA/"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/5.Optum GA/Optum GA _CINQ_HouseCalls_GA Profile Report.pdf"
+
+source_system: optum_ga
+feed: housecalls_roster
+domain: enrollments
+payer: Optum (UnitedHealthcare) HouseCalls
+population: CINQ_HouseCalls_GA
+contract: optum_ga
+line_of_business: "Medicare Advantage and D-SNP (15 UnitedHealthcare plan names, mostly GA Dual Complete)"
+file_pattern: "^\\d{4}-\\d{2}-\\d{2}_CINQ_HouseCalls_GA\\.xlsx$"
+cadence: monthly
+delivery: manual_upload
+arrival_archetype: full_snapshot
+
+format:
+  container: "XLSX workbook, single sheet Sheet1"
+  header: row 1
+  cells: "every cell is stored as text, including dates - the reader must parse strings, never Excel serials"
+  trailer: none
+
+business_date:
+  source: file name prefix
+  format: "YYYY-MM-DD"
+  meaning: extract date
+  example: "2026-03-16_CINQ_HouseCalls_GA.xlsx = extracted 16 March 2026"
+
+grain: one row per member on the outreach list (full snapshot)
+natural_key: [Member_Client_ID]
+secondary_identifiers: [MBI, Subscriber_ID, Household_Ref]
+
+# Observed in the de-identified sample (3,814 rows, 30 columns).
+sample_observed:
+  rows: 3814
+  columns: 30
+  blank_rows: 0
+  rows_with_wrong_field_count: 0
+
+# The 30 columns as they actually arrive, in file order.
+expected_columns:
+  - Member_Client_ID
+  - MBI
+  - Subscriber_ID
+  - Member_First_Name
+  - Member_Middle_Name
+  - Member_Last_Name
+  - DOB
+  - Gender
+  - Spoken_Language
+  - Member_Address_Line_1
+  - Member_Address_Line_2
+  - Member_City
+  - Member_State
+  - Member_Zip
+  - Member_County_Name
+  - Member_Phone
+  - Member_Email
+  - DNC_IND
+  - PCP_NPI
+  - PCP_TIN
+  - PCP_Name
+  - Insured_Plan_Effective_Date
+  - Insured_Plan_Termination_Date
+  - Plan_Name
+  - Last_Attempted_Date
+  - Current_Status
+  - Current_SubStatus
+  - Slot_Start_Date
+  - Visit_Type
+  - Household_Ref
+
+# Per-column facts the profiler measured. `null_pct` counts empty strings and literal
+# null tokens. `phi` marks member-identifying columns (HIPAA Safe Harbor).
+columns:
+  - { name: Member_Client_ID, type: string, null_pct: 0.0, distinct: 3814, phi: true }
+  - { name: MBI, type: string, null_pct: 0.0, distinct: 3814, phi: true }
+  - { name: Subscriber_ID, type: int, null_pct: 0.0, distinct: 3814, phi: true }
+  - { name: Member_First_Name, type: string, null_pct: 0.0, distinct: 564, phi: true }
+  - { name: Member_Middle_Name, type: string, null_pct: 19.2, distinct: 18, phi: true }
+  - { name: Member_Last_Name, type: string, null_pct: 0.0, distinct: 861, phi: true }
+  - { name: DOB, type: date:YYYY-MM-DD, null_pct: 0.0, distinct: 3327, phi: true }
+  - { name: Gender, type: string, null_pct: 0.0, distinct: 2, phi: true }
+  - { name: Spoken_Language, type: string, null_pct: 0.0, distinct: 5, phi: false }
+  - { name: Member_Address_Line_1, type: string, null_pct: 0.0, distinct: 3812, phi: true }
+  - { name: Member_Address_Line_2, type: string, null_pct: 91.9, distinct: 265, phi: true }
+  - { name: Member_City, type: string, null_pct: 0.0, distinct: 3375, phi: true }
+  - { name: Member_State, type: string, null_pct: 0.0, distinct: 3, phi: false }
+  - { name: Member_Zip, type: int, null_pct: 0.0, distinct: 619, phi: true }
+  - { name: Member_County_Name, type: string, null_pct: 0.0, distinct: 29, phi: true }
+  - { name: Member_Phone, type: string, null_pct: 3.7, distinct: 3671, phi: true }
+  - { name: Member_Email, type: string, null_pct: 67.1, distinct: 1251, phi: true }
+  - { name: DNC_IND, type: string, null_pct: 91.4, distinct: 1, phi: false }
+  - { name: PCP_NPI, type: int, null_pct: 81.5, distinct: 433, phi: false }
+  - { name: PCP_TIN, type: string, null_pct: 81.9, distinct: 359, phi: false }
+  - { name: PCP_Name, type: string, null_pct: 81.5, distinct: 150, phi: false }
+  - { name: Insured_Plan_Effective_Date, type: date:YYYY-MM-DD H:MM:SS, null_pct: 0.0, distinct: 3, phi: false }
+  - { name: Insured_Plan_Termination_Date, type: string, null_pct: 0.0, distinct: 2, phi: false }
+  - { name: Plan_Name, type: string, null_pct: 0.0, distinct: 15, phi: false }
+  - { name: Last_Attempted_Date, type: string, null_pct: 0.1, distinct: 3644, phi: false }
+  - { name: Current_Status, type: string, null_pct: 0.2, distinct: 6, phi: false }
+  - { name: Current_SubStatus, type: string, null_pct: 0.2, distinct: 39, phi: false }
+  - { name: Slot_Start_Date, type: string, null_pct: 97.6, distinct: 64, phi: false }
+  - { name: Visit_Type, type: string, null_pct: 97.6, distinct: 2, phi: false }
+  - { name: Household_Ref, type: int, null_pct: 84.5, distinct: 295, phi: false }
+
+phi_columns:
+  - Member_Client_ID
+  - MBI
+  - Subscriber_ID
+  - Member_First_Name
+  - Member_Middle_Name
+  - Member_Last_Name
+  - DOB
+  - Gender
+  - Member_Address_Line_1
+  - Member_Address_Line_2
+  - Member_City
+  - Member_Zip
+  - Member_County_Name
+  - Member_Phone
+  - Member_Email
+
+# Closed-domain columns and the values observed. A value outside these is DQ-B-07.
+value_domains:
+  Gender: [Female, Male]
+  Member_State: [GA, NJ, AL]
+  DNC_IND: [DNC]
+  Visit_Type: [In Person, Video]
+  Current_Status: [Attempted, Refused, Scheduled, Open, Cancelled, Completed]
+  Spoken_Language: [English, Vietnamese, Korean, Spanish, Russian]
+
+formats:
+  dob: "DOB = YYYY-MM-DD"
+  plan_dates: "Insured_Plan_Effective_Date = YYYY-MM-DD 00:00:00; Insured_Plan_Termination_Date = YYYY-MM-DD 23:59:58.963000 with the open-ended sentinel 9999-12-31 23:59:58.963000 on 98.5% of rows"
+  outreach_dates: "Last_Attempted_Date and Slot_Start_Date = YYYY-MM-DD HH:MM:SS.ffffff, some without the fractional part"
+  phone: "999-999-9999"
+  pcp_tin: "PCP_TIN is a bracketed list string such as [],[999999999] - a member may have several TINs, and the empty first element is normal"
+
+# De-identification artefacts in the SAMPLE ONLY. Never tune a rule or threshold on
+# these; the production feed has a different shape.
+deid_artifacts:
+  - "MBI is faked into a 13-character hyphenated display form (9A9A9-A9-AA99); a real Medicare Beneficiary Identifier is 11 characters with no dashes."
+  - "Member_Client_ID, Subscriber_ID, PCP_NPI and PCP_TIN are hashed; names, address, phone, email and PCP_Name are faked; DOB is date-faked."
+  - "The profile PDF prints 0.0% missing for PCP_NPI, PCP_TIN, PCP_Name, Member_Email and DNC_IND, all of which are substantially empty."
+
+quirks:
+  - "This is an engagement and outreach worklist, not a payer eligibility file. It carries call-attempt state (Current_Status, Current_SubStatus, Last_Attempted_Date) and appointment slots rather than coverage history."
+  - "PCP_NPI, PCP_TIN and PCP_Name are empty for 81.5% of members, so the client's 'member must have a PCP assigned' rule cannot apply here. Recorded as exception EX-001."
+  - The profile report spells the column Current_Substatus; the file header is Current_SubStatus with a capital S.
+  - "Household_Ref groups members in the same household and is populated for only 15.5% of rows."
+
+notes: >
+  HouseCalls is Optum's annual in-home clinical assessment programme, and this roster is the
+  outreach list for it. The contract is engagement only, so no financial risk attaches to these
+  members and the eligibility, attribution and PCP rules that govern a risk roster are the wrong
+  rules to apply. Most of its columns describe outreach state, which the enrollment canonical
+  model has no home for.

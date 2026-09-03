@@ -1,0 +1,182 @@
+version: 1
+updated: "2026-09-03"
+kind: knowledge_manifest
+
+# Inventory of the governed knowledge layer: what each file holds, what it is grounded in,
+# who owns it, and how volatile it is. The runtime reads knowledge only through
+# KnowledgeProvider (backend/src/cinqflow/knowledge/); this manifest is the human and agent
+# index over the same files.
+#
+# TWO SHAPES OF SOURCE KNOWLEDGE, deliberately:
+#   sources/<source_system>__<feed>.yaml   loader-facing feed contract. YamlKnowledgeProvider
+#                                          .get_source() reads exactly this path. Carries the
+#                                          columns, formats and PHI flags the ContextBuilder
+#                                          injects into a prompt.
+#   sources/<source_system>/*.yaml         governed source knowledge for humans and future
+#                                          retrieval: organisation, feeds, delivery, quirks.
+# They do not overlap. The flat file owns the SCHEMA: its column list, types, null rates and
+# PHI flags are generated from the profiled sample, not retyped. The directory owns everything
+# else and points at the flat file rather than restating it, so there is never a second copy of
+# a column list to drift.
+
+owners:
+  canonical: data_steward
+  sources: business_analyst
+  domains: lead_analyst
+  healthcare: lead_analyst
+  value_based_care: lead_analyst
+  mappings: business_analyst
+  transformations: data_engineer
+  dq: data_steward
+  intelligence: platform_owner
+  prompts: platform_owner
+  decisions: business_analyst
+
+confidence_semantics:
+  authoritative: "Traceable to a regulator, standards body or the payer agreement (CMS, NCQA, HL7, X12, NYS DOH). May be asserted with its citation."
+  conventional: "Industry-standard analyst practice with no single authority. Present as 'standard practice is X'."
+  shop_specific: "True only for CINQCARE. Highest operational value, highest staleness risk. Never generalise to another tenant."
+
+files:
+  - path: manifest.yaml
+    covers: "This inventory."
+  - path: glossary.yaml
+    covers: "Term -> canonical target mapping for observed source columns; the only file get_glossary() reads."
+    confidence: shop_specific
+  - path: canonical/enrollment.yaml
+    covers: "Silver Raw enrollment model (members + 4 child tables). Legal mapping targets."
+    grounded_in: ["docs/03_data_source_schemas/enrollment/enrollment_silver_raw_model.sql"]
+    confidence: authoritative
+  - path: canonical/claims.yaml
+    covers: "Silver Raw claims model (9 tables incl. patient and pharmacy_claim)."
+    grounded_in: ["docs/03_data_source_schemas/claims/claims-model-final-raw.xlsx"]
+    confidence: authoritative
+  - path: canonical/adt.yaml
+    covers: "Silver Raw ADT model. Named for the domain because the loader resolves canonical/<domain>.yaml; its single entity is `encounter`."
+    grounded_in: ["docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx"]
+    confidence: authoritative
+  - path: canonical/provider.yaml
+    covers: "Provider and facility reference entities plus the CMS ACO participant list."
+    confidence: conventional
+  - path: canonical/common.yaml
+    covers: "Layers, audit columns, source_system literals, naming conventions, regions, type vocabulary."
+    confidence: shop_specific
+  - path: sources/organizations.yaml
+    covers: "Payers, programmes, contracts, attributed lives, waves, owners."
+    confidence: shop_specific
+    volatile: true
+    review_by: "2026-12-31"
+  - path: sources/source_systems.yaml
+    covers: "Registry of every source system and its feeds, with the loader path for each."
+    confidence: shop_specific
+  - path: "sources/<source_system>__<feed>.yaml"
+    covers: "Loader-facing feed contract: expected columns in order, grain, keys, formats, PHI columns."
+    confidence: shop_specific
+  - path: "sources/<source_system>/{source,feeds,delivery,conventions}.yaml"
+    covers: "Governed source knowledge: the payer and contract, the feed inventory, file-naming and business-date conventions, and the source's quirks and known exceptions."
+  - path: "sources/<source_system>/schema.yaml"
+    covers: "Field semantics and a pointer to the loader-facing contract file. Deliberately does not restate the column list."
+    confidence: shop_specific
+  - path: domains/enrollment.yaml
+    covers: "Enrollment concepts, grain rules, analysis semantics."
+  - path: domains/claims.yaml
+    covers: "Claims concepts: header/line grain, adjudication, adjustment lineage, lag."
+  - path: domains/adt.yaml
+    covers: "ADT event semantics, stay construction, duplicate routes."
+  - path: domains/provider.yaml
+    covers: "Provider identity, TIN affiliation, attribution roles."
+  - path: domains/clinical.yaml
+    covers: "Clinical/EHR data semantics where CINQCARE receives it."
+  - path: domains/quality.yaml
+    covers: "Quality measurement semantics for the contracts CINQCARE holds."
+  - path: domains/risk.yaml
+    covers: "Risk adjustment semantics (HCC, RAF) and their pipeline consequences."
+  - path: healthcare/terminology.yaml
+    covers: "Healthcare terms, synonyms and the acronyms this corpus uses."
+    confidence: authoritative
+  - path: healthcare/identifiers.yaml
+    covers: "Member, provider, claim and facility identifier semantics and shapes."
+    confidence: authoritative
+  - path: healthcare/code_sets.yaml
+    covers: "Code systems, their owners, update calendars and the value sets seen in these feeds."
+    confidence: authoritative
+    volatile: true
+    review_by: "2027-06-30"
+  - path: healthcare/data_types.yaml
+    covers: "Healthcare-specific data shapes: dates, flags, amounts, names, addresses."
+  - path: healthcare/abbreviations.yaml
+    covers: "Acronym expansions, including the ones this corpus leaves undefined."
+  - path: value_based_care/concepts.yaml
+    covers: "VBC contract mechanics: risk arrangements, benchmarks, settlement."
+    confidence: authoritative
+    volatile: true
+    review_by: "2027-03-31"
+  - path: value_based_care/measures.yaml
+    covers: "Quality measure sets in force for CINQCARE's contracts (ACO REACH, MSSP APP Plus, HEDIS, Stars)."
+    confidence: authoritative
+    volatile: true
+    review_by: "2027-06-30"
+  - path: value_based_care/attribution.yaml
+    covers: "Attribution and alignment methods per programme."
+    confidence: authoritative
+  - path: value_based_care/utilization.yaml
+    covers: "Utilisation metric definitions and their pitfalls."
+  - path: value_based_care/cost.yaml
+    covers: "Cost, PMPM, TCOC, IBNR and financial vocabulary."
+  - path: value_based_care/quality.yaml
+    covers: "Quality measurement mechanics: ECDS, supplemental data, gap closure."
+  - path: mappings/patterns.yaml
+    covers: "Reusable source-to-canonical patterns with per-payer aliases."
+  - path: mappings/approved/*.yaml
+    covers: "Approved decision sets, merged by get_approved_mappings(domain). Written by knowledge/export.py at G2."
+  - path: transformations/standard.yaml
+    covers: "Closed vocabulary of executable transforms and field policies."
+    grounded_in: ["backend/src/cinqflow/engine/mapping_spec.py"]
+  - path: transformations/dates.yaml
+    covers: "Every date/timestamp format observed, with its parse_date pattern."
+  - path: transformations/amounts.yaml
+    covers: "Money semantics and adjustment sign normalisation."
+  - path: transformations/codes.yaml
+    covers: "What may be normalised versus what must be preserved."
+  - path: transformations/normalization.yaml
+    covers: "Text, identifier and structure normalisation patterns."
+  - path: dq/severity.yaml
+    covers: "Severity model and the legacy Critical/High/Medium/Low crosswalk."
+  - path: dq/common.yaml
+    covers: "Landing, Bronze, Silver Raw and cross-layer rules for every feed."
+  - path: dq/enrollment.yaml
+    covers: "Enrollment rules incl. the client's own cleanse and DQ rules verbatim."
+  - path: dq/claims.yaml
+    covers: "Claims rules incl. adjustment lineage and financial balance."
+  - path: dq/adt.yaml
+    covers: "ADT rules incl. duplicate routes, conflicts and sequencing."
+  - path: intelligence/insight_types.yaml
+    covers: "Allowed claim kinds and per-screen insight fields."
+  - path: intelligence/confidence.yaml
+    covers: "Confidence bands, evidence weights, penalties, thresholds."
+  - path: intelligence/reasoning_rules.yaml
+    covers: "Always-on and per-screen operating rules for the model."
+  - path: intelligence/escalation.yaml
+    covers: "When the model must stop and hand a decision to a named human."
+  - path: prompts/registry.yaml
+    covers: "Screen -> prompt -> version, and the context slots each assembles."
+  - path: prompts/{file_understanding,bronze_analysis,mapping}.yaml
+    covers: "Per-prompt specification: inputs, context flow, must/must-not, worked examples."
+  - path: decisions/analyst_decisions.yaml
+    covers: "Approved decisions about meaning, keys, constants and precedence."
+    confidence: shop_specific
+  - path: decisions/exceptions.yaml
+    covers: "Feed-level exceptions to governed rules, proposed or approved."
+    confidence: shop_specific
+
+dependencies:
+  - "canonical/*.yaml is the only source of legal mapping targets; mappings/, dq/ and glossary.yaml reference it and never extend it."
+  - "transformations/standard.yaml must stay in step with engine/mapping_spec.py ALLOWED_OPS; the code is authoritative."
+  - "prompts/registry.yaml must stay in step with intelligence/prompts/__init__.py REGISTRY; the code is authoritative."
+  - "sources/<source_system>__<feed>.yaml paths are read by YamlKnowledgeProvider.get_source(); renaming one silently removes it from context."
+
+conventions:
+  extension: ".yaml (the loader globs *.yaml; a .yml file is invisible to it)"
+  no_phi: "No member-level values anywhere in this tree. Column names, shapes, counts and code sets only."
+  no_data: "Uploaded file contents and Bronze rows never enter these files. Data lives in Landing, Bronze and Silver Raw."
+  citations: "Every file names what it is grounded_in. A fact without a source does not belong here."

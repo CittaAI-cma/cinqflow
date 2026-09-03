@@ -1,0 +1,138 @@
+version: 1
+updated: "2026-09-03"
+kind: reference
+
+# Acronym expansions used across this corpus, including the ones the corpus never defines.
+# An acronym in the unknown list must never be silently expanded by the model.
+grounded_in:
+  - "docs/ (client corpus)"
+  - "CMS, NCQA, HL7, X12 and state programme documentation"
+
+programmes_and_payers:
+  ACO: "Accountable Care Organization"
+  REACH: "Realizing Equity, Access, and Community Health"
+  MSSP: "Medicare Shared Savings Program"
+  GPDC: "Global and Professional Direct Contracting, the model ACO REACH replaced"
+  MA: "Medicare Advantage. In this domain never Massachusetts and never moving average"
+  PDP: "Prescription Drug Plan"
+  DSNP: "Dual Eligible Special Needs Plan"
+  HARP: "Health and Recovery Plan (New York)"
+  HH: "Health Home (New York)"
+  HHplus: "Health Home Plus, written HH+"
+  MMC: "Medicaid Managed Care"
+  MLTC: "Managed Long Term Care"
+  CHP: "Child Health Plus (New York)"
+  EP: "Essential Plan (New York)"
+  TANF: "Temporary Assistance for Needy Families"
+  SSI: "Supplemental Security Income"
+  SNA: "Safety Net Assistance"
+  FQHC: "Federally Qualified Health Center"
+  IPA: "Independent Practice Association"
+  MSO: "Management Services Organization"
+  VBP: "Value Based Payment (the New York roadmap term)"
+  VBC: "Value Based Care"
+
+files_and_standards:
+  CCLF: "Claim and Claim Line Feed, the CMS monthly claims files"
+  BCDA: "Beneficiary Claims Data API, the CMS bulk FHIR claims API"
+  ALR: "Assignment List Report (MSSP)"
+  PALMR: "Provider alignment reference report used by the ACO REACH roster"
+  RAP: "Risk adjustment and benchmark reference report (D0284_RAP)"
+  MEXPR: "A CMS ACO REACH reference report named in the contract mind map; contents not described in the corpus"
+  EOB: "ExplanationOfBenefit, the FHIR resource carrying adjudicated claim content"
+  FHIR: "Fast Healthcare Interoperability Resources"
+  NDJSON: "Newline-delimited JSON, the bulk FHIR export format"
+  HL7: "Health Level Seven"
+  ADT: "Admission, Discharge, Transfer"
+  UB04: "The institutional claim form, written UB-04"
+  X12: "The EDI standards body; 837 claim, 835 remittance, 834 enrollment, 270/271 eligibility, 277 claim status"
+
+clinical_and_financial:
+  PMPM: "Per Member Per Month"
+  TCOC: "Total Cost of Care"
+  IBNR: "Incurred But Not Reported"
+  MLR: "Medical Loss Ratio"
+  ALOS: "Average Length of Stay"
+  LOS: "Length of Stay"
+  HCC: "Hierarchical Condition Category"
+  RAF: "Risk Adjustment Factor"
+  CIF: "Coding Intensity Factor"
+  DRG: "Diagnosis Related Group; MS-DRG for Medicare, APR-DRG common in Medicaid"
+  APC: "Ambulatory Payment Classification"
+  EAPG: "Enhanced Ambulatory Patient Group"
+  POA: "Present On Admission"
+  SNF: "Skilled Nursing Facility"
+  ED: "Emergency Department"
+  IP: "Inpatient"
+  OP: "Outpatient"
+  TOC: "Transition of Care"
+  PHN: "Population Health Nurse"
+  DME: "Durable Medical Equipment"
+  SDOH: "Social Determinants of Health"
+  PDC: "Proportion of Days Covered, the adherence measure"
+  AWV: "Annual Wellness Visit"
+  IPPE: "Initial Preventive Physical Examination, the Welcome to Medicare visit"
+  PQEM: "Primary Care Qualified Evaluation and Management services, used for claims-based alignment"
+  ACR: "All-Condition Readmission, a risk-standardised ACO REACH measure"
+  UAMCC: "Unplanned Admissions for Patients with Multiple Chronic Conditions"
+  DAH: "Days at Home for Patients with Complex, Chronic Conditions"
+  TFU: "Timely Follow-Up After Acute Exacerbations of Chronic Conditions"
+  CAHPS: "Consumer Assessment of Healthcare Providers and Systems survey"
+  ECDS: "Electronic Clinical Data Systems, the NCQA reporting method"
+  APP: "Alternative Payment Model Performance Pathway"
+
+identifiers:
+  NPI: "National Provider Identifier"
+  TIN: "Taxpayer Identification Number"
+  EIN: "Employer Identification Number"
+  CCN: "CMS Certification Number, historically the OSCAR number"
+  MBI: "Medicare Beneficiary Identifier"
+  HICN: "Health Insurance Claim Number, the legacy Medicare identifier"
+  CIN: "Client Identification Number, the New York Medicaid member identifier"
+  RIN: "Recipient Identification Number, the Illinois Medicaid member identifier"
+  EMPI: "Enterprise Master Patient Index"
+  MRN: "Medical Record Number"
+  PBP: "Plan Benefit Package"
+  NDC: "National Drug Code"
+  CARC: "Claim Adjustment Reason Code"
+  RARC: "Remittance Advice Remark Code"
+
+platform:
+  ODS: "Operational Data Store"
+  DAG: "Directed Acyclic Graph, an Airflow pipeline"
+  ADF: "Azure Data Factory"
+  SCD2: "Slowly Changing Dimension type 2"
+  CDC: "Change Data Capture. In a clinical sentence CDC is the Centers for Disease Control - disambiguate by context"
+  DQ: "Data Quality"
+  BA: "Business Analyst"
+  SME: "Subject Matter Expert"
+  UAT: "User Acceptance Testing"
+
+# Tokens that appear in CINQCARE file names or columns and are NOT defined anywhere in the
+# corpus or in public sources. The model must carry them as opaque labels and must never
+# invent an expansion.
+unresolved:
+  MWOV:
+    seen_in: "Centene GA Medicaid and Medicare roster file names"
+    note: "Not defined in the corpus or in public Centene material. The Medicare sibling carries a WELL_VISIT column that is NO on every row, which is suggestive of 'members without a visit' but is not confirmation."
+  IL0201633:
+    seen_in: "Centene IL roster file name"
+    note: "A Centene-side roster identifier, most likely the contracted provider group. Not defined in the corpus."
+  CMP_1598:
+    seen_in: "folder label for the practice demographics export"
+    note: "Not explained anywhere in the corpus."
+  CAH_152:
+    seen_in: "Technical architecture enrolment source list, alongside CMP_1598 under Medent"
+    note: "Not explained anywhere in the corpus."
+  dmhmreport:
+    seen_in: "CMP_1598 file name"
+    note: "Plausibly a disease-management or health-management report export from the MEDENT EHR. Unconfirmed."
+  CCS:
+    seen_in: "CMP_1598 file name"
+    note: "Ambiguous. Not the HEDIS Cervical Cancer Screening measure in this context."
+  SegType:
+    seen_in: "Molina enrollment history, always empty"
+    note: "Segment type in Molina's generic template; semantics not stated."
+  Ratecode_suffixes:
+    seen_in: "Molina Ratecode values such as 2205-7580-NY, 2209-7778-LI"
+    note: "The leading four digits are the New York capitation rate cell. The suffixes NY, LI, NM, MH and WR are regional and are not defined in the corpus."

@@ -1,0 +1,637 @@
+/** The only module that talks to the backend. */
+
+import { cache } from "react";
+
+const BASE = process.env.CINQFLOW_API ?? "http://localhost:8000";
+
+export type UploadStatus =
+  | "received"
+  | "profiling"
+  | "profiled"
+  | "interpreting"
+  | "interpreted"
+  | "profile_failed"
+  | "interpret_failed"
+  // Stage 2: the G1 decision and what follows it
+  | "approved"
+  | "rejected"
+  | "landing"
+  | "landed"
+  | "land_failed";
+
+export interface Upload {
+  upload_id: string;
+  filename: string;
+  file_type: string;
+  size_bytes: number;
+  uploader: string;
+  source_system: string;
+  feed: string;
+  domain: string;
+  business_date: string;
+  landing_key: string;
+  fingerprint: string;
+  status: UploadStatus;
+  error: string | null;
+  created_ts: string;
+}
+
+export interface ColumnFacts {
+  name: string;
+  inferred_type: string;
+  null_count: number;
+  distinct_count: number;
+  sample_values: string[];
+  patterns: Record<string, number | boolean>;
+  phi_candidate: boolean;
+}
+
+export interface Profile {
+  profile_id: string;
+  profiler_version: string;
+  profiled_ts: string;
+  facts: {
+    row_count: number;
+    columns: ColumnFacts[];
+    candidate_keys: string[][];
+    duplicate_rows: number;
+    phi_candidates: string[];
+    sheets: { name: string; rows: number }[];
+    sample_rows: Record<string, string>[];
+  };
+}
+
+export interface Claim {
+  kind: "observed_fact" | "governed_knowledge" | "inference" | "recommendation";
+  field: string;
+  value: string;
+  confidence: number;
+  evidence: string[];
+}
+
+export interface Interpretation {
+  interpretation_id: string;
+  version: number;
+  status: string;
+  profile_id: string;
+  created_ts: string;
+  provenance: { prompt: string; model: string; knowledge: string[] };
+  content: { claims: Claim[]; risks: string[]; unknowns: string[] };
+}
+
+export interface Approval {
+  approval_id: string;
+  gate: "G1" | "G2";
+  artifact_type: string;
+  artifact_version: number;
+  decision: "approved" | "rejected";
+  approver: string;
+  note: string | null;
+  decided_ts: string;
+}
+
+export interface RunCounts {
+  records_in: number;
+  records_out: number;
+  quarantined: number;
+  attributed_drops: number;
+}
+
+export interface Run {
+  batch_id: string;
+  upload_id: string;
+  feed: string;
+  /** A batch has one run per kind: the landing that made it, the promotion that mapped it. */
+  kind: "land_bronze" | "promote_silver";
+  /** The approved mapping this run executed. `promote_silver` only. */
+  mapping_version: number | null;
+  state: "received" | "in_progress" | "completed" | "failed";
+  counts: RunCounts | null;
+  balanced: boolean | null;
+  error: string | null;
+  started_ts: string;
+  finished_ts: string | null;
+}
+
+export interface UploadDetail {
+  upload: Upload;
+  profile: Profile | null;
+  interpretation: Interpretation | null;
+  approvals: Approval[];
+  runs: Run[];
+}
+
+export type StageState = "pending" | "running" | "done" | "failed";
+
+/** One LangGraph node of the `interpret_file` graph, as reported by a poll. */
+export interface ProgressStep {
+  node: string;
+  label: string;
+  state: StageState;
+  at_ts: string | null;
+}
+
+/** One leg of the upload's journey. Only the `interpret` stage carries `steps`. */
+export interface ProgressStage {
+  key: "profile" | "interpret" | "gate" | "land";
+  label: string;
+  state: StageState;
+  steps: ProgressStep[] | null;
+}
+
+export interface UploadProgress {
+  upload_id: string;
+  status: UploadStatus;
+  error: string | null;
+  /** Set once the `land_bronze` run exists — as soon as landing starts, not
+   *  only once it finishes. Null before approval and while still queued. */
+  batch_id: string | null;
+  stages: ProgressStage[];
+}
+
+export interface BronzeRows {
+  batch_id: string;
+  table: string;
+  total: number;
+  phi_masked: string[];
+  rows: { row_number: number; record_hash: string; raw_row: Record<string, string> }[];
+}
+
+export interface BronzeProfile {
+  profile_id: string;
+  batch_id: string;
+  bronze_table: string;
+  profiler_version: string;
+  rows_in_batch: number;
+  rows_profiled: number;
+  is_sample?: boolean;
+  facts: Profile["facts"];
+  profiled_ts: string;
+}
+
+export type FieldStatus = "candidate" | "ambiguous" | "unknown" | "invalid";
+
+export interface FieldCandidate {
+  source: string;
+  target: string | null;
+  /** What the column means, independent of whether `target` could be set -
+   * understanding, never a decision. Present regardless of status. */
+  concept: string | null;
+  transform: { op: string; args: Record<string, string> } | null;
+  confidence: number;
+  evidence: string[];
+  status: FieldStatus;
+  rejected_target: string | null;
+  reason: string | null;
+}
+
+export interface MappingProposal {
+  proposal_id: string;
+  batch_id: string;
+  feed: string;
+  domain: string;
+  bronze_profile_id: string;
+  status: "proposed" | "invalid";
+  provenance: { prompt: string; model: string; knowledge: string[] };
+  content: { fields: FieldCandidate[]; notes: string[] };
+  counts?: Record<string, number>;
+  authoritative?: boolean;
+  created_ts: string;
+}
+
+export interface QuarantineRow {
+  row_number: number;
+  mapping_version: number;
+  outcome: string;
+  reasons: { source: string; target: string; rule: string | null; reason: string | null }[];
+  raw_row: Record<string, string>;
+}
+
+export interface BatchQuarantine {
+  batch_id: string;
+  table: string;
+  /** Across the whole batch, not just the returned page. */
+  total: number;
+  by_outcome: Record<string, number>;
+  /** Across the returned page only. */
+  by_rule: Record<string, number>;
+  phi_masked?: string[];
+  rows: QuarantineRow[];
+}
+
+export interface LineageChain {
+  chain: {
+    upload_id: string;
+    fingerprint: string;
+    landing_key: string;
+    batch_id: string;
+    bronze_table: string | null;
+    mapping: { feed: string | null; version: number | null } | null;
+    mapping_version: number | null;
+    silver_table: string | null;
+    /** Every canonical entity this batch wrote, and how many rows each received. */
+    silver_tables: Record<string, number>;
+  };
+  run: Run | null;
+  runs: Run[];
+  promotion: Run | null;
+  approvals: Approval[];
+  gates: { G1: Approval | null; G2: Approval | null };
+}
+
+async function get<T>(path: string): Promise<T> {
+  const response = await fetch(`${BASE}${path}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`${path} returned ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export function listUploads() {
+  return get<{ uploads: Upload[] }>("/api/uploads");
+}
+
+/** `cache()`-wrapped: the run shell (layout) and its step pages each need the
+ *  same upload detail on every request, and without this every one of them
+ *  would be a separate round trip to the API for identical data. */
+export const getUpload = cache(function getUpload(uploadId: string) {
+  return get<UploadDetail>(`/api/uploads/${uploadId}`);
+});
+
+/** Re-enqueues the work a `*_failed` upload failed at. Returns an error
+ *  message rather than throwing, matching `decideUpload`. */
+export async function retryUpload(uploadId: string): Promise<{ error?: string }> {
+  const response = await fetch(`${BASE}/api/uploads/${uploadId}/retry`, { method: "POST" });
+  if (response.ok) return {};
+  const payload = await response.json().catch(() => ({}));
+  const detail = payload?.detail;
+  if (typeof detail === "string") return { error: detail };
+  if (detail?.message) return { error: detail.message };
+  return { error: `retry failed with status ${response.status}` };
+}
+
+/** The poll target: stage-by-stage journey, with LangGraph node detail for
+ *  whichever stage is the AI interpretation. */
+export function getUploadProgress(uploadId: string) {
+  return get<UploadProgress>(`/api/uploads/${uploadId}/progress`);
+}
+
+export function queueDepth() {
+  return get<{ pending_total: number }>("/api/queue/depth");
+}
+
+export function getBatchRows(batchId: string, limit = 25) {
+  return get<BronzeRows>(`/api/batches/${batchId}/rows?limit=${limit}`);
+}
+
+/** Rows the approved mapping refused. PHI-masked by the API, like the Bronze rows. */
+export async function getBatchQuarantine(
+  batchId: string,
+  limit = 25,
+): Promise<BatchQuarantine | null> {
+  try {
+    return await get<BatchQuarantine>(`/api/batches/${batchId}/quarantine?limit=${limit}`);
+  } catch {
+    return null;
+  }
+}
+
+export function getLineage(batchId: string) {
+  return get<LineageChain>(`/api/lineage/${batchId}`);
+}
+
+/** The lightweight poll target for S3/S6 (not yet wired to a screen in this
+ *  phase — Phase 0 ships this contract ahead of the pages that will use it,
+ *  see docs/blueprints/forward-flow-adoption.md §8). Just the run: none of
+ *  `getUpload`/`UploadDetail`'s lineage, approvals or profile. */
+export async function getBatchProgress(
+  batchId: string,
+  kind?: "land_bronze" | "promote_silver",
+): Promise<Run | null> {
+  try {
+    return await get<Run>(`/api/batches/${batchId}/progress${kind ? `?kind=${kind}` : ""}`);
+  } catch {
+    return null;
+  }
+}
+
+/** A mapping version as `/api/worklist` returns it: `origin`/`editable` are
+ *  computed properties the endpoint adds explicitly (mirroring `GET
+ *  .../mapping-versions`), but unlike the single-version endpoint it does not
+ *  resolve `vocabulary` — that requires the canonical model for the version's
+ *  domain, which a bulk cross-feed listing has no reason to pay for. */
+export interface WorklistMappingVersion {
+  feed: string;
+  version: number;
+  domain: string;
+  status: MappingVersionDetail["status"];
+  derived_from: number | null;
+  origin_proposal_id: string | null;
+  spec: MappingSpecShape;
+  created_by: string;
+  created_ts: string;
+  updated_ts: string | null;
+  origin: string;
+  editable: boolean;
+}
+
+/** Every upload waiting at G1 and every mapping version waiting at G2, across
+ *  all feeds. Not yet wired to a screen in this phase — the register still
+ *  computes its stage client-side; this is the O(1) replacement for that,
+ *  ready for the "waiting for you" filter in a later phase. */
+export function getWorklist() {
+  return get<{ uploads_at_g1: Upload[]; mapping_versions_at_g2: WorklistMappingVersion[] }>(
+    "/api/worklist",
+  );
+}
+
+/** Returns null when the batch has not been analysed yet, rather than throwing. */
+export async function getBronzeProfile(batchId: string): Promise<BronzeProfile | null> {
+  try {
+    return await get<BronzeProfile>(`/api/batches/${batchId}/bronze-profile`);
+  } catch {
+    return null;
+  }
+}
+
+export async function getProposal(batchId: string): Promise<MappingProposal | null> {
+  try {
+    return await get<MappingProposal>(`/api/batches/${batchId}/proposal`);
+  } catch {
+    return null;
+  }
+}
+
+/** G1. Returns an error message rather than throwing, so the gate can show it. */
+export async function decideUpload(
+  uploadId: string,
+  decision: "approved" | "rejected",
+  body: { approver?: string; note?: string } = {},
+): Promise<{ error?: string }> {
+  const path = decision === "approved" ? "approve" : "reject";
+  const response = await fetch(`${BASE}/api/uploads/${uploadId}/${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ approver: body.approver ?? "analyst@cinqcare.com", note: body.note ?? null }),
+  });
+  if (response.ok) return {};
+
+  const payload = await response.json().catch(() => ({}));
+  const detail = payload?.detail;
+  if (typeof detail === "string") return { error: detail };
+  if (detail?.message) {
+    return { error: detail.status ? `${detail.message} (status: ${detail.status})` : detail.message };
+  }
+  return { error: `decision failed with status ${response.status}` };
+}
+
+/** Forwards the analyst's file to the control plane. Returns an error message
+ *  rather than throwing, so the form can show what happened. */
+export async function uploadFile(form: FormData): Promise<{ uploadId?: string; error?: string }> {
+  const response = await fetch(`${BASE}/api/uploads`, { method: "POST", body: form });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) {
+    return { uploadId: body.upload_id };
+  }
+  const detail = body?.detail;
+  if (typeof detail === "string") return { error: detail };
+  if (detail?.message) return { error: `${detail.message} (${detail.fingerprint ?? ""})` };
+  if (Array.isArray(detail) && detail[0]?.msg) return { error: detail.map((d) => d.msg).join("; ") };
+  return { error: `upload failed with status ${response.status}` };
+}
+
+// ---------------------------------------------------------------- Stage 4: mapping
+export interface MappingFieldSpec {
+  source: string;
+  target: string;
+  cast: string;
+  transform: { op: string; args: Record<string, string> } | null;
+  value_map: Record<string, string>;
+  on_null: string;
+  default: string | null;
+  on_unmapped_value: string;
+  edited: boolean;
+  note: string | null;
+}
+
+export interface MappingSpecShape {
+  target_table: string;
+  fields: MappingFieldSpec[];
+}
+
+export interface MappingVocabulary {
+  targets: string[];
+  target_types: Record<string, string>;
+  ops: string[];
+  casts: string[];
+  on_null: string[];
+  on_unmapped_value: string[];
+}
+
+export interface MappingVersionDetail {
+  feed: string;
+  version: number;
+  domain: string;
+  status: "draft" | "previewed" | "approved" | "superseded";
+  derived_from: number | null;
+  origin_proposal_id: string | null;
+  origin: string;
+  editable: boolean;
+  spec: MappingSpecShape;
+  created_by: string;
+  created_ts: string;
+  updated_ts: string | null;
+  vocabulary: MappingVocabulary;
+}
+
+export interface MappingDiff {
+  feed: string;
+  version: number;
+  against: number | null;
+  against_status: string | null;
+  diff: {
+    added: string[];
+    removed: string[];
+    changed: { source: string; attributes: Record<string, { from: unknown; to: unknown }> }[];
+    analyst_edited: string[];
+    from_proposal: string[];
+    unchanged: number;
+  };
+}
+
+export interface SpecFieldError {
+  field_index: number;
+  source: string;
+  attribute: string;
+  message: string;
+}
+
+export function listMappingVersions(feed: string) {
+  return get<{ feed: string; versions: MappingVersionDetail[] }>(
+    `/api/feeds/${encodeURIComponent(feed)}/mapping-versions`,
+  );
+}
+
+export async function getMappingVersion(
+  feed: string,
+  version: number,
+): Promise<MappingVersionDetail | null> {
+  try {
+    return await get<MappingVersionDetail>(
+      `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}`,
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function getMappingDiff(feed: string, version: number): Promise<MappingDiff | null> {
+  try {
+    return await get<MappingDiff>(
+      `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/diff`,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Save a draft. Returns field-level errors instead of throwing, so the studio
+ *  can annotate the offending rows. */
+export async function saveMappingSpec(
+  feed: string,
+  version: number,
+  spec: MappingSpecShape,
+): Promise<{ errors?: SpecFieldError[]; error?: string }> {
+  const response = await fetch(
+    `${BASE}/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(spec),
+    },
+  );
+  if (response.ok) return {};
+
+  const payload = await response.json().catch(() => ({}));
+  const detail = payload?.detail;
+  if (detail?.errors) return { errors: detail.errors as SpecFieldError[] };
+  if (detail?.message) return { error: detail.hint ? `${detail.message} — ${detail.hint}` : detail.message };
+  return { error: `save failed with status ${response.status}` };
+}
+
+export async function createMappingVersion(
+  feed: string,
+  body: { from_proposal_id?: string; derive_from_version?: number; domain?: string },
+): Promise<{ version?: number; error?: string }> {
+  const response = await fetch(`${BASE}/api/feeds/${encodeURIComponent(feed)}/mapping-versions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.ok) return { version: payload.version };
+  const detail = payload?.detail;
+  if (typeof detail === "string") return { error: detail };
+  if (detail?.message) return { error: detail.message };
+  return { error: `could not create a draft (status ${response.status})` };
+}
+
+// ---------------------------------------------------------------- Stage 5: preview
+export interface PreviewFieldResult {
+  source: string;
+  target: string;
+  source_value: string | null;
+  mapped_value: string | null;
+  outcome: "ok" | "defaulted" | "null" | "failure" | "quarantined" | "rejected";
+  reason: string | null;
+}
+
+export interface PreviewRowResult {
+  row_number: number;
+  outcome: "ok" | "failure" | "quarantined" | "rejected";
+  fields: PreviewFieldResult[];
+}
+
+export interface PreviewResult {
+  preview_id: string;
+  feed: string;
+  version: number;
+  spec_fingerprint: string;
+  sample: {
+    batch_id: string;
+    bronze_table: string;
+    rows: number;
+    rows_in_batch: number;
+    selector: string;
+  };
+  aggregates: {
+    rows_previewed: number;
+    rows_ok: number;
+    rows_with_failures: number;
+    rows_quarantined: number;
+    rows_rejected: number;
+    failures_by_rule: Record<string, number>;
+    null_or_invalid: Record<string, number>;
+    affected_sources: Record<string, number>;
+  };
+  row_results: PreviewRowResult[];
+  row_results_total: number;
+  is_current: boolean;
+  approvable: boolean;
+  stale_reason: string | null;
+  sample_is_partial: boolean;
+  created_ts: string;
+}
+
+export async function getPreview(feed: string, version: number): Promise<PreviewResult | null> {
+  try {
+    return await get<PreviewResult>(
+      `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/preview?limit=25`,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** G2. The promotion itself is queued: this returns as soon as the decision is
+ *  recorded, and 409 carries why the gate stayed shut. */
+export async function approveMappingVersion(
+  feed: string,
+  version: number,
+  note?: string,
+): Promise<{ error?: string; batchId?: string }> {
+  const response = await fetch(
+    `${BASE}/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/approve`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: note || null }),
+    },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (response.ok) return { batchId: payload?.batch_id };
+  const detail = payload?.detail;
+  if (typeof detail === "string") return { error: detail };
+  if (detail?.message) return { error: detail.hint ? `${detail.message} — ${detail.hint}` : detail.message };
+  return { error: `could not approve v${version} (status ${response.status})` };
+}
+
+export async function requestPreview(
+  feed: string,
+  version: number,
+): Promise<{ error?: string }> {
+  const response = await fetch(
+    `${BASE}/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/preview`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    },
+  );
+  if (response.ok) return {};
+  const payload = await response.json().catch(() => ({}));
+  const detail = payload?.detail;
+  if (typeof detail === "string") return { error: detail };
+  if (detail?.message) return { error: detail.hint ? `${detail.message} — ${detail.hint}` : detail.message };
+  return { error: `could not queue a preview (status ${response.status})` };
+}

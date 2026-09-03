@@ -1,0 +1,69 @@
+version: 1
+updated: "2026-09-03"
+domain: common
+
+# Cross-domain canonical conventions shared by every Silver Raw model.
+# GROUNDED IN:
+#   docs/07_client_technical_and_infra_design/Technical_Architecture_Document_CinqCare_v2.docx (§5, §9, §10)
+#   docs/03_data_source_schemas/enrollment/enrollment_silver_raw_model.sql (audit columns, partitioning)
+#   docs/03_data_source_schemas/claims/claims-model-final-raw.xlsx (audit data columns)
+#   docs/03_data_source_schemas/adt/ADT_Data_Model_Final.xlsx (audit columns, insert-only rule)
+grounded_in:
+  - "docs/07_client_technical_and_infra_design/Technical_Architecture_Document_CinqCare_v2.docx"
+  - "docs/03_data_source_schemas/enrollment/enrollment_silver_raw_model.sql"
+
+layers:
+  sequence: [landing, bronze, silver_raw, identity, silver_ods, gold]
+  landing: "Byte-faithful file as received; partitioned by source and receipt date; never transformed."
+  bronze: "Parsed and typed copy of exactly what arrived; one table per source object; append-only; no dedup, no business filtering."
+  silver_raw: "Source field names kept, types cast, audit columns added; the layer the canonical/*.yaml files describe; partitioned by source_system."
+  identity: "Verato-backed identity resolution producing the member crosswalk; sits between Silver Raw and Silver ODS."
+  silver_ods: "Canonical names, surrogate keys, SCD Type 2, identity-resolved; a.k.a. Silver Curated."
+  gold: "Not yet designed for ADT; cost/PMPM and scorecard marts."
+
+# Every Silver Raw table carries these. They are populated by the platform and are never
+# mapping targets in any domain. Enrollment and claims use snake_case; the ADT v7 model uses
+# PascalCase for the same concepts.
+audit_columns:
+  snake_case: [source_system, batch_id, record_hash, is_deleted, lsdeleted, created_by, created_at, updated_by, updated_at, secure_id, record_creation_date]
+  pascal_case: [SourceSystem, SourceSystemIdType, FeedName, BatchId, RecordHash, IsDeleted, IsActive, CreatedBy, CreatedAt, UpdatedBy, UpdatedAt, ReceivedDatetime]
+  tech_arch_minimum: [source_system, ingestion_ts, batch_id, record_hash, created_ts, updated_ts]
+
+# Identifier that ties a Silver Raw row back to its source row across domains.
+source_identity:
+  member_key: "(source_system_id, source_system) - the id alone is never unique across feeds"
+  claim_key: "(source_system, source_claim_id) - one row per adjudication version"
+  encounter_key: "(SourceSystemId, SourceSystem, SourceMessageId) - one row per ADT event"
+
+# Controlled source_system literals already used by CINQCARE. New feeds should reuse an
+# existing literal where the payer is the same; a new literal is an analyst decision.
+source_system_values:
+  enrollment: [FIDELIS, FIDELIS UPSTATE, FIDELIS DOWNSTATE, MOLINA, MOLINA UPSTATE, MOLINA DOWNSTATE, Optum, "Centene GA", "Centene IL", "CINQ ACO REACH", "AIP ACO REACH", ACO_REACH_D0284, "CINQ MSSP", "MEDENT CMP", "MEDENT CCB"]
+  claims: [FIDELIS_NY, UHC_OPTUM_NY, D0284, MSSP]
+  adt: [Garage, HealtheLINK, HeC, BronxRhio, ParticleHealth, PCC_IL, PCC_Enterprise, Optum_UM, Fidelis_UM]
+
+naming_conventions:
+  table: "<layer>_<domain>_<entity>  e.g. bronze_claim_header, silver_raw_member, ods_member, gold_cost_pmpm"
+  bronze_feed_table: "bronze_<domain>_<source_system>_<feed_name>  e.g. bronze_enrollments_fedellisny_<feed_name>"
+  silver_feed_table: "silver_<domain>_<source_system>_<feed_name>"
+  silver_ods_table: "silver_ods_<domain>  e.g. silver_ods_enrollments"
+  reference_table_prefix: "ref_"
+  columns: "snake_case, no spaces, descriptive suffixes (member_id, provider_key, claim_amount, service_date)"
+  inbound_file: "<source>_<entity>_<timestamp>.csv or <source>_<entity>_<date>.csv"
+  landing_folder: "/landing/<source>/<entity>/<date>; processing folders /processed, /rejected, /archive"
+
+regions:
+  # From Enrollment_Data_Model_Syed_updated.xlsx sheet Region. CINQCARE reports in three regions.
+  Northeast: [NY, NJ, PA, NE, DC, DE, VT, RI, MD]
+  South East: [FL, GA, AL, MS, SC, NC, TN]
+  Central: [IL, IN, MI, OH, WI, MN, IA, MO, KY]
+  note: "Legacy state values also include free text (Bronx, Brooklyn, Buffalo, NewYork, N.Y.Y) that the region SQL maps to Northeast; address standardisation is a prerequisite."
+
+types:
+  # Declared-type vocabulary used across canonical/*.yaml and accepted by mapping_spec CAST_FOR_TYPE.
+  string: "STRING / VARCHAR"
+  int: "INT / INT64"
+  decimal: "DECIMAL(18,4) for money and units"
+  date: "DATE"
+  timestamp: "TIMESTAMP / datetime"
+  bool: "BOOLEAN"

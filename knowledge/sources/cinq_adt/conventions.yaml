@@ -1,0 +1,40 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: cinq_adt
+date_formats:
+  iso: "AdmissionDate, DischargeDate, EventDate, CreateDate and the discharge date columns as YYYY-MM-DD"
+  time: "AdmitTime as h:MMAM or hh:MMPM, defaulting to 12:00AM on many rows"
+  audit: "The _LastEdit columns as YYYY-MM-DD HH:MM:SS.fff"
+  us_format: "MD_Visit_Scheduled_Date as MM/DD/YYYY, the only US-format date in the file"
+event_vocabulary:
+  EventType: [Emergency_Room_Discharge, Inpatient_Admission, Observation_Discharge, Inpatient_Admission_SNF]
+  VisitType: ["Care Alert Discharge ER", "Care Alert Discharge Inpt", "Care Alert Admit Inpt", "Care Alert Discharge Observation"]
+  SERVCAT01: [Outpatient, Inpatient]
+  SERVCAT02: ["Emergency Room", Acute, SNF]
+  note: "This is CINQCARE's own care-alert vocabulary, not HL7 trigger events. It must be mapped to A01, A03 and the rest rather than assumed equivalent."
+null_tokens:
+  registered: [NULL, ".", MISSING, NA, None, "0 as unknown NPI"]
+  requirement: "Normalise these before computing any null rate. Recorded as exception EX-007. The client's own profile report counts only empty strings and therefore reports 0.0% missing for columns that are entirely the literal NULL."
+identifier_conventions:
+  ID: "Event record identifier, unique, the natural key"
+  OurID: "CINQCARE internal member identifier"
+  MemberID: "Payer member identifier, MBI-shaped for Medicare populations and plan-shaped elsewhere"
+  MemberMedicaidNumber: "New York CIN or an MBI depending on the population"
+  AttendingPhyNPI: "10 digits, but 0 rather than null on 78 rows"
+duplicates:
+  observed: "The business event key of member, event date and event type has 30 duplicate rows."
+  interpretation: "Expected multi-route duplication, exactly as the domain knowledge warns for ADT. Not a defect."
+care_management_columns:
+  note: >
+    Roughly 60 workflow columns covering nurse contact, physician follow-up, medication
+    reconciliation, transition of care, durable medical equipment and social needs are entirely
+    empty in the sample. They are populated by the CINQ application, not by any ADT source, and
+    belong to the encounter extension rather than to the event.
+known_exceptions:
+  - "DischargeDispositionCode mixes UB-04 codes with free text such as 'Home or Self Care' and 'N/A' across 54 distinct values."
+  - "Region uses inconsistent casing and vocabulary: UPSTATE, Upstate, UPSTATE NY, DOWNSTATE, Downstate, CA, IL and IN."
+  - "RiskCat mixes cases and carries MISSING as a literal."
+sample_caveats:
+  - "The rn column is a row number partitioned by RecordSource running 1 to 50, so this sample is the top 50 events per payer rather than a real delivery. Row counts here say nothing about production volume."
+  - "Readmit_7, Readmit_15 and Readmit_30 are computed upstream. They are the source's calculation, must be labelled as such, and must be logically nested."

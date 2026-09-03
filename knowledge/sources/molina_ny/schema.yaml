@@ -1,0 +1,15 @@
+version: 1
+updated: "2026-09-03"
+kind: schema_pointer
+source_system: molina_ny
+contract_file: "sources/molina_ny__member_enrollment_history.yaml"
+field_semantics:
+  identity: { Member_ID: "Molina member identifier", Subscriber_ID: "Contract holder; equals Member_ID for a subscriber, differs for a dependent", Medicaid_State_ID: "New York CIN" }
+  program: { Program_ID: "Molina programme code", Plan_ID: "Molina plan code", Program_Description: "Human-readable programme, such as MHNY HARP", Member_Health_Plan_Line_of_Business: "Always MEDICAID for these populations", Member_Health_Plan_Product: "HARP, TANF, TANF CHILD, ABD NON-DUAL, ABD LTC NON-DUAL, ESSENTIAL or ABD BH" }
+  coverage:
+    Member_Month: "The month this row accounts for. With Member_ID it forms the grain."
+    Ratecode: "Capitation rate cell plus premium group plus region suffix, for example 2205-7580-NY. The leading four digits encode age, sex and aid category."
+    Member_Health_Plan_Enrollment_Effective_Date: "Start of the enrolment span, always the first of the Member_Month"
+    Coverage_Term_Date: "End of the coverage span, always the last day of the Member_Month"
+  geography: { Member_Residence_Mailing_County_Code_Description: "County name, not a code", Member_Residence_Country: "Always UNITED STATES" }
+  always_empty_in_these_populations: [SegType, Member_Relationship, Member_Health_Plan_COB_Status, Member_Health_Plan_COB_Effective_Date, Member_Health_Plan_COB_Termination_Date, Preferred_Language, Medicare_Beneficiary_ID, Hospice_Flag, ESRD_Flag, Contract, PBP, LIS, Member_Marketplace_ID, Metal_Tier, Grace_Period_1, Grace_Period_2, Grace_Period_3, Member_Enroll_ID]

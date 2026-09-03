@@ -1,0 +1,25 @@
+version: 1
+updated: "2026-09-03"
+kind: source_conventions
+source_system: optum_ga
+date_formats:
+  dob: "DOB as YYYY-MM-DD"
+  plan_effective: "Insured_Plan_Effective_Date as YYYY-MM-DD 00:00:00"
+  plan_termination: "Insured_Plan_Termination_Date as YYYY-MM-DD 23:59:58.963000"
+  outreach: "Last_Attempted_Date and Slot_Start_Date as YYYY-MM-DD HH:MM:SS.ffffff, some without the fractional part"
+open_ended_coverage: { sentinel: "9999-12-31 23:59:58.963000", prevalence: "98.5% of rows", meaning: "coverage is open; treat as null" }
+flag_vocabulary: { DNC_IND: "the token DNC, or blank", Gender: "Female or Male as words" }
+multi_value_columns:
+  PCP_TIN: "A bracketed list string such as [],[999999999] or [],[999999999],[999999999]. A member may have several tax identification numbers and the canonical model holds one, so this needs an analyst decision rather than a cast."
+outreach_vocabulary:
+  Current_Status: [Attempted, Refused, Scheduled, Open, Cancelled, Completed]
+  Current_SubStatus: "39 values including No Answer, Left Message, Invalid Phone Number, Do Not Call and Soft Refusal"
+  Visit_Type: [In Person, Video]
+known_exceptions:
+  - "PCP_NPI, PCP_TIN and PCP_Name are empty for 81.5% of members, so the client's rule that a member must have a PCP assigned cannot apply. Recorded as exception EX-001 and run in observe mode for this feed."
+  - "The outreach state columns, the appointment slot and the household reference have no home in the enrollment canonical model."
+sample_caveats:
+  - "MBI is faked into a 13-character hyphenated display form. A real Medicare Beneficiary Identifier is 11 characters with no dashes, so the sample shape must not become the expected shape."
+  - "The profile report spells the column Current_Substatus; the file header is Current_SubStatus with a capital S."
+  - "The Column Summary reports 0.0% missing for PCP_NPI, PCP_TIN, PCP_Name, Member_Email and DNC_IND, all of which are substantially empty."
+  - "This report is the origin of the county and language chart images that were copied into the Centene GA Medicaid and Molina Down-HARP reports."

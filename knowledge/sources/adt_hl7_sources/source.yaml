@@ -1,0 +1,11 @@
+version: 1
+updated: "2026-09-03"
+kind: source_definition
+source_system: adt_hl7_sources
+organization: { entity: "Health information exchanges, an interoperability vendor, and two payer utilisation management feeds" }
+contract: { id: cross_cutting, note: "ADT cuts across every population and is the only feed fast enough to drive care-management intervention." }
+semantics:
+  what_it_is: "Nine production ADT source systems that all land in the single Silver Raw encounter table."
+  transport: "Seven arrive as HL7 v2.5 batched into JSON by Mirth, one as a JSON API pull, and two as flat files."
+  design_decision: "Silver Raw has one table. Member, provider, facility and coverage are resolved in the operational data store against Enrollment and reference CSVs, not in Silver Raw."
+  no_sample: "None of these has a de-identified sample in the corpus. Their schema comes from the ADT data model and the HL7 mapping workbooks rather than from an observed file."

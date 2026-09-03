@@ -1,0 +1,530 @@
+version: 4
+updated: "2026-09-03"
+
+# Grounded in:
+#   docs/03_data_source_schemas/enrollment/enrollment_silver_raw_model.sql  (canonical fields + comments)
+#   docs/04_source_data_samples_and_profiles/1-Enrollment/1.Fedelis_NY/*    (source columns + value formats)
+#
+# RULE: `maps_toward` is only present when the field actually exists in
+# enrollment_silver_raw_model.sql. Where the roster carries something the canonical
+# enrollment model has no home for, the term says so via `canonical_target: none`
+# with a reason. Those are the columns Stage 3 must surface as unknown mappings
+# rather than guess at.
+# Version 4 extends the term set beyond Fidelis to the other eight enrollment feeds and the
+# ADT extract. Matching is case-insensitive and treats a space as an underscore, so a column
+# named "MEMBER DOB" already matches the term `member_dob`; the terms added below are the ones
+# whose payer-specific spelling would otherwise miss.
+grounded_in:
+  - "docs/03_data_source_schemas/enrollment/enrollment_silver_raw_model.sql"
+  - "docs/04_source_data_samples_and_profiles/1-Enrollment/"
+  - "docs/04_source_data_samples_and_profiles/2-ADT/"
+
+canonical_tables:
+  - members
+  - members_addresses
+  - members_emails
+  - members_phones
+  - members_enrollment_segments
+
+terms:
+  # ---------------------------------------------------------------- identifiers
+  - term: "member_id"
+    means: >
+      Payer-assigned member identifier, unique within a source system. In the Fidelis
+      roster it arrives suffixed with the plan code, shaped 99999999999-AAAA9999 for
+      Medicaid and 99999999999-AAA99999 for Essential Plan.
+    maps_toward: "members.source_system_id"
+    aliases: ["memberid", "member_number", "source_system_id"]
+    phi: true
+    notes: >
+      members PK is (source_system_id, source_system), so the source system must be
+      carried alongside the id - the id alone is not unique across feeds.
+
+  - term: "medicaid_id"
+    means: "State-assigned Medicaid identifier (NY format: 2 letters, 5 digits, 1 letter)."
+    maps_toward: "members.source_system_id"
+    aliases: ["medicaid_number", "cin"]
+    phi: true
+    notes: >
+      An alternate identifier type. members.source_system_id_type exists to record
+      which identifier was used, so medicaid_id and member_id cannot both occupy
+      source_system_id in the same row.
+
+  - term: "insurance_id"
+    means: "Insurance identifier on the enrolment segment."
+    maps_toward: "members_enrollment_segments.insurance_id"
+    aliases: []
+    phi: true
+
+  - term: "vbp_id"
+    means: >
+      Value-based-payment population label. Carries the CINQCARE population
+      ('CINQUpstate' / 'CINQDownstate'), not a member identifier.
+    canonical_target: candidate
+    maps_toward: "members_enrollment_segments.tin_submarket"
+    aliases: ["vbp", "population"]
+    phi: false
+    notes: >
+      tin_submarket is commented 'PCP Upstate/Downstate' in the DDL, which is the
+      closest governed home. Treat as a candidate for analyst confirmation, not a
+      settled mapping.
+
+  # -------------------------------------------------------------- demographics
+  - term: "member_first_name"
+    means: "Member's first (given) name."
+    maps_toward: "members.first_name"
+    aliases: ["first_name", "fname"]
+    phi: true
+
+  - term: "member_last_name"
+    means: "Member's last (family) name."
+    maps_toward: "members.last_name"
+    aliases: ["last_name", "lname", "surname"]
+    phi: true
+
+  - term: "member_dob"
+    means: >
+      Member's date of birth. Arrives ISO yyyy-mm-dd in the Fidelis roster; the
+      canonical column is a TIMESTAMP.
+    maps_toward: "members.date_of_birth"
+    aliases: ["dob", "date_of_birth", "birth_date", "birthdate"]
+    phi: true
+
+  - term: "member_sex"
+    means: "Member's sex/gender as supplied by the payer (single letter F/M in this feed)."
+    maps_toward: "members.sex"
+    aliases: ["sex", "gender", "member_gender"]
+    phi: true
+
+  - term: "member_language"
+    means: "Preferred spoken language."
+    maps_toward: "members.language"
+    aliases: ["language", "preferred_language"]
+    phi: true
+
+  - term: "member_race"
+    means: "Race classification as supplied by the payer."
+    maps_toward: "members.race"
+    aliases: ["race"]
+    phi: true
+
+  - term: "member_age"
+    means: "Age in years as supplied by the payer."
+    canonical_target: none
+    aliases: ["age"]
+    phi: true
+    notes: >
+      The canonical members table has no age column - age is derivable from
+      date_of_birth and is deliberately not stored. Expect this column to be dropped
+      rather than mapped.
+
+  # ------------------------------------------------------------------- contact
+  - term: "member_address_line_1"
+    means: "Primary street address line."
+    maps_toward: "members_addresses.address1"
+    aliases: ["address1", "address_line_1", "street"]
+    phi: true
+    notes: "members_addresses PK includes address_type, which the roster does not supply."
+
+  - term: "member_address_line_2"
+    means: "Secondary address line (suite, apartment)."
+    maps_toward: "members_addresses.address2"
+    aliases: ["address2", "address_line_2"]
+    phi: true
+
+  - term: "member_city"
+    means: "City name."
+    maps_toward: "members_addresses.city"
+    aliases: ["city"]
+    phi: true
+
+  - term: "member_state"
+    means: "Two-letter state abbreviation."
+    maps_toward: "members_addresses.state"
+    aliases: ["state"]
+    phi: false
+
+  - term: "member_zip_code"
+    means: "ZIP or ZIP+4 postal code."
+    maps_toward: "members_addresses.zip"
+    aliases: ["zip", "zip_code", "postal_code"]
+    phi: true
+
+  - term: "member_county"
+    means: "County name. The canonical model also holds county_ssa and county_fips codes."
+    maps_toward: "members_addresses.county"
+    aliases: ["county"]
+    phi: true
+
+  - term: "member_phone_number"
+    means: "Member's phone number."
+    maps_toward: "members_phones.phone_number"
+    aliases: ["phone", "phone_number", "telephone"]
+    phi: true
+    notes: "members_phones PK includes phone_type (Cell, Home), which the roster does not supply."
+
+  - term: "member_email"
+    means: "Member's email address."
+    maps_toward: "members_emails.email_address"
+    aliases: ["email", "email_address"]
+    phi: true
+    notes: "members_emails PK includes email_type (Primary, Personal, Secondary)."
+
+  - term: "guardian_name"
+    means: "Name of the member's guardian or responsible party."
+    canonical_target: none
+    aliases: ["guardian"]
+    phi: true
+    notes: >
+      No guardian/contact-relationship table exists in enrollment_silver_raw_model.sql.
+      guardian_name, guardian_phone_number and guardian_email have no governed home.
+
+  # -------------------------------------------------- plan / enrolment segment
+  - term: "product"
+    means: >
+      Line of business - the payer product the member is enrolled in (e.g. TANF Adult,
+      TANF Child). Code set is payer-specific and must not be assumed shared across sources.
+    maps_toward: "members_enrollment_segments.lob"
+    aliases: ["lob", "line_of_business", "plan", "product_name"]
+    phi: false
+    notes: >
+      member_plan and member_payor are separate canonical fields and form part of the
+      segment PK; the roster supplies neither directly.
+
+  - term: "group_name"
+    means: "Facility, practice or provider group name."
+    maps_toward: "members_enrollment_segments.member_group"
+    aliases: ["group", "practice_name"]
+    phi: false
+
+  - term: "tin"
+    means: "Tax Identification Number of the provider group."
+    maps_toward: "members_enrollment_segments.tin"
+    aliases: ["tax_id"]
+    phi: false
+
+  - term: "provider_npi"
+    means: "National Provider Identifier of the attributed provider (10 digits)."
+    maps_toward: "members_enrollment_segments.pcp_npi"
+    aliases: ["npi", "pcp_npi"]
+    phi: false
+
+  - term: "provider_name"
+    means: "Name of the attributed primary care provider."
+    maps_toward: "members_enrollment_segments.pcp_name"
+    aliases: ["pcp_name"]
+    phi: false
+
+  - term: "health_home_status"
+    means: "Health Home enrolment status; part of the NY care-management programme set."
+    maps_toward: "members.care_management_program"
+    aliases: ["health_homes_enrolled", "health_home"]
+    phi: false
+    notes: >
+      care_management_program is a single string on members, so the several NY
+      health-home columns cannot all land there without a decision about precedence.
+
+  # ------------------------------------- roster columns with no canonical home
+  - term: "enrollment_date"
+    means: >
+      Date attribution/coverage begins. Arrives as a timestamp ('2017-10-01 0:00:00')
+      even though only the date is meaningful.
+    canonical_target: none
+    aliases: ["effective_date", "eff_date", "coverage_start"]
+    phi: false
+    notes: >
+      members_enrollment_segments carries no effective/end dates in
+      enrollment_silver_raw_model.sql. Coverage periods are UNKNOWN in this canonical
+      version - a genuine gap for the analyst to resolve, not a mapping to guess.
+
+  - term: "coverage_end_date"
+    means: "Date coverage ends; blank while coverage is open."
+    canonical_target: none
+    aliases: ["end_date", "term_date", "coverage_end"]
+    phi: false
+    notes: "Same gap as enrollment_date - no canonical end-date field exists."
+
+  - term: "recertification_end_date"
+    means: >
+      End of the Medicaid recertification window - the operational deadline that
+      drives member outreach. Blank means none supplied.
+    canonical_target: none
+    aliases: ["recert_end", "recertification_start_date", "recert_start"]
+    phi: false
+    notes: >
+      Recertification tracking has no field in the canonical enrollment model despite
+      being operationally central. Surface as unknown.
+
+  - term: "harp_eligible"
+    means: >
+      Health and Recovery Plan eligibility (NY behavioural-health managed care).
+      Arrives as 'Yes' or blank, not a boolean.
+    canonical_target: none
+    aliases: ["harp", "health_homes_plus_eligible", "high_need_status"]
+    phi: false
+    notes: >
+      NY-specific eligibility flags (harp_eligible, health_homes_plus_eligible,
+      high_need_status) have no canonical columns. Values are 'Yes'/blank, so any
+      future boolean cast must treat blank as unknown rather than false.
+
+  - term: "member_status"
+    means: "Payer's view of enrolment state (e.g. 'Active Member')."
+    canonical_target: none
+    aliases: ["status", "enrollment_status"]
+    phi: false
+
+  - term: "last_awv_date"
+    means: "Date of the member's most recent Annual Wellness Visit - a quality measure input."
+    canonical_target: none
+    aliases: ["awv", "annual_wellness_visit"]
+    phi: true
+    notes: "Encounter/quality data is out of scope for the enrollment canonical model."
+
+  - term: "pcp_assignment_type"
+    means: "How the member was attributed to a PCP (e.g. 'Manual')."
+    canonical_target: none
+    aliases: ["assignment_type", "ep_assignment_flag"]
+    phi: false
+    notes: >
+      members_enrollment_segments.add_reason ('Reason for adding/enrolling member') is
+      adjacent but not the same concept; leave for analyst judgement.
+
+  - term: "primary_coverage_payor"
+    means: "Other payer holding the member's primary coverage, when Fidelis is secondary."
+    canonical_target: none
+    aliases: ["primary_coverage_not_with_fidelis", "cob_payor"]
+    phi: false
+    notes: >
+      Coordination-of-benefits data has no canonical home in this model version.
+      member_payor on the segment describes the enrolling payer, not the other one.
+
+  # =========================================================================
+  # Cross-payer terms, added at version 4. Each names a column as a specific
+  # payer spells it, so the glossary matches feeds beyond Fidelis. Canonical
+  # destinations are the same as the equivalent Fidelis term; where the
+  # canonical model has no home, `canonical_target: none` says so.
+  # =========================================================================
+
+  # ------------------------------------------------------------ Molina NY
+  - term: "Member_ID"
+    means: "Molina member identifier, NYM followed by 11 digits."
+    maps_toward: "members.source_system_id"
+    aliases: ["memberid"]
+    phi: true
+  - term: "Subscriber_ID"
+    means: "Molina contract holder. Equals Member_ID for a subscriber and differs for a dependent."
+    canonical_target: none
+    aliases: ["subscriber_id", "sbscr_nbr"]
+    phi: true
+    notes: "The enrollment model has no subscriber-versus-dependent relationship, so household linkage cannot be landed."
+  - term: "Medicaid_State_ID"
+    means: "State Medicaid identifier. In New York this is the Client Identification Number."
+    maps_toward: "members.source_system_id"
+    aliases: ["medicaid_number", "member_medicaid_id"]
+    phi: true
+    notes: "An alternate identifier type. It and the payer member id cannot both occupy source_system_id in one row; source_system_id_type records which was used."
+  - term: "Member_Date_Of_Birth"
+    means: "Date of birth as Molina spells it."
+    maps_toward: "members.date_of_birth"
+    aliases: ["bth_dt", "member_dob"]
+    phi: true
+  - term: "Member_Date_Of_Death"
+    means: "Date of death."
+    maps_toward: "members.death_date"
+    aliases: ["dth_dt", "beneficiary_date_of_death"]
+    phi: true
+    notes: "Date-faked in the Molina sample, where 99.6% of values fall in year 2078. Never tune a rule on that sample."
+  - term: "Member_Gender"
+    means: "Sex as supplied by the payer."
+    maps_toward: "members.sex"
+    aliases: ["mbr_gdr_cd", "beneficiary_gender", "membersex"]
+    phi: true
+    notes: "Vocabularies differ by feed: single letters, capitalised words, and lower-case words all appear."
+  - term: "Member_Month"
+    means: "The coverage month a Molina history row accounts for, as YYYYMM."
+    canonical_target: none
+    aliases: ["member_months"]
+    phi: false
+    notes: "Member months are the denominator of nearly every value-based rate, and the enrollment model has no column for them."
+  - term: "Ratecode"
+    means: "New York capitation rate cell plus premium group plus region suffix, for example 2205-7580-NY. The leading four digits encode age, sex and aid category."
+    canonical_target: none
+    aliases: ["rate_cell"]
+    phi: false
+  - term: "Member_Health_Plan_Product"
+    means: "Molina product within Medicaid: HARP, TANF, TANF CHILD, ABD NON-DUAL, ABD LTC NON-DUAL or ESSENTIAL."
+    maps_toward: "members_enrollment_segments.lob"
+    aliases: ["member_health_plan_line_of_business"]
+    phi: false
+  - term: "Member_Residence_Mailing_Street_Address1"
+    means: "Molina mailing address line 1. A physical address block also arrives."
+    maps_toward: "members_addresses.address1"
+    aliases: ["member_residence_physical_street_address1", "mbr_adr_loc_adr1", "member_address_1", "member_address_line_1"]
+    phi: true
+    notes: "Two address blocks per member means two members_addresses rows, each needing its own address_type constant."
+
+  # ---------------------------------------------------------- Centene GA
+  - term: "MEMBER_KEY"
+    means: "Centene member identifier and the roster's natural key."
+    maps_toward: "members.source_system_id"
+    aliases: ["edw_member_ck", "amisys_number"]
+    phi: true
+  - term: "MEMBER_NAME"
+    means: "Single full-name field in FIRST LAST order."
+    canonical_target: candidate
+    maps_toward: "members.first_name"
+    aliases: []
+    phi: true
+    notes: "Must be parsed into first and last before mapping, per the client's cleanse rule. The parse is an analyst derivation, not a closed-vocabulary transform."
+  - term: "MEMBER_ELIG_START_DT"
+    means: "Eligibility start date."
+    canonical_target: none
+    aliases: ["member_elig_end_dt", "record_start_dt", "record_end_dt", "insured_plan_effective_date", "insured_plan_termination_date", "member_elig_start_month"]
+    phi: false
+    notes: "Coverage periods have no home in this canonical version. The open-ended sentinel 9999-12-31 means null, not a date."
+  - term: "MEMBER_ACTIVE_IND"
+    means: "The payer's active flag as at the extract date."
+    canonical_target: none
+    aliases: ["member_status"]
+    phi: false
+    notes: "A point-in-time flag, not a coverage period."
+  - term: "PCP_NPI"
+    means: "National Provider Identifier of the attributed primary care provider."
+    maps_toward: "members_enrollment_segments.pcp_npi"
+    aliases: ["assigned_provider_npi", "pcpnpi", "aligned_inpi"]
+    phi: false
+  - term: "PCP_IRS_NBR"
+    means: "Tax identification number of the attributed provider's billing entity."
+    maps_toward: "members_enrollment_segments.tin"
+    aliases: ["assigned_tin", "pcp_tin", "pcpgrouptin", "aligned_tin"]
+    phi: false
+  - term: "PCP_IRS_NAME"
+    means: "Billing entity or practice name."
+    maps_toward: "members_enrollment_segments.member_group"
+    aliases: ["assigned_tin_name", "mpk_name", "pcpgroupname", "aligned_tin_name", "aligned_affiliate", "groupname"]
+    phi: false
+  - term: "WELL_VISIT"
+    means: "Wellness visit indicator on the Centene GA Medicare roster."
+    canonical_target: none
+    aliases: []
+    phi: false
+    notes: "NO on every row in the sample. Related to the undefined MWOV token in the file name; do not assert an expansion."
+
+  # ------------------------------------------------------------ Optum NY
+  - term: "SBSCR_NBR"
+    means: "Optum subscriber number. With the span start date it forms the natural key."
+    maps_toward: "members.source_system_id"
+    aliases: ["member_client_id"]
+    phi: true
+  - term: "CURR_MBI"
+    means: "Current Medicare Beneficiary Identifier, 11 characters."
+    maps_toward: "members.source_system_id"
+    aliases: ["mbi", "beneficiary_mbi_id", "member_medicare_nbr", "mbi_original", "bene_mbi_id"]
+    phi: true
+    notes: "The cross-feed Medicare identity key. Reissued over time, so it is never a stable primary key on its own."
+  - term: "EMPI"
+    means: "Optum enterprise master patient index identifier."
+    canonical_target: none
+    aliases: ["source_patient_id"]
+    phi: true
+    notes: "A payer-internal identity key. The enrollment model holds one source identifier per row, so this is a crosswalk input rather than a target."
+  - term: "CONTR_NBR"
+    means: "Medicare Advantage contract number, a letter followed by four digits."
+    maps_toward: "members_enrollment_segments.control_number"
+    aliases: ["contract"]
+    phi: false
+  - term: "CONTR_PBP"
+    means: "Plan benefit package identifier, three characters, zero padded."
+    maps_toward: "members_enrollment_segments.control_number_pbp"
+    aliases: ["pbp", "contr_nbr_pbp"]
+    phi: false
+  - term: "CONTR_CURR_PLN_NM"
+    means: "Medicare Advantage or D-SNP plan name."
+    maps_toward: "members_enrollment_segments.member_plan"
+    aliases: ["plan_name", "program_description"]
+    phi: false
+  - term: "MBR_DO_NOT_CNTC_FLG"
+    means: "Do not contact flag."
+    maps_toward: "members.dnc"
+    aliases: ["dnc_ind", "home_dnc_flag", "mobile_dnc_flag"]
+    phi: false
+    notes: "Vocabularies differ: Y/N, the token DNC, or blank. Blank means unknown, not false."
+
+  # ---------------------------------------------------------- Centene IL
+  - term: "POPULATION HEALTH CATEGORY"
+    means: "Centene's population segmentation, such as HEALTHY or CHRONIC BIG 5-AT RISK."
+    canonical_target: none
+    aliases: ["primary_risk_category", "riskcat", "riskcathcc", "riskcatcrg"]
+    phi: false
+    notes: "A payer-derived analytic attribute, not a CINQCARE measurement. It has no canonical home and must never be presented as the platform's own risk stratification."
+  - term: "RISK SCORE"
+    means: "The payer's or CMS's risk score for the member."
+    canonical_target: none
+    aliases: ["riskscore_raw", "riskscore_norm"]
+    phi: false
+    notes: "A risk score without its model version and payment year is meaningless. The enrollment model has no column for either."
+  - term: "ED VISITS"
+    means: "Emergency department visit counter for the plan year to date, supplied by Centene."
+    canonical_target: none
+    aliases: ["all_admits", "acute_admits", "op_claims", "ed_to_ip_visits", "snf_admits", "total_pcp_claims", "preventable_admits", "preventable_ed_visits"]
+    phi: false
+    notes: "Source-computed utilisation counters. Useful for targeting, never a substitute for the platform's own utilisation measurement, because the periods and definitions behind them are the payer's."
+
+  # ------------------------------------------------------- ACO REACH D0284
+  - term: "Alignment Status"
+    means: "Why a beneficiary is or is not aligned to the ACO: AL aligned, MC moved to Medicare Advantage, DY died in the payment year, MS Medicare became secondary, CO moved out of area, NV eligibility unverifiable, DD died before the year, AB lost Part A or B."
+    canonical_target: none
+    aliases: ["alignment_status_description"]
+    phi: false
+    notes: "Filter on this before counting attributed lives, and report exclusions by reason rather than as a net number."
+  - term: "Beneficiary Alignment Effective Start Date"
+    means: "When ACO alignment began for this beneficiary."
+    canonical_target: none
+    aliases: ["beneficiary_alignment_effective_termination_date"]
+    phi: false
+    notes: "Attribution is an effective-dated fact and the enrollment model has no home for it."
+  - term: "MBI_previous"
+    means: "The beneficiary's prior Medicare identifier, with the month it ceased."
+    canonical_target: none
+    aliases: ["mbi_previous_end_month"]
+    phi: true
+    notes: "The Medicare identifier change history that CCLF9 provides, carried inline. An identifier change is not a new person; this is what stops a naive match treating it as one."
+  - term: "BENE_DUAL_STUS_CD"
+    means: "CMS dual eligibility status code. Full-benefit duals are 02, 04 and 08; partial-benefit are 01, 03, 05 and 06."
+    maps_toward: "members.dual_status_code"
+    aliases: ["oahdual"]
+    phi: false
+  - term: "aligned_tin_submarket"
+    means: "CINQCARE regional submarket, including NY - Upstate and NY - Downstate."
+    maps_toward: "members_enrollment_segments.tin_submarket"
+    aliases: ["aligned_tin_market", "region", "marketname"]
+    phi: false
+  - term: "Beneficiary State-County of Residence FIPS"
+    means: "County FIPS code for the beneficiary's residence."
+    maps_toward: "members_addresses.county_fips"
+    aliases: ["county_fips"]
+    phi: true
+  - term: "Beneficiary State-County of Residence SSA"
+    means: "SSA state and county code, which uses different numbering from FIPS."
+    maps_toward: "members_addresses.county_ssa"
+    aliases: ["county_ssa"]
+    phi: true
+
+  # ------------------------------------------------------------ ADT extract
+  - term: "OurID"
+    means: "CINQCARE internal member identifier carried on ADT events."
+    maps_toward: "members.source_system_id"
+    aliases: ["cinqid", "sourcesystemid"]
+    phi: true
+  - term: "EventType"
+    means: "The ADT event. CINQCARE's care-alert vocabulary uses Emergency_Room_Discharge, Inpatient_Admission, Observation_Discharge and Inpatient_Admission_SNF; HL7 sources use trigger events such as A01, A03 and A08."
+    canonical_target: none
+    aliases: ["visittype", "confine_status"]
+    phi: false
+    notes: "Belongs to the ADT encounter model, not to enrollment. Map it against canonical/adt.yaml when the upload domain is adt."
+  - term: "DischargeDispositionCode"
+    means: "UB-04 patient discharge status. Drives readmission exclusions, so nulls distort the rate in both directions."
+    canonical_target: none
+    aliases: ["discharge_disposition", "patient_status", "discharge_status"]
+    phi: false
+    notes: "The CINQCARE extract mixes valid codes with free text across 54 distinct values."
