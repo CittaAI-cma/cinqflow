@@ -1,0 +1,40 @@
+version: 1
+updated: '2026-09-03'
+domain: enrollment
+feed: ukoil
+generated_by: cinqflow G2 approval; decisions are the analyst's
+decision_sets:
+- source: ukoil (uploaded file, mapped in CINQFLOW)
+  mapping_version: 1
+  approved_at: '2026-09-03'
+  approved_by: analyst@cinqcare.com
+  batch_id: 45579e30b807
+  target_table: silver_raw.members
+  decisions:
+  - source_field: member_dob
+    target: members.date_of_birth
+    decided_by: analyst_accepted_ai
+    cast: timestamp
+    transform:
+      op: parse_date
+      format: '%Y-%m-%d'
+  - source_field: member_first_name
+    target: members.first_name
+    decided_by: analyst_accepted_ai
+    transform:
+      op: lower
+  - source_field: member_last_name
+    target: members.last_name
+    decided_by: analyst_accepted_ai
+    transform:
+      op: lower
+  - source_field: member_id
+    target: members.source_system_id
+    decided_by: analyst_accepted_ai
+    transform:
+      op: lower
+  - source_field: member_phone_number
+    target: members_phones.phone_number
+    decided_by: analyst_accepted_ai
+    transform:
+      op: lower

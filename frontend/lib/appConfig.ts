@@ -4,7 +4,7 @@
 
 export const BRAND_NAME = process.env.NEXT_PUBLIC_BRAND_NAME ?? "Digitalurth";
 
-export const USER_DISPLAY_NAME = process.env.NEXT_PUBLIC_USER_NAME ?? "Ana";
+export const USER_DISPLAY_NAME = process.env.NEXT_PUBLIC_USER_NAME ?? "Dexter";
 
 /** Initials for the account chip in the top bar. */
 export const USER_INITIALS = process.env.NEXT_PUBLIC_USER_INITIALS ?? "MR";
