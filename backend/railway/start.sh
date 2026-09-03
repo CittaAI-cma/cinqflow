@@ -13,14 +13,21 @@
 set -e
 
 # hypercorn, not uvicorn: Railway's private network (*.railway.internal) is
-# IPv6-only, so the api process must bind dual-stack to stay reachable both
-# publicly (IPv4) and over private networking (IPv6). uvicorn's CLI cannot
-# dual-stack bind at all - `--host ::` makes it IPv6-only and breaks the
-# public domain instead of fixing private networking. hypercorn's `[::]`
-# bind is dual-stack, so one process serves both. Local dev and Docker
-# Compose are unaffected - they still run plain uvicorn (see Makefile,
+# IPv6-only in legacy environments and dual-stack (A + AAAA) in environments
+# created after 2025-10-16, so the api process must accept both IPv4 and
+# IPv6 to stay reachable regardless of which DNS records a caller resolves.
+# uvicorn's CLI cannot dual-stack bind at all - `--host ::` makes it
+# IPv6-only and breaks the public domain instead of fixing private
+# networking. A single hypercorn `[::]` bind was assumed to be dual-stack
+# (accepting IPv4-mapped connections too), but that depends on the
+# container's IPV6_V6ONLY socket default and was NOT reliable here: once
+# private DNS started also returning an IPv4 address, IPv4 connection
+# attempts got ECONNREFUSED even though the process was up and the IPv6
+# bind worked fine. Passing two explicit `--bind` flags removes the
+# ambiguity - one socket per family. Local dev and Docker Compose are
+# unaffected - they still run plain uvicorn (see Makefile,
 # backend/Dockerfile), since neither needs Railway's private network.
-poetry run hypercorn cinqflow.api.app:app --bind "[::]:${PORT:-8000}" &
+poetry run hypercorn cinqflow.api.app:app --bind "0.0.0.0:${PORT:-8000}" --bind "[::]:${PORT:-8000}" &
 poetry run cinqflow work &
 
 wait -n
