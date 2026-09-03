@@ -12,7 +12,15 @@
 # note for the full rationale.
 set -e
 
-poetry run uvicorn cinqflow.api.app:app --host 0.0.0.0 --port "${PORT:-8000}" &
+# hypercorn, not uvicorn: Railway's private network (*.railway.internal) is
+# IPv6-only, so the api process must bind dual-stack to stay reachable both
+# publicly (IPv4) and over private networking (IPv6). uvicorn's CLI cannot
+# dual-stack bind at all - `--host ::` makes it IPv6-only and breaks the
+# public domain instead of fixing private networking. hypercorn's `[::]`
+# bind is dual-stack, so one process serves both. Local dev and Docker
+# Compose are unaffected - they still run plain uvicorn (see Makefile,
+# backend/Dockerfile), since neither needs Railway's private network.
+poetry run hypercorn cinqflow.api.app:app --bind "[::]:${PORT:-8000}" &
 poetry run cinqflow work &
 
 wait -n
