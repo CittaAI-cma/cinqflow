@@ -46,9 +46,20 @@ class InterpretationResponse(BaseModel):
 MappingFieldStatus = Literal["candidate", "ambiguous", "unknown"]
 
 
+class LlmTransformArg(BaseModel):
+    key: str
+    value: str
+
+
 class LlmTransform(BaseModel):
+    """`args` is a list of pairs, not a dict: OpenAI's Structured Outputs strict
+    mode rejects open-ended `additionalProperties` schemas like `dict[str, str]`
+    produces - every object schema must declare a fixed `properties`/`required`
+    set. `recommend_mapping._validate` converts it back to a dict when
+    building the persisted `Transform`."""
+
     op: str
-    args: dict[str, str] = Field(default_factory=dict)
+    args: list[LlmTransformArg] = Field(default_factory=list)
 
 
 class LlmFieldCandidate(BaseModel):

@@ -146,13 +146,23 @@ class RecommendMappingGraph:
             if isinstance(step, dict) and step.get("op"):
                 op = str(step["op"])
                 if op in ALLOWED_OPS:
-                    args = step.get("args") or {}
-                    transform = Transform(
-                        op=op,
-                        args={str(k): str(v) for k, v in args.items()}
-                        if isinstance(args, dict)
-                        else {},
-                    )
+                    raw_args = step.get("args") or []
+                    # `args` is a list of {"key", "value"} pairs, not a dict -
+                    # OpenAI's Structured Outputs strict mode rejects
+                    # dict[str, str]'s open `additionalProperties` schema (see
+                    # intelligence/schemas.py:LlmTransform). A plain dict is
+                    # still tolerated here for other providers / older data.
+                    if isinstance(raw_args, dict):
+                        parsed_args = {str(k): str(v) for k, v in raw_args.items()}
+                    elif isinstance(raw_args, list):
+                        parsed_args = {
+                            str(pair["key"]): str(pair["value"])
+                            for pair in raw_args
+                            if isinstance(pair, dict) and "key" in pair and "value" in pair
+                        }
+                    else:
+                        parsed_args = {}
+                    transform = Transform(op=op, args=parsed_args)
                 else:
                     notes.append(f"dropped unsupported transform '{op}' on {source}")
 

@@ -311,7 +311,10 @@ def test_unsupported_transform_is_dropped_but_mapping_survives(s, roster_facts):
                     {
                         "source": "member_dob",
                         "target": "members.date_of_birth",
-                        "transform": {"op": "exec_python", "args": {"code": "os.system('x')"}},
+                        "transform": {
+                            "op": "exec_python",
+                            "args": [{"key": "code", "value": "os.system('x')"}],
+                        },
                         "confidence": 0.9,
                         "evidence": ["glossary:DOB"],
                         "status": "candidate",
