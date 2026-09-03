@@ -20,10 +20,10 @@ RUN pip install --no-cache-dir "poetry==2.4.1"
 WORKDIR /app/backend
 
 COPY backend/pyproject.toml backend/poetry.lock ./
-RUN poetry install --no-root
+RUN poetry install --no-root --only main
 
 COPY backend/ .
-RUN poetry install
+RUN poetry install --only main
 
 # Reference copy only - the running app reads CINQFLOW_KNOWLEDGE_ROOT on the
 # volume (bootstrap.sh), never this path directly.
