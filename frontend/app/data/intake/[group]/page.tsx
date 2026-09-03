@@ -31,7 +31,8 @@ export default async function IngestGroupPage({
   let uploads: Upload[] = [];
   try {
     ({ uploads } = await listUploads());
-  } catch {
+  } catch (err) {
+    console.error("listUploads failed:", err);
     return (
       <p className="alert error">
         The API is not responding. Start it with <span className="mono">make api</span>, and the

@@ -10,7 +10,8 @@ export default async function IngestionRegister() {
 
   try {
     ({ uploads } = await listUploads());
-  } catch {
+  } catch (err) {
+    console.error("listUploads failed:", err);
     unreachable = true;
   }
 
