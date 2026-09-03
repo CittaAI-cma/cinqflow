@@ -51,6 +51,7 @@ services:
       CINQFLOW_LLM_PROVIDER: ${CINQFLOW_LLM_PROVIDER:-stub}
       CINQFLOW_LLM_MODEL: ${CINQFLOW_LLM_MODEL:-claude-sonnet-5}
       CINQFLOW_LLM_API_KEY: ${CINQFLOW_LLM_API_KEY:-}
+      CINQFLOW_LLM_MAX_TOKENS: ${CINQFLOW_LLM_MAX_TOKENS:-8000}
       # Matches FRONTEND_HOST_PORT below by default; override both together.
       # Both hostnames are listed because a browser treats localhost and
       # 127.0.0.1 as different origins even though they reach the same
