@@ -1,12 +1,17 @@
 "use client";
 
-import { useActionState } from "react";
+import Link from "next/link";
+import { useToast } from "@/lib/useToast";
+import EmptyState from "@/components/ui/EmptyState";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 import Kpi from "@/components/Kpi";
 import StatusWord from "@/components/StatusWord";
 import { runPreview, type StudioState } from "@/app/mapping/actions";
 import type { PreviewResult } from "@/lib/api";
 import { previewStatusWord } from "@/lib/statusWords";
+
+const ROW_LIMITS = [10, 25, 50] as const;
 
 function RunButton({ label }: { label: string }) {
   const { pending } = useFormStatus();
@@ -30,12 +35,43 @@ export default function PreviewPanel({
   feed,
   version,
   preview,
+  limit = 25,
 }: {
   feed: string;
   version: number;
   preview: PreviewResult | null;
+  limit?: number;
 }) {
   const [state, action] = useActionState<StudioState, FormData>(runPreview, {});
+  const { push } = useToast();
+  const [fieldFilter, setFieldFilter] = useState<string>("");
+
+  // The fields actually present across the loaded sample, in source order of
+  // first appearance — what the dropdown offers. Recomputed only when the
+  // preview itself changes, not on every keystroke elsewhere on the page.
+  const fieldOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: { source: string; target: string }[] = [];
+    for (const row of preview?.row_results ?? []) {
+      for (const field of row.fields) {
+        if (seen.has(field.source)) continue;
+        seen.add(field.source);
+        options.push({ source: field.source, target: field.target });
+      }
+    }
+    return options;
+  }, [preview]);
+
+  // The inline alert below remains the record; the toast is what reaches an
+  // analyst who has already scrolled past this panel into the row table.
+  useEffect(() => {
+    if (state.saved) push("Preview queued.", "success");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.saved]);
+  useEffect(() => {
+    if (state.error) push(state.error, "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.error]);
   const aggregates = preview?.aggregates;
 
   return (
@@ -120,7 +156,19 @@ export default function PreviewPanel({
                 ))}
               </ul>
             </div>
-          ) : null}
+          ) : (
+            <div style={{ marginTop: 14 }}>
+              {/* A clean preview is the result the analyst is hoping for. It
+                  has to be stated: silence here is indistinguishable from
+                  "this check did not run". */}
+              <EmptyState
+                tone="result"
+                compact
+                title="No rule refused a row."
+                detail="Every sampled row satisfied the spec's null rules, casts and value maps."
+              />
+            </div>
+          )}
 
           {Object.keys(aggregates!.null_or_invalid).length ? (
             <div className="card" style={{ marginTop: 14 }}>
@@ -131,14 +179,70 @@ export default function PreviewPanel({
                   .join(" · ")}
               </span>
             </div>
-          ) : null}
+          ) : (
+            <div style={{ marginTop: 14 }}>
+              <EmptyState
+                tone="result"
+                compact
+                title="Every mapped target received a value."
+                detail="No target in this spec came out null or invalid across the sample."
+              />
+            </div>
+          )}
 
           <h2>
             Row by row{" "}
             <span className="meta">
-              · showing {preview.row_results.length} of {preview.row_results_total}
+              · showing {preview.row_results.length} of {preview.row_results_total} rows
+              {fieldFilter ? <> · filtered to <span className="mono">{fieldFilter}</span></> : null}
             </span>
           </h2>
+
+          {preview.phi_masked.length ? (
+            <p className="meta" style={{ marginBottom: 8 }}>
+              <span className="tag phi">PHI</span> {preview.phi_masked.length} column
+              {preview.phi_masked.length === 1 ? "" : "s"} masked below —{" "}
+              <span className="mono">{preview.phi_masked.join(", ")}</span>
+            </p>
+          ) : null}
+
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <label htmlFor="preview-field-filter" className="sr-only">
+                Filter by field
+              </label>
+              <select
+                id="preview-field-filter"
+                className="native-select"
+                value={fieldFilter}
+                onChange={(event) => setFieldFilter(event.target.value)}
+                title="See how one field mapped across every sampled row"
+              >
+                <option value="">All fields ({fieldOptions.length})</option>
+                {fieldOptions.map((option) => (
+                  <option key={option.source} value={option.source}>
+                    {option.source} → {option.target}
+                    {preview.phi_masked.includes(option.source) ? " (PHI)" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="chip-row" role="group" aria-label="Rows to show">
+              {ROW_LIMITS.map((n) => (
+                <Link
+                  key={n}
+                  href={`/mapping/${encodeURIComponent(feed)}?v=${version}&limit=${n}`}
+                  className={`chip${n === limit ? " on" : ""}`}
+                  aria-current={n === limit ? "true" : undefined}
+                  title={`Show the first ${n} sampled rows`}
+                >
+                  First {n}
+                </Link>
+              ))}
+            </div>
+          </div>
+
           <div className="card scroll" style={{ padding: 0 }}>
             <table>
               <thead>
@@ -153,41 +257,56 @@ export default function PreviewPanel({
                 </tr>
               </thead>
               <tbody>
-                {preview.row_results.flatMap((row) =>
-                  row.fields.map((field, index) => (
-                    <tr key={`${row.row_number}-${field.source}`}>
-                      {index === 0 ? (
-                        <>
-                          <td className="num mono" rowSpan={row.fields.length}>
-                            {row.row_number}
-                          </td>
-                          <td rowSpan={row.fields.length}>
-                            <span className={`outcome ${OUTCOME_CLASS[row.outcome] ?? ""}`}>
-                              {row.outcome}
+                {preview.row_results
+                  .map((row) => ({
+                    ...row,
+                    fields: fieldFilter
+                      ? row.fields.filter((f) => f.source === fieldFilter)
+                      : row.fields,
+                  }))
+                  .filter((row) => row.fields.length > 0)
+                  .flatMap((row) =>
+                    row.fields.map((field, index) => (
+                      <tr key={`${row.row_number}-${field.source}`}>
+                        {index === 0 ? (
+                          <>
+                            <td className="num mono" rowSpan={row.fields.length}>
+                              {row.row_number}
+                            </td>
+                            <td rowSpan={row.fields.length}>
+                              <span className={`outcome ${OUTCOME_CLASS[row.outcome] ?? ""}`}>
+                                {row.outcome}
+                              </span>
+                            </td>
+                          </>
+                        ) : null}
+                        <td className="mono">
+                          {field.source}
+                          {preview.phi_masked.includes(field.source) ? (
+                            <span className="tag phi" style={{ marginLeft: 6 }}>
+                              PHI
                             </span>
-                          </td>
-                        </>
-                      ) : null}
-                      <td className="mono">{field.source}</td>
-                      <td className="mono">
-                        {field.source_value === null || field.source_value === ""
-                          ? "—"
-                          : field.source_value}
-                      </td>
-                      <td className="mono">
-                        {field.mapped_value === null ? (
-                          <span className="error">null</span>
-                        ) : (
-                          field.mapped_value
-                        )}
-                      </td>
-                      <td className="mono small">{field.target}</td>
-                      <td className="evidence">
-                        {field.outcome === "ok" ? "" : field.reason}
-                      </td>
-                    </tr>
-                  )),
-                )}
+                          ) : null}
+                        </td>
+                        <td className="mono">
+                          {field.source_value === null || field.source_value === ""
+                            ? "—"
+                            : field.source_value}
+                        </td>
+                        <td className="mono">
+                          {field.mapped_value === null ? (
+                            <span className="error">null</span>
+                          ) : (
+                            field.mapped_value
+                          )}
+                        </td>
+                        <td className="mono small">{field.target}</td>
+                        <td className="evidence">
+                          {field.outcome === "ok" ? "" : field.reason}
+                        </td>
+                      </tr>
+                    )),
+                  )}
               </tbody>
             </table>
           </div>

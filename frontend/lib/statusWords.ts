@@ -11,6 +11,14 @@ export type StatusWord =
   | "Needs Attention"
   | "Missing";
 
+/** `upload.status` only ever proves Bronze landed — mapping (Stage 3-6) lives on
+ *  a separate object (`MappingVersion`/`Run`, keyed by feed) this word alone
+ *  cannot see. So `landed` reads "Needs Review" (the mapping proposal is the
+ *  very next thing waiting on someone), never "Completed" — the one case that
+ *  word would overclaim a finished pipeline for. A caller that has already
+ *  paid for the batch's promotion state (e.g. `lifecycleStage.ts`'s
+ *  `groupStage`, one API call per object) can and should report Silver
+ *  promotion more precisely than this cheap, list-wide word ever can. */
 export function uploadStatusWord(status: UploadStatus): StatusWord | null {
   switch (status) {
     case "received":
@@ -18,14 +26,14 @@ export function uploadStatusWord(status: UploadStatus): StatusWord | null {
     case "profiling":
     case "profiled":
     case "interpreting":
+    case "approved":
     case "landing":
       return "Processing";
     case "interpreted":
-      return "Needs Review";
-    case "approved":
-    case "rejected":
     case "landed":
-      return "Completed";
+      return "Needs Review";
+    case "rejected":
+      return "Needs Attention";
     case "profile_failed":
     case "interpret_failed":
     case "land_failed":

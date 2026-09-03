@@ -10,6 +10,12 @@ install:
 install-db:
 	cd $(BACKEND) && poetry run cinqflow install
 
+# Drops every schema cinqflow owns (workflow, jobq, bronze, silver) and the
+# landing zone, then reinstalls empty. Prints the plan and refuses without
+# CONFIRM=yes - this is DROP SCHEMA ... CASCADE, not selective cleanup.
+reset-db:
+	cd $(BACKEND) && poetry run cinqflow reset $(if $(filter yes,$(CONFIRM)),--yes,)
+
 api:
 	cd $(BACKEND) && poetry run uvicorn cinqflow.api.app:app --reload --port 8000
 

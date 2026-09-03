@@ -4,8 +4,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import Avatar from "@/components/ui/Avatar";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import DataTable, { type Column } from "@/components/ui/DataTable";
 import TableToolbar from "@/components/ui/TableToolbar";
+import Timestamp from "@/components/ui/Timestamp";
 import StatusWord from "@/components/StatusWord";
 import {
   ArrowRight,
@@ -17,8 +19,9 @@ import {
   RefreshIcon,
   TrashIcon,
 } from "@/components/icons";
-import type { Upload } from "@/lib/api";
+import { deleteUpload, type Upload } from "@/lib/api";
 import { uploadStatusWord } from "@/lib/statusWords";
+import { useToast } from "@/lib/useToast";
 
 const CSV_HEADERS = [
   "group_name",
@@ -31,15 +34,10 @@ const CSV_HEADERS = [
   "created_ts",
 ] as const;
 
-function formatTimestamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return (
-    `${pad(date.getMonth() + 1)}/${pad(date.getDate())}/${date.getFullYear()} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-  );
-}
+/* Timestamps render through `<Timestamp>` (UTC on the server, local after
+   mount). Formatting them inline with `getHours()` here used to hydrate
+   differently from the server's UTC container and threw the table's subtree
+   away on every load — taking the search box and page state with it. */
 
 export default function IngestionTable({
   uploads,
@@ -51,6 +49,26 @@ export default function IngestionTable({
   const [query, setQuery] = useState("");
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
+  const { push } = useToast();
+  const [pendingDelete, setPendingDelete] = useState<Upload | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    const { result, error } = await deleteUpload(pendingDelete.upload_id);
+    setDeleting(false);
+    setPendingDelete(null);
+    if (error) {
+      push(error, "error");
+      return;
+    }
+    const preserved = result?.preserved_batches.length
+      ? ` Bronze for ${result.preserved_batches.length} batch(es) is preserved — append-only by design.`
+      : "";
+    push(`Deleted "${pendingDelete.filename}". Its fingerprint is free for re-upload.${preserved}`, "success");
+    startRefresh(() => router.refresh());
+  }
 
   /** Searching covers the columns on screen and the ones behind them — feed and
    *  source system are in the group glyph's title, not their own column. */
@@ -79,6 +97,11 @@ export default function IngestionTable({
       {
         key: "group",
         header: "Group name",
+        // The one column that absorbs slack. Everything else is a bounded
+        // value (a date, an email, a status word); the filename is unbounded,
+        // so it is the one that truncates rather than the one that pushes
+        // Stage and Actions off the right edge.
+        width: "34%",
         sortable: true,
         value: (row) => row.filename.toLowerCase(),
         render: (row) => (
@@ -100,7 +123,9 @@ export default function IngestionTable({
             <Link
               href={`/data/intake/${encodeURIComponent(row.feed)}`}
               className="group-name"
-              title={`Open group ${row.feed}`}
+              // Carries the full name too: the cell truncates long filenames
+              // so the rest of the columns stay on screen.
+              title={`${row.filename} — open group ${row.feed}`}
             >
               {row.filename}
             </Link>
@@ -119,7 +144,11 @@ export default function IngestionTable({
         header: "Last updated",
         sortable: true,
         value: (row) => Date.parse(row.created_ts) || 0,
-        render: (row) => <span className="cell-plain">{formatTimestamp(row.created_ts)}</span>,
+        render: (row) => (
+          <span className="cell-plain">
+            <Timestamp value={row.created_ts} />
+          </span>
+        ),
       },
       {
         key: "createdBy",
@@ -158,13 +187,15 @@ export default function IngestionTable({
             >
               <EditIcon size={16} />
             </Link>
-            <span
-              className="icon-action danger disabled"
-              aria-disabled="true"
-              title="Delete — uploads are append-only on this build; there is no delete endpoint"
+            <button
+              type="button"
+              className="icon-action danger"
+              title={`Delete "${row.filename}"`}
+              aria-label={`Delete ${row.filename}`}
+              onClick={() => setPendingDelete(row)}
             >
               <TrashIcon size={16} />
-            </span>
+            </button>
           </div>
         ),
       },
@@ -229,6 +260,26 @@ export default function IngestionTable({
         emptyMessage={
           query ? `No ingestion matches “${query}”.` : "No ingestion yet. Add one to begin."
         }
+      />
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete this ingestion?"
+        tone="danger"
+        confirmLabel="Delete"
+        busy={deleting}
+        consequence={
+          <>
+            This removes <span className="mono">{pendingDelete?.filename}</span> and everything
+            recorded against it — profile, interpretation, approvals, and any mapping draft — and
+            frees its fingerprint so the same file can be uploaded again. If it already landed to
+            Bronze, those rows are preserved: Bronze is append-only by design and this cannot
+            remove them, only the reference to them.
+          </>
+        }
+        requireTyped="DELETE"
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
       />
     </>
   );

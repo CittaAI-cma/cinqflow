@@ -8,6 +8,7 @@ import `intelligence/` to get at it.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from cinqflow.knowledge.provider import KnowledgeProvider
@@ -58,6 +59,34 @@ class CanonicalModel:
 
     def table_of(self, target: str) -> str | None:
         return target.split(".", 1)[0] if "." in target else None
+
+    def required_targets(self, tables: Iterable[str]) -> tuple[str, ...]:
+        """The minimum a spec touching these entities must map.
+
+        Only an entity whose primary key is exactly *one* mappable column counts
+        - that column is the entity's identity, and a Silver row without it is
+        unidentifiable regardless of feed (e.g. `members.source_system_id`). A
+        composite key (e.g. `members_enrollment_segments`'s
+        `[member_plan, member_payor, insurance_id, source_system_id]`) is not
+        enforced component by component: which of those a given feed can even
+        supply is itself feed-dependent judgment, not a blanket rule - exactly
+        the "no defensible candidate, never guessed" principle this platform
+        already applies to the AI side. `source_system`-style key columns the
+        DDL marks system-populated never count: a mapping never fills them in.
+
+        Derived entirely from `primary_key`, already governed data every
+        canonical YAML declares - no new authoring, no new knowledge shape.
+        """
+        result: list[str] = []
+        for table in tables:
+            mappable = [
+                f"{table}.{column}"
+                for column in self.primary_keys.get(table, ())
+                if f"{table}.{column}" in self.types
+            ]
+            if len(mappable) == 1:
+                result.append(mappable[0])
+        return tuple(result)
 
 
 #: An empty model is not an error: a domain may simply have no governed model yet.

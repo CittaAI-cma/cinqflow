@@ -123,6 +123,7 @@ export default async function ReviewPage({
         ) : (
           <GateActions
             uploadId={uploadId}
+            filename={upload.filename}
             phiCount={profile.facts.phi_candidates.length}
             unknownCount={interpretation.content.unknowns.length}
           />

@@ -493,6 +493,56 @@ def mask_facts(facts: ProfileFacts) -> ProfileFacts:
     )
 
 
+def mask_preview_rows(
+    rows: list[PreviewRowResult], *, phi_sources: set[str], phi_targets: set[str]
+) -> tuple[list[PreviewRowResult], list[str]]:
+    """A preview row shows real, per-record `source_value`/`mapped_value` -
+    real PHI, not the bounded/example values `mask_facts` already covers. This
+    was the one place in the API where PHI reached the client unmasked; every
+    other row-shaped response (Bronze, quarantine, profile samples) already
+    goes through `mask_row`/`mask_facts`.
+
+    A field counts as PHI by either signal, independently: `phi_sources` is
+    the upload's own profiled columns (`ProfileFacts.phi_candidates` - pattern-
+    detected against the raw file), `phi_targets` is the canonical model's own
+    declared `phi: true` fields (`CanonicalModel.phi`, governed, not guessed).
+    Either one is enough to mask the source value, the mapped value, AND the
+    failure reason - `mapping_exec`'s `parse_date` failure interpolates the
+    raw value into its message (`"'{value}' does not match format ..."`), so
+    masking only the two value columns would leave the same PHI readable one
+    column over. The rule that fired is not lost: it is still named in
+    `PreviewAggregates.failures_by_rule` (`<source>:<rule>`), which never
+    carries a value, only a count.
+
+    Returns the masked rows and the sorted list of source columns masked, so a
+    caller can label them the same way `BronzeRows.phi_masked` already does.
+    """
+    masked_sources: set[str] = set()
+
+    def _mask(field: PreviewFieldResult) -> PreviewFieldResult:
+        if field.source not in phi_sources and field.target not in phi_targets:
+            return field
+        masked_sources.add(field.source)
+        return field.model_copy(
+            update={
+                "source_value": "•••"
+                if field.source_value not in (None, "")
+                else field.source_value,
+                "mapped_value": "•••"
+                if field.mapped_value not in (None, "")
+                else field.mapped_value,
+                "reason": f"{field.outcome} (reason withheld — source is PHI)"
+                if field.reason
+                else field.reason,
+            }
+        )
+
+    masked_rows = [
+        row.model_copy(update={"fields": [_mask(f) for f in row.fields]}) for row in rows
+    ]
+    return masked_rows, sorted(masked_sources)
+
+
 #: The `interpret_file` graph's nodes, in the order they run (see
 #: `intelligence/graphs/interpret_file.py`). Fixed here, not derived from the
 #: graph, so this module - the one thing a poller depends on - never has to

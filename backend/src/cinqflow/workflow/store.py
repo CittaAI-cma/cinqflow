@@ -210,6 +210,98 @@ class WorkflowStore:
         )
         return self._to_upload(row)
 
+    def delete_upload(self, upload_id: str) -> dict:
+        """Purge everything this upload owns in the workflow schema, and its
+        pending queue messages, so a fresh upload of the same bytes is possible
+        (the fingerprint UNIQUE index lives on this table).
+
+        Deliberately does NOT touch Bronze/Silver/quarantine rows for any batch
+        this upload landed: `dataplane/pg.py` puts a DB-level trigger on those
+        tables that refuses UPDATE/DELETE/TRUNCATE even for a superuser - a
+        stated platform guarantee ("Bronze append-only", checklist.md §0), not
+        an oversight this method should route around. Their batch/table names
+        are returned instead, so a caller can say plainly what still exists and
+        why. A dev/test cleanup that truly needs those rows gone has to drop
+        the feed's Bronze/Silver tables directly, outside the application.
+        """
+        upload = self.get_upload(upload_id)  # UnknownUpload if the id is wrong
+
+        batch_ids = sorted({r.batch_id for r in self.list_runs(upload_id=upload_id, limit=1000)})
+        preserved = [
+            {
+                "batch_id": r["batch_id"],
+                "bronze_table": r["bronze_table"],
+                "silver_tables": r["silver_tables"],
+            }
+            for r in fetch_all(
+                self.conn,
+                f"""SELECT batch_id, bronze_table, silver_tables
+                    FROM {self.s.workflow_schema}.lineage
+                    WHERE batch_id = ANY(%s)""",
+                (batch_ids or [""],),
+            )
+        ]
+
+        # Only the mapping-side artifacts (drafts, previews) are feed-scoped
+        # rather than upload-scoped; purge them too, but only when no other
+        # upload on the feed might still depend on them.
+        sibling = fetch_one(
+            self.conn,
+            f"""SELECT 1 FROM {self.s.workflow_schema}.upload
+                WHERE feed = %s AND upload_id != %s LIMIT 1""",
+            (upload.feed, upload_id),
+        )
+        purge_feed = sibling is None
+
+        def _delete(schema: str, table: str, where: str, params: tuple) -> int:
+            row = fetch_one(
+                self.conn,
+                f"""WITH d AS (DELETE FROM {schema}.{table} WHERE {where} RETURNING 1)
+                    SELECT count(*) AS n FROM d""",
+                params,
+            )
+            return int(row["n"]) if row else 0
+
+        wf = self.s.workflow_schema
+        deleted = {
+            "interpretation_run": _delete(wf, "interpretation_run", "upload_id = %s", (upload_id,)),
+            "interpretation": _delete(wf, "interpretation", "upload_id = %s", (upload_id,)),
+            "profile": _delete(wf, "profile", "upload_id = %s", (upload_id,)),
+            "approval": _delete(wf, "approval", "upload_id = %s", (upload_id,)),
+            "bronze_profile": _delete(
+                wf, "bronze_profile", "batch_id = ANY(%s)", (batch_ids or [""],)
+            ),
+            "proposal": _delete(wf, "proposal", "upload_id = %s", (upload_id,)),
+            "lineage": _delete(wf, "lineage", "upload_id = %s", (upload_id,)),
+            "run": _delete(wf, "run", "upload_id = %s", (upload_id,)),
+        }
+        if purge_feed:
+            deleted["preview"] = _delete(wf, "preview", "feed = %s", (upload.feed,))
+            deleted["mapping_version"] = _delete(wf, "mapping_version", "feed = %s", (upload.feed,))
+
+        # Any message still able to fire (pending, or mid-retry) against an
+        # upload_id/batch_id that is about to stop existing. A `done` message
+        # is inert history and is left alone.
+        deleted["queue_message"] = _delete(
+            self.s.queue_schema,
+            "message",
+            "state != 'done' AND (payload->>'upload_id' = %s OR payload->>'batch_id' = ANY(%s))",
+            (upload_id, batch_ids or [""]),
+        )
+
+        # The upload row goes last: if anything above fails, the upload still
+        # exists rather than being left as a phantom, already-gone reference.
+        deleted["upload"] = _delete(wf, "upload", "upload_id = %s", (upload_id,))
+
+        return {
+            "upload_id": upload_id,
+            "feed": upload.feed,
+            "landing_key": upload.landing_key,
+            "deleted": deleted,
+            "feed_mapping_purged": purge_feed,
+            "preserved_batches": preserved,
+        }
+
     # ---------------------------------------------------------------- profiles
     def put_profile(
         self, *, profile_id: str, upload_id: str, profiler_version: str, facts: ProfileFacts

@@ -1,8 +1,19 @@
-/** The only module that talks to the backend. */
+/** The only module that talks to the backend.
+ *
+ *  Imported from both server code (pages, actions) and client components
+ *  (`RunProcessing`, `RetryButton` poll/retry directly) - so it needs two
+ *  possible base URLs, not one. Inside Docker Compose, `CINQFLOW_API` is the
+ *  in-network hostname (`http://api:8000`), reachable from the Next.js server
+ *  process but not from a browser on the host; `NEXT_PUBLIC_CINQFLOW_API` is
+ *  the host-published URL the browser actually needs. `typeof window`
+ *  is the standard Next.js way to tell which bundle this is running in. */
 
 import { cache } from "react";
 
-const BASE = process.env.CINQFLOW_API ?? "http://localhost:8000";
+const BASE =
+  typeof window === "undefined"
+    ? (process.env.CINQFLOW_API ?? "http://localhost:8000")
+    : (process.env.NEXT_PUBLIC_CINQFLOW_API ?? "http://localhost:8000");
 
 export type UploadStatus =
   | "received"
@@ -270,6 +281,34 @@ export async function retryUpload(uploadId: string): Promise<{ error?: string }>
   return { error: `retry failed with status ${response.status}` };
 }
 
+export interface DeleteUploadResult {
+  upload_id: string;
+  feed: string;
+  deleted: Record<string, number>;
+  feed_mapping_purged: boolean;
+  preserved_batches: { batch_id: string; bronze_table: string | null; silver_tables: unknown }[];
+  file_removed: boolean;
+}
+
+/** Purges the upload's workflow rows and original file, freeing its
+ *  fingerprint for re-upload. Never touches Bronze/Silver — those are
+ *  append-only by a DB-level guard this call does not attempt to bypass;
+ *  `preserved_batches` says which batches still exist because of it. */
+export async function deleteUpload(
+  uploadId: string,
+): Promise<{ result?: DeleteUploadResult; error?: string }> {
+  const response = await fetch(`${BASE}/api/uploads/${uploadId}`, { method: "DELETE" });
+  const payload = await response.json().catch(() => ({}));
+  if (response.ok) return { result: payload as DeleteUploadResult };
+  const detail = payload?.detail;
+  if (typeof detail === "string") return { error: detail };
+  if (detail?.message) {
+    const batches = Array.isArray(detail.batch_ids) ? ` (${detail.batch_ids.join(", ")})` : "";
+    return { error: `${detail.message}${batches}` };
+  }
+  return { error: `delete failed with status ${response.status}` };
+}
+
 /** The poll target: stage-by-stage journey, with LangGraph node detail for
  *  whichever stage is the AI interpretation. */
 export function getUploadProgress(uploadId: string) {
@@ -362,6 +401,17 @@ export async function getProposal(batchId: string): Promise<MappingProposal | nu
   }
 }
 
+/** The same proposal, by its own id rather than its batch — what the Mapping
+ *  Studio's empty state has in its URL (`?proposal=<id>`) before any draft
+ *  exists, so it can show what "Start draft" is about to seed from. */
+export async function getProposalById(proposalId: string): Promise<MappingProposal | null> {
+  try {
+    return await get<MappingProposal>(`/api/mapping-proposals/${proposalId}`);
+  } catch {
+    return null;
+  }
+}
+
 /** G1. Returns an error message rather than throwing, so the gate can show it. */
 export async function decideUpload(
   uploadId: string,
@@ -426,6 +476,23 @@ export interface MappingVocabulary {
   casts: string[];
   on_null: string[];
   on_unmapped_value: string[];
+  /** table -> the one column that is that entity's identity (only present for
+   *  an entity whose primary key is exactly one mappable column — a composite
+   *  key is feed-dependent judgment, never enforced component by component).
+   *  G2 refuses to approve a version that touches a table listed here without
+   *  mapping its column; the studio uses this to warn before the analyst ever
+   *  reaches that wall. */
+  primary_keys: Record<string, string[]>;
+}
+
+/** The AI's own rationale for one field, carried forward from the proposal a
+ *  draft was seeded from — so the studio can show it next to the row an
+ *  analyst is editing, not only at the moment the draft was first created. */
+export interface FieldAiContext {
+  confidence: number;
+  evidence: string[];
+  concept: string | null;
+  status: FieldStatus;
 }
 
 export interface MappingVersionDetail {
@@ -442,6 +509,9 @@ export interface MappingVersionDetail {
   created_ts: string;
   updated_ts: string | null;
   vocabulary: MappingVocabulary;
+  /** Keyed by source column. Empty when this version was not seeded from a
+   *  proposal (`origin === "analyst_created"`). */
+  ai_context: Record<string, FieldAiContext>;
 }
 
 export interface MappingDiff {
@@ -576,6 +646,11 @@ export interface PreviewResult {
   };
   row_results: PreviewRowResult[];
   row_results_total: number;
+  /** Source columns masked in every `row_results` entry (source value, mapped
+   *  value, and failure reason alike) — PHI by the upload's own profiled
+   *  columns or the canonical model's own `phi: true` fields, either is
+   *  enough. Mirrors `BronzeRows.phi_masked`/`BatchQuarantine.phi_masked`. */
+  phi_masked: string[];
   is_current: boolean;
   approvable: boolean;
   stale_reason: string | null;
@@ -583,10 +658,14 @@ export interface PreviewResult {
   created_ts: string;
 }
 
-export async function getPreview(feed: string, version: number): Promise<PreviewResult | null> {
+export async function getPreview(
+  feed: string,
+  version: number,
+  limit = 25,
+): Promise<PreviewResult | null> {
   try {
     return await get<PreviewResult>(
-      `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/preview?limit=25`,
+      `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/preview?limit=${limit}`,
     );
   } catch {
     return null;

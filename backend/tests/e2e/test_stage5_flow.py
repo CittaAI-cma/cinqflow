@@ -122,22 +122,40 @@ def test_the_analyst_sees_source_values_mapped_values_and_failures(client, setti
     assert "member_id:on_null" in aggregates["failures_by_rule"]
     assert aggregates["null_or_invalid"]["members.date_of_birth"] == 1
 
+    # PHI columns are masked in every row, in every one of source value /
+    # mapped value / failure reason - the one place in the API that used to
+    # show real, per-record PHI unmasked. `member_sex` is masked too: the
+    # canonical model declares `members.sex` PHI (enrollment.yaml), same as
+    # name and DOB - this asserts the platform's own governed classification,
+    # not a guess this test is making.
+    assert set(preview["phi_masked"]) >= {"member_first_name", "member_dob", "member_sex"}
+
     rows = {r["row_number"]: r for r in preview["row_results"]}
     assert rows[1]["outcome"] == "ok"
     clean = {f["source"]: f for f in rows[1]["fields"]}
-    assert clean["member_sex"]["source_value"] == "F"
-    assert clean["member_sex"]["mapped_value"] == "female"
-    assert clean["member_first_name"]["mapped_value"] == "DANIELLE"
+    assert clean["member_sex"]["source_value"] == "•••"
+    assert clean["member_sex"]["mapped_value"] == "•••"
+    assert clean["member_first_name"]["source_value"] == "•••"
+    assert clean["member_first_name"]["mapped_value"] == "•••"
 
     broken = {f["source"]: f for f in rows[2]["fields"]}
     assert broken["member_dob"]["outcome"] == "failure"
-    assert broken["member_dob"]["source_value"] == "13/45/1990"
+    assert broken["member_dob"]["source_value"] == "•••"  # was "13/45/1990"
     assert broken["member_dob"]["mapped_value"] is None
-    assert "does not match format" in broken["member_dob"]["reason"]
+    assert "13/45/1990" not in broken["member_dob"]["reason"]
+    assert "PHI" in broken["member_dob"]["reason"]
+    # The rule that fired is still knowable - just not from a leaked value.
+    assert "member_dob:parse_date" in aggregates["failures_by_rule"]
 
     rejected = {f["source"]: f for f in rows[3]["fields"]}
     assert rejected["member_id"]["outcome"] == "rejected"
-    assert "rejects the row" in rejected["member_id"]["reason"]
+    # `members.source_system_id` is PHI too (enrollment.yaml) - its reason is
+    # redacted like the others, even though this particular rule's message
+    # ("on_null: reject" firing) never interpolated a value. Blanket redaction
+    # per PHI field is the simple, robust rule: it does not depend on knowing
+    # which reason templates are safe today and staying right about that
+    # forever as `mapping_exec` changes.
+    assert rejected["member_id"]["reason"] == "rejected (reason withheld — source is PHI)"
 
 
 def test_previewing_marks_the_version_and_editing_makes_it_stale(client, settings, draft):

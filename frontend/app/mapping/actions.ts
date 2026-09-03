@@ -35,6 +35,30 @@ export async function saveSpec(_previous: StudioState, form: FormData): Promise<
 
     const op = String(form.get(`op_${i}`) ?? "");
     const arg = String(form.get(`op_arg_${i}`) ?? "").trim();
+    // The editor exposes one argument box, but a saved transform can legally
+    // carry several (`substring` takes start *and* length). Rebuilding the
+    // args from the single box alone silently dropped every other one on save
+    // — a spec that round-tripped through the studio untouched came back
+    // different. So the row carries its original args, and the box edits only
+    // the primary one; the rest are preserved as-is, unless the analyst
+    // changed the operation, in which case the old op's arguments no longer
+    // mean anything and are correctly discarded.
+    const originalOp = String(form.get(`op_original_${i}`) ?? "");
+    let preservedArgs: Record<string, string> = {};
+    if (op && op === originalOp) {
+      try {
+        const parsed: unknown = JSON.parse(String(form.get(`op_args_${i}`) ?? "{}"));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+            preservedArgs[key] = String(value);
+          }
+        }
+      } catch {
+        // A malformed hidden field is not worth failing a save over; the
+        // primary argument below still applies.
+        preservedArgs = {};
+      }
+    }
     const valueMapRaw = String(form.get(`value_map_${i}`) ?? "").trim();
     const valueMap: Record<string, string> = {};
     for (const pair of valueMapRaw.split(",")) {
@@ -46,7 +70,7 @@ export async function saveSpec(_previous: StudioState, form: FormData): Promise<
       source,
       target: String(form.get(`target_${i}`) ?? "").trim(),
       cast: String(form.get(`cast_${i}`) ?? "string"),
-      transform: op ? { op, args: arg ? { [argNameFor(op)]: arg } : {} } : null,
+      transform: op ? { op, args: buildArgs(op, arg, preservedArgs) } : null,
       value_map: valueMap,
       on_null: String(form.get(`on_null_${i}`) ?? "pass"),
       default: String(form.get(`default_${i}`) ?? "").trim() || null,
@@ -79,6 +103,21 @@ export async function saveSpec(_previous: StudioState, form: FormData): Promise<
 
   revalidatePath(`/mapping/${feed}`);
   return { saved: true };
+}
+
+/** The edited primary argument merged over whatever else the transform
+ *  already carried. Clearing the box removes the primary argument but leaves
+ *  the others intact — the box only ever speaks for its own key. */
+function buildArgs(
+  op: string,
+  primary: string,
+  preserved: Record<string, string>,
+): Record<string, string> {
+  const key = argNameFor(op);
+  const args = { ...preserved };
+  if (primary) args[key] = primary;
+  else delete args[key];
+  return args;
 }
 
 /** parse_date takes `format`, concat takes `with`, substring takes `start`, cast takes `to`. */

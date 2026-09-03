@@ -89,6 +89,25 @@ def test_draft_v1_is_seeded_from_the_proposal(client, proposal_id):
     assert all(f["edited"] is False for f in body["spec"]["fields"])
 
 
+def test_proposal_is_fetchable_by_its_own_id_before_any_draft_exists(client, proposal_id):
+    """The studio's empty state only ever has `?proposal=<id>`, never a batch id -
+    this is what lets it show what "Start draft" is about to seed from."""
+    response = client.get(f"/api/mapping-proposals/{proposal_id}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["proposal_id"] == proposal_id
+    assert body["feed"] == FEED
+    assert body["authoritative"] is False
+    assert any(f["source"] == "member_dob" for f in body["content"]["fields"])
+
+
+def test_unknown_proposal_id_is_404(client):
+    assert (
+        client.get("/api/mapping-proposals/00000000-0000-0000-0000-000000000000").status_code
+        == 404
+    )
+
+
 def test_the_studio_receives_the_legal_vocabulary(client, proposal_id):
     client.post(f"/api/feeds/{FEED}/mapping-versions", json={"from_proposal_id": proposal_id})
     detail = client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()
@@ -101,6 +120,27 @@ def test_the_studio_receives_the_legal_vocabulary(client, proposal_id):
     assert "parse_date" in vocabulary["ops"]
     assert "exec_python" not in vocabulary["ops"]
     assert set(vocabulary["on_null"]) == {"reject", "default", "pass"}
+
+    # `members`' identity is a single mappable column, so it is surfaced as
+    # required; a composite-key entity (e.g. `members_enrollment_segments`) is
+    # not asked to satisfy every key column - that is feed-dependent judgment,
+    # not a blanket rule.
+    assert vocabulary["primary_keys"]["members"] == ["members.source_system_id"]
+    assert "members_enrollment_segments" not in vocabulary["primary_keys"]
+
+
+def test_studio_carries_forward_the_proposal_s_rationale(client, proposal_id):
+    """`ai_context` lets the studio show confidence/evidence/concept next to a
+    field the analyst is editing, not only at the moment the draft was seeded."""
+    client.post(f"/api/feeds/{FEED}/mapping-versions", json={"from_proposal_id": proposal_id})
+    detail = client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()
+
+    ai_context = detail["ai_context"]
+    assert "member_id" in ai_context
+    rationale = ai_context["member_id"]
+    assert {"confidence", "evidence", "concept", "status"} <= set(rationale)
+    assert rationale["evidence"]
+    assert rationale["status"] == "candidate"
 
 
 def test_analyst_edits_are_saved_and_marked(client, proposal_id):

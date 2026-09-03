@@ -27,7 +27,7 @@ from cinqflow.knowledge.yaml_provider import YamlKnowledgeProvider
 from cinqflow.queue.queue import Queue
 from cinqflow.settings import Settings
 from cinqflow.workers import promote_silver, run_preview
-from cinqflow.workflow.models import MappingSpec
+from cinqflow.workflow.models import MappingSpec, mask_preview_rows
 from cinqflow.workflow.store import (
     DraftAlreadyOpen,
     NotEditable,
@@ -47,6 +47,25 @@ def build_router(
 ) -> APIRouter:
     s = settings
     router = APIRouter()
+
+    @router.get("/api/mapping-proposals/{proposal_id}")
+    def get_mapping_proposal(proposal_id: str, conn=Depends(get_conn)) -> dict:
+        """A Stage 3 proposal by its own id, independent of its batch.
+
+        The Mapping Studio's empty state (no draft yet) only ever carries
+        `?proposal=<id>` in its URL, not the batch it came from - this is what
+        lets it show the analyst what "Start draft" is about to seed from,
+        before they commit to it, the same table `GET /batches/{id}/proposal`
+        already renders on the batch page.
+        """
+        proposal = WorkflowStore(conn, s).get_proposal_by_id(proposal_id)
+        if proposal is None:
+            raise HTTPException(404, detail=f"unknown proposal: {proposal_id}")
+        return {
+            **proposal.model_dump(mode="json"),
+            "counts": proposal.content.counts,
+            "authoritative": False,
+        }
 
     # ----------------------------------------------------- mapping versions (S4)
     @router.post("/api/feeds/{feed}/mapping-versions", status_code=201)
@@ -179,10 +198,40 @@ def build_router(
         if mapping is None:
             raise HTTPException(404, detail=f"unknown mapping version: {feed} v{version}")
         canonical, _ = _canonical_for(s, mapping.domain)
+
+        # Per-entity primary keys, restricted to columns that are legal mapping
+        # targets - the studio uses this to warn the moment a touched entity is
+        # missing the field a Silver row needs to be identifiable, before the
+        # analyst ever reaches the G2 wall that enforces the same rule.
+        primary_keys = {
+            table: list(canonical.required_targets([table]))
+            for table in canonical.tables
+            if canonical.required_targets([table])
+        }
+
+        # The AI's own rationale for each field, carried forward from the
+        # proposal this draft was seeded from (if any) so the studio can show
+        # confidence/evidence/concept next to the row the analyst is editing,
+        # not only at the moment the draft was first created.
+        ai_context: dict[str, dict] = {}
+        if mapping.origin_proposal_id:
+            origin = store.get_proposal_by_id(mapping.origin_proposal_id)
+            if origin is not None:
+                ai_context = {
+                    f.source: {
+                        "confidence": f.confidence,
+                        "evidence": f.evidence,
+                        "concept": f.concept,
+                        "status": f.status,
+                    }
+                    for f in origin.content.fields
+                }
+
         return {
             **mapping.model_dump(mode="json"),
             "origin": mapping.origin,
             "editable": mapping.editable,
+            "ai_context": ai_context,
             # The studio needs the legal vocabulary to offer choices, not free text.
             "vocabulary": {
                 "targets": sorted(canonical.legal_targets),
@@ -191,6 +240,7 @@ def build_router(
                 "casts": sorted(ALLOWED_CASTS),
                 "on_null": sorted(ALLOWED_ON_NULL),
                 "on_unmapped_value": sorted(ALLOWED_ON_UNMAPPED),
+                "primary_keys": primary_keys,
             },
         }
 
@@ -309,11 +359,26 @@ def build_router(
 
         fingerprint = spec_fingerprint(mapping.spec)
         is_current = preview.spec_fingerprint == fingerprint
+
+        # Row-by-row is real, per-record source/mapped values - actual PHI, not
+        # the bounded example values `GET .../bronze-profile` already masks.
+        # Masked by two independent, cheap-to-check signals: the columns the
+        # upload's own profiler flagged, and the fields the canonical model
+        # itself declares `phi: true`.
+        canonical, _ = _canonical_for(s, mapping.domain)
+        landing = store.get_run(preview.sample.batch_id, kind="land_bronze")
+        profile = store.get_profile(landing.upload_id) if landing else None
+        phi_sources = set(profile.facts.phi_candidates) if profile else set()
+        rows, phi_masked = mask_preview_rows(
+            preview.row_results, phi_sources=phi_sources, phi_targets=canonical.phi
+        )
+
         payload = preview.model_dump(mode="json")
-        payload["row_results"] = payload["row_results"][: min(limit, 200)]
+        payload["row_results"] = [r.model_dump(mode="json") for r in rows[: min(limit, 200)]]
         return {
             **payload,
             "row_results_total": len(preview.row_results),
+            "phi_masked": phi_masked,
             "is_current": is_current,
             # Stage 6 will not open G2 without a current preview; surfaced now so
             # the studio can say why the gate is closed.
@@ -359,6 +424,26 @@ def build_router(
             raise HTTPException(
                 409,
                 detail={"message": f"{feed} v{version} was superseded by a later version"},
+            )
+
+        canonical, _ = _canonical_for(s, mapping.domain)
+        touched_tables = {canonical.table_of(t) for t in mapping.spec.targets if t}
+        missing_required = [
+            target
+            for target in canonical.required_targets(t for t in touched_tables if t)
+            if target not in mapping.spec.targets
+        ]
+        if missing_required:
+            raise HTTPException(
+                409,
+                detail={
+                    "message": (
+                        f"{len(missing_required)} required field(s) are not mapped: "
+                        + ", ".join(sorted(missing_required))
+                    ),
+                    "hint": "map each entity's primary key before approving",
+                    "missing_required": sorted(missing_required),
+                },
             )
 
         preview = store.get_current_preview(feed, version, spec_fingerprint(mapping.spec))

@@ -99,6 +99,26 @@ def previewed(client, settings) -> tuple[str, str]:
     return upload_id, batch_id
 
 
+def test_g2_refuses_a_touched_entity_missing_its_identifier(client, settings, previewed):
+    """`members` is touched (first_name, dob, sex, ...) but its own identity -
+    `source_system_id` - is what makes a Silver row locatable at all. Removing
+    it must close G2 even though a current preview exists, because the preview
+    itself would have run with rows now missing an identifier."""
+    spec = client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["spec"]
+    spec["fields"] = [f for f in spec["fields"] if f["target"] != "members.source_system_id"]
+    assert client.put(f"/api/feeds/{FEED}/mapping-versions/1", json=spec).status_code == 200
+
+    refused = client.post(f"/api/feeds/{FEED}/mapping-versions/1/approve", json={})
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    assert "members.source_system_id" in detail["missing_required"]
+    assert "required" in detail["message"]
+
+    # Nothing was queued or frozen by the refused attempt.
+    assert client.get("/api/queue/depth").json().get("mapping_promote", 0) == 0
+    assert client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["status"] == "draft"
+
+
 def test_g2_is_queued_not_executed_inline(client, settings, previewed):
     _, batch_id = previewed
     response = client.post(

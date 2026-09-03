@@ -1,30 +1,45 @@
 import Link from "next/link";
 import ApproveMapping from "@/components/ApproveMapping";
 import MappingStudio from "@/components/MappingStudio";
+import ProposalTable from "@/components/ProposalTable";
 import StartDraft from "@/components/StartDraft";
 import PreviewPanel from "@/components/PreviewPanel";
 import StatusWord from "@/components/StatusWord";
-import { getMappingDiff, getMappingVersion, getPreview, listMappingVersions } from "@/lib/api";
+import {
+  getMappingDiff,
+  getMappingVersion,
+  getPreview,
+  getProposalById,
+  listMappingVersions,
+} from "@/lib/api";
 import { mappingStatusWord } from "@/lib/statusWords";
 
 export const dynamic = "force-dynamic";
+
+const PREVIEW_LIMITS = [10, 25, 50] as const;
 
 export default async function MappingPage({
   params,
   searchParams,
 }: {
   params: Promise<{ feed: string }>;
-  searchParams: Promise<{ v?: string; proposal?: string }>;
+  searchParams: Promise<{ v?: string; proposal?: string; limit?: string }>;
 }) {
   const { feed } = await params;
-  const { v, proposal } = await searchParams;
+  const { v, proposal, limit: limitParam } = await searchParams;
 
   const { versions } = await listMappingVersions(feed).catch(() => ({ versions: [] }));
   const selected = v ? Number(v) : versions[0]?.version;
+  const previewLimit = PREVIEW_LIMITS.includes(Number(limitParam) as (typeof PREVIEW_LIMITS)[number])
+    ? Number(limitParam)
+    : 25;
   const mapping = selected ? await getMappingVersion(feed, selected) : null;
   const diff = selected ? await getMappingDiff(feed, selected) : null;
-  const preview = selected ? await getPreview(feed, selected) : null;
+  const preview = selected ? await getPreview(feed, selected, previewLimit) : null;
   const analystEdited = new Set(diff?.diff.analyst_edited ?? []);
+  // Only fetched for the empty state: once a draft exists it owns the fields,
+  // and the proposal is history that `mapping.ai_context` already carries in.
+  const seedProposal = !mapping && proposal ? await getProposalById(proposal) : null;
 
   return (
     <>
@@ -56,6 +71,28 @@ export default async function MappingPage({
             <StatusWord word="Expected" /> No mapping version for this feed yet. A draft starts
             from an AI proposal — nothing in it is authoritative until it is approved.
           </p>
+          {seedProposal && seedProposal.feed !== feed ? (
+            <p className="alert error">
+              Proposal <span className="mono">{proposal}</span> belongs to feed{" "}
+              <span className="mono">{seedProposal.feed}</span>, not <span className="mono">{feed}</span>.
+              It cannot seed a draft here —{" "}
+              <Link href={`/mapping/${encodeURIComponent(seedProposal.feed)}?proposal=${proposal}`}>
+                open the correct feed
+              </Link>
+              .
+            </p>
+          ) : seedProposal ? (
+            <>
+              <h2>What "Start draft" will seed</h2>
+              <ProposalTable proposal={seedProposal} />
+            </>
+          ) : proposal ? (
+            <p className="alert error">
+              Proposal <span className="mono">{proposal}</span> could not be loaded — it may
+              belong to a different feed, or no longer exist. Paste a proposal id below, or open
+              it from its batch page.
+            </p>
+          ) : null}
           <StartDraft feed={feed} proposalId={proposal} />
         </>
       ) : (
@@ -186,7 +223,12 @@ export default async function MappingPage({
             </>
           )}
 
-          <PreviewPanel feed={feed} version={mapping.version} preview={preview} />
+          <PreviewPanel
+            feed={feed}
+            version={mapping.version}
+            preview={preview}
+            limit={previewLimit}
+          />
 
           <ApproveMapping
             feed={feed}

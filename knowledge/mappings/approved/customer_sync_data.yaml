@@ -1,0 +1,83 @@
+version: 1
+updated: '2026-09-03'
+domain: enrollment
+feed: customer-sync-data
+generated_by: cinqflow G2 approval; decisions are the analyst's
+decision_sets:
+- source: customer-sync-data (uploaded file, mapped in CINQFLOW)
+  mapping_version: 1
+  approved_at: '2026-09-03'
+  approved_by: analyst@cinqcare.com
+  batch_id: ade315be1433
+  target_table: silver_raw.members
+  decisions:
+  - source_field: health_home_status
+    target: members.care_management_program
+    decided_by: analyst_accepted_ai
+  - source_field: member_dob
+    target: members.date_of_birth
+    decided_by: analyst_accepted_ai
+    cast: timestamp
+    transform:
+      op: parse_date
+      format: '%Y-%m-%d'
+  - source_field: member_first_name
+    target: members.first_name
+    decided_by: analyst_accepted_ai
+  - source_field: member_language
+    target: members.language
+    decided_by: analyst_accepted_ai
+  - source_field: member_last_name
+    target: members.last_name
+    decided_by: analyst_accepted_ai
+  - source_field: member_race
+    target: members.race
+    decided_by: analyst_accepted_ai
+  - source_field: member_sex
+    target: members.sex
+    decided_by: analyst_accepted_ai
+  - source_field: member_address_line_1
+    target: members_addresses.address1
+    decided_by: analyst_accepted_ai
+  - source_field: member_address_line_2
+    target: members_addresses.address2
+    decided_by: analyst_accepted_ai
+  - source_field: member_city
+    target: members_addresses.city
+    decided_by: analyst_accepted_ai
+  - source_field: member_county
+    target: members_addresses.county
+    decided_by: analyst_accepted_ai
+  - source_field: member_state
+    target: members_addresses.state
+    decided_by: analyst_accepted_ai
+  - source_field: member_zip_code
+    target: members_addresses.zip
+    decided_by: analyst_accepted_ai
+  - source_field: member_email
+    target: members_emails.email_address
+    decided_by: analyst_accepted_ai
+  - source_field: product
+    target: members_enrollment_segments.lob
+    decided_by: analyst_accepted_ai
+  - source_field: group_name
+    target: members_enrollment_segments.member_group
+    decided_by: analyst_accepted_ai
+  - source_field: provider_name
+    target: members_enrollment_segments.pcp_name
+    decided_by: analyst_accepted_ai
+  - source_field: provider_npi
+    target: members_enrollment_segments.pcp_npi
+    decided_by: analyst_accepted_ai
+  - source_field: tin
+    target: members_enrollment_segments.tin
+    decided_by: analyst_accepted_ai
+  - source_field: vbp_id
+    target: members_enrollment_segments.tin_submarket
+    decided_by: analyst_accepted_ai
+  - source_field: member_phone_number
+    target: members_phones.phone_number
+    decided_by: analyst_accepted_ai
+  - source_field: source_id
+    target: members.source_system_id
+    decided_by: analyst

@@ -41,6 +41,17 @@
   --dark-btn-ink: #ffffff;
   --glyph-source: #2f6df6;
   --glyph-target: #e8705a;
+
+  /* Motion. Three durations, not nine: `fast` for a control acknowledging a
+     pointer, `base` for something entering or leaving, `slow` for a layout
+     that changes size. Everything animated in this app picks one of these, so
+     the whole surface speeds up or calms down from one place — and so the
+     reduced-motion block below has a single set of values to neutralise. */
+  --dur-fast: 110ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
 :root[data-theme="dark"] {
@@ -83,6 +94,42 @@ body {
 
 a { color: var(--acc); }
 :focus-visible { outline: 2px solid var(--gate); outline-offset: 2px; border-radius: 3px; }
+
+/* ============================================================================
+   Screen-reader utilities. `.sr-only` is the mechanism for text that must be
+   announced but not seen — a loading announcement, the reason a control is
+   unavailable, the direction a sort button will apply. `.sr-only-focusable`
+   is the same until it receives focus, which is what makes a skip link work.
+   ========================================================================= */
+.sr-only,
+.sr-only-focusable:not(:focus):not(:focus-within) {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.skip-link:focus {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 200;
+  width: auto;
+  height: auto;
+  clip: auto;
+  margin: 0;
+  padding: 9px 14px;
+  border-radius: 7px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
 
 /* ============================================================================
    App shell: fixed sidebar, collapsible on desktop, drawer on small screens.
@@ -458,6 +505,14 @@ a { color: var(--acc); }
 .cell-plain { color: var(--ink2); font-size: 13px; white-space: nowrap; }
 
 .group-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* Makes the ellipsis on `.group-name` actually engage. In an auto-layout table
+   a percentage `width` on the header is only a hint, and the column still grows
+   to the longest filename in the set (a 60-character deidentified roster name),
+   pushing Stage and Actions off the right edge. `max-width: 0` on the cell is
+   the standard escape: paired with the header's percentage width the browser
+   distributes the space as asked and the content truncates instead of
+   dictating. The full name stays in the link's `title`. */
+.dt td:has(> .group-cell) { max-width: 0; }
 .group-glyphs { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
 .glyph { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 999px; }
 .glyph.source { color: var(--glyph-source); background: color-mix(in srgb, var(--glyph-source) 13%, var(--surf)); }
@@ -820,6 +875,21 @@ select.page-size { width: auto; min-width: 132px; flex: 0 0 auto; }
 /* ============================================================================
    Modal dialog + form controls
    ========================================================================= */
+/* `display` lives on `.modal[open]`, not bare `.modal`: a native <dialog>'s
+ * UA stylesheet hides it (`dialog:not([open]) { display: none }`) until
+ * `.showModal()`/`.show()` sets the `open` attribute, but that UA rule loses
+ * the cascade to ANY author rule of equal or higher specificity - including
+ * an unqualified `.modal { display: flex }`. `Modal.tsx` never exposed this
+ * because it is only ever mounted while it should be open; `ConfirmDialog`
+ * stays mounted always (so it can animate closed and restore focus) and hit
+ * it head-on: the dialog rendered as a normal in-flow block from first paint,
+ * regardless of `open`/`close()`, because CSS never let the closed state hide
+ * it. Scoping `display` to `[open]` is what actually makes "closed" mean
+ * "not there" again. */
+.modal[open] {
+  display: flex;
+  flex-direction: column;
+}
 .modal {
   width: min(940px, calc(100vw - 32px));
   max-height: min(86vh, 900px);
@@ -830,8 +900,6 @@ select.page-size { width: auto; min-width: 132px; flex: 0 0 auto; }
   color: var(--ink);
   box-shadow: 0 24px 60px -20px rgb(0 0 0 / 35%);
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 .modal::backdrop { background: rgb(0 0 0 / 45%); }
 
@@ -1138,7 +1206,14 @@ button {
   font-size: 13px;
 }
 button:hover { filter: brightness(1.06); }
-button:disabled { opacity: 0.55; cursor: progress; filter: none; }
+/* `not-allowed`, never `progress`: most disabled buttons in this app are not
+   busy, they are unavailable — a permanently inert affordance, a boundary
+   arrow, an export with nothing to export. A progress cursor on those claims
+   work is happening that never will. A button that genuinely IS working says
+   so by swapping its own label ("Working…", "Queueing…"). */
+button:disabled { opacity: 0.55; cursor: not-allowed; filter: none; }
+/* The exception, opted into explicitly by a control that really is mid-flight. */
+button:disabled[data-busy="true"] { cursor: progress; }
 
 button.secondary {
   background: var(--surf);
@@ -1213,8 +1288,25 @@ tr:last-child td { border-bottom: none; }
 }
 .tag.phi { background: var(--warn-weak); color: var(--proc); }
 .tag.danger { background: var(--danger-weak); color: var(--danger); }
-.tag.proposal { background: var(--acc-weak); color: var(--acc); }
-.tag.edited { background: var(--gate-weak); color: var(--gate); }
+/* "A model suggested this" vs "a person owns this" is the single most
+   consequential distinction on the mapping screens, and it was carried by hue
+   alone — two identically-shaped pills, one blue, one purple. Greyscale, a
+   projector, or deuteranopia collapsed them into the same object. They now
+   differ in border too: analyst-owned is solid and filled (a decision that has
+   been made), AI-proposed is dashed and unfilled (a suggestion still open),
+   matching `.badge-governed` / `.badge-advisory`. */
+.tag.proposal {
+  background: transparent;
+  color: var(--acc);
+  border: 1px dashed color-mix(in srgb, var(--acc) 50%, var(--line2));
+  padding: 0.5px 5px;
+}
+.tag.edited {
+  background: var(--gate-weak);
+  color: var(--gate);
+  border: 1px solid color-mix(in srgb, var(--gate) 45%, transparent);
+  padding: 0.5px 5px;
+}
 .tag.cite { background: var(--cite-weak); color: var(--cite); }
 
 .chip-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -1280,8 +1372,9 @@ tr:last-child td { border-bottom: none; }
 .claim-kind.recommendation { background: var(--warn-weak); color: var(--proc); }
 .claim-field { font-family: var(--mono); font-size: 12px; color: var(--ink3); }
 .claim-value { font-size: 14.5px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
-.confidence-bar { width: 56px; height: 5px; background: var(--mat); border-radius: 99px; overflow: hidden; margin-left: auto; display: inline-block; vertical-align: middle; }
-.confidence-bar > i { display: block; height: 100%; background: var(--acc); }
+/* `.confidence-bar` retired: every confidence display now renders through
+   `components/ui/Confidence.tsx`, which bands the value instead of drawing a
+   continuous bar that made 0.31 and 0.97 look like the same kind of claim. */
 .confidence-value { font-family: var(--mono); font-size: 11.5px; color: var(--ink3); }
 
 /* ---------------------------------------------------------------- Two-column panels */
@@ -1361,8 +1454,10 @@ input.narrow, select.narrow { max-width: 120px; }
 input.bad, select.bad { border-color: var(--danger); background: var(--danger-weak); }
 table.studio td { vertical-align: top; }
 table.studio td .error.small { margin-top: 4px; }
-.error.small, .mono.small { font-size: 12px; }
+.error.small, .mono.small, .meta.small { font-size: 12px; }
 td.center, th.center { text-align: center; }
+.studio-rationale { margin-top: 6px; max-width: 220px; }
+.studio-rationale .evidence-list { margin-top: 4px; }
 
 /* ============================================================================
    Run flow: the seven-screen analyst path (docs/blueprints/analyst-forward-flow.md)
@@ -1540,9 +1635,318 @@ a.run-step:hover { background: var(--mat); }
   50% { opacity: 0.35; }
 }
 
+/* ============================================================================
+   Reduced motion. Deliberately a blanket rule rather than the selector
+   allowlist this used to be: an allowlist silently stops covering anything
+   added after it, which is exactly the failure mode a user who asked for less
+   motion cannot see coming. `0.001ms` rather than `none` so animations still
+   *run* — a one-shot `animationend` listener that a component depends on
+   still fires, it just finishes immediately.
+   ========================================================================= */
 @media (prefers-reduced-motion: reduce) {
-  .skeleton, .toast, .status[data-w="Processing"] svg, .spin {
-    animation: none !important;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
-  * { transition-duration: 0.001ms !important; }
+  /* The shimmer reads as a moving gradient; frozen mid-sweep it looks like a
+     rendering artefact, so it flattens to the plain surface instead. */
+  .skeleton { background: var(--mat); }
 }
+
+/* ============================================================================
+   Motion primitives. Four utilities, composed rather than multiplied: an
+   element enters by fading (`u-fade-in`), optionally with a small rise
+   (`u-rise-in`) or a slide from the inline edge (`u-slide-in`), and a list can
+   stagger its children off one shared delay step (`u-stagger`). Everything
+   uses the `--dur-*`/`--ease-*` tokens, so the reduced-motion block above
+   neutralises all of it without naming a single one of these selectors.
+
+   Motion here is only ever used to explain a change — where a thing came
+   from, that a value updated. Nothing loops, nothing moves more than 8px, and
+   nothing delays the user's ability to act on what appeared.
+   ========================================================================= */
+@keyframes u-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes u-rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes u-slide-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+
+.u-fade-in { animation: u-fade-in var(--dur-base) var(--ease-out) both; }
+.u-rise-in { animation: u-rise-in var(--dur-base) var(--ease-out) both; }
+.u-slide-in { animation: u-slide-in var(--dur-base) var(--ease-out) both; }
+
+/* Children enter in sequence. Capped at 8 so a 300-row table never waits on a
+   3-second cascade; row 9 onward simply appears with the eighth. */
+.u-stagger > * { animation: u-rise-in var(--dur-base) var(--ease-out) both; }
+.u-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.u-stagger > *:nth-child(2) { animation-delay: 30ms; }
+.u-stagger > *:nth-child(3) { animation-delay: 60ms; }
+.u-stagger > *:nth-child(4) { animation-delay: 90ms; }
+.u-stagger > *:nth-child(5) { animation-delay: 120ms; }
+.u-stagger > *:nth-child(6) { animation-delay: 150ms; }
+.u-stagger > *:nth-child(7) { animation-delay: 180ms; }
+.u-stagger > *:nth-child(n + 8) { animation-delay: 210ms; }
+
+/* A value that just changed under a poll. A single soft flash is the whole
+   effect: enough to catch the eye returning to the screen, over before it
+   can annoy anyone watching it happen. */
+@keyframes u-flash {
+  from { background-color: color-mix(in srgb, var(--acc) 22%, transparent); }
+  to { background-color: transparent; }
+}
+.u-changed { animation: u-flash var(--dur-slow) var(--ease-out) 1; border-radius: 3px; }
+
+/* ---------------------------------------------------------------- Interactive easing
+   Hover/press feedback on the controls that previously snapped. Only colour
+   and transform — never `width`/`height`/`top`, which would reflow. */
+button,
+.btn-outline,
+.btn-dark,
+.btn-accent,
+.nav-link,
+.rail-button,
+.icon-action,
+.chip,
+.stage-tab,
+.row-menu-item,
+.theme-option {
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+button:active:not(:disabled),
+.btn-outline:active,
+.btn-dark:active,
+.btn-accent:active { transform: translateY(0.5px); }
+
+.dt tbody tr { transition: background-color var(--dur-fast) var(--ease-out); }
+/* Row focus, distinct from hover: keyboard users get the same affordance,
+   plus a left marker that survives a colour-blind reading of the row. */
+.dt tbody tr:focus-within td { background: color-mix(in srgb, var(--acc) 7%, var(--surf)); }
+.dt tbody tr:focus-within td:first-child { box-shadow: inset 2px 0 0 var(--acc); }
+
+/* ============================================================================
+   Badge — short classified metadata. `StatusWord` still owns the run
+   vocabulary; this is for everything else that needs a chip.
+   ========================================================================= */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  background: var(--surf);
+  color: var(--ink2);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.badge-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: color-mix(in srgb, var(--ok) 8%, var(--surf)); }
+.badge-danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); background: var(--danger-weak); }
+.badge-warn { color: var(--proc); border-color: color-mix(in srgb, var(--proc) 40%, var(--line)); background: var(--warn-weak); }
+.badge-info { color: var(--acc); border-color: color-mix(in srgb, var(--acc) 40%, var(--line)); background: var(--acc-weak); }
+/* Governed vs advisory is the distinction the whole review flow turns on:
+   a decision a person signed for, against a suggestion a model made. They
+   must never be mistakable for one another at a glance. */
+.badge-governed { color: var(--gate); border-color: color-mix(in srgb, var(--gate) 45%, var(--line)); background: var(--gate-weak); }
+.badge-advisory {
+  color: var(--ink3);
+  border-style: dashed;
+  border-color: var(--line2);
+  background: transparent;
+}
+
+/* ============================================================================
+   Empty states — a cause and a next step, never a blank region.
+   ========================================================================= */
+.empty-state {
+  border: 1px dashed var(--line2);
+  border-radius: 9px;
+  padding: 18px 20px;
+  background: color-mix(in srgb, var(--mat) 40%, var(--surf));
+}
+.empty-state.compact { padding: 12px 14px; }
+.empty-state-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--ink2); }
+.empty-state-detail { margin: 5px 0 0; font-size: 13px; color: var(--ink3); max-width: 68ch; }
+.empty-state-action { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+/* A confirmed nothing ("no rows were refused") is a result, not a to-do:
+   solid edge, no dashed "something is missing here" reading. */
+.empty-state-result { border-style: solid; border-color: var(--line); }
+.empty-state-result .empty-state-title { color: var(--ok); }
+
+/* ============================================================================
+   Confirm dialog — the pause before an irreversible decision.
+   ========================================================================= */
+.confirm-dialog { width: min(560px, calc(100vw - 32px)); }
+.confirm-dialog .modal-body { padding: 0 22px 20px; }
+.confirm-consequence {
+  margin: 0 0 14px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.confirm-consequence.danger {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--danger-weak);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.confirm-audit {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--mat);
+}
+.confirm-audit-body { margin-top: 6px; font-size: 13px; color: var(--ink2); display: grid; gap: 3px; }
+.confirm-typed { display: grid; gap: 6px; margin: 0 0 16px; }
+.confirm-typed label { font-size: 13px; color: var(--ink2); }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-danger:hover:not(:disabled) { filter: brightness(1.06); }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+
+/* Dialogs enter; they no longer appear fully formed with no sense of origin. */
+.modal[open] { animation: u-rise-in var(--dur-base) var(--ease-out); }
+.modal[open]::backdrop { animation: u-fade-in var(--dur-base) var(--ease-out); }
+
+/* ============================================================================
+   Toast — now a two-region stack (polite + assertive) with a real close button.
+   ========================================================================= */
+.toast-stack { display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.toast-message { flex: 1 1 auto; }
+.toast-close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin: -1px -4px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.toast-close:hover { opacity: 1; background: color-mix(in srgb, currentColor 12%, transparent); }
+.toast.leaving { animation: toast-out var(--dur-base) var(--ease-out) forwards; }
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(4px); }
+}
+
+/* ============================================================================
+   DataTable — row focus, disclosure rows, sticky header.
+   ========================================================================= */
+/* Horizontal-scroll affordance. These tables are wider than the content column
+   on a laptop, and macOS hides overlay scrollbars until something moves — so a
+   clipped "Stage" column looked like the table simply ended. The right-hand
+   shading appears only while there is more to scroll to: two fixed gradients
+   (`scroll`) sit under two solid covers (`local`) that slide away as the
+   content reaches each edge, so the hint disappears exactly when it becomes
+   untrue. Pure CSS — no scroll listener, nothing to keep in sync. */
+.dt-wrap,
+.card.scroll {
+  background-repeat: no-repeat;
+  background-size: 28px 100%, 28px 100%, 14px 100%, 14px 100%;
+  background-position: left center, right center, left center, right center;
+  background-attachment: local, local, scroll, scroll;
+  background-image:
+    linear-gradient(to right, var(--surf) 30%, transparent),
+    linear-gradient(to left, var(--surf) 30%, transparent),
+    linear-gradient(to right, rgb(0 0 0 / 11%), transparent),
+    linear-gradient(to left, rgb(0 0 0 / 11%), transparent);
+}
+
+.dt-row-activatable { cursor: pointer; }
+.dt-row-activatable:focus-visible {
+  outline: 2px solid var(--gate);
+  outline-offset: -2px;
+}
+.dt-row-open td { background: color-mix(in srgb, var(--mat) 70%, var(--surf)); }
+
+.dt-expand-col { width: 34px; padding-right: 0 !important; }
+.dt-expand {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink3);
+  cursor: pointer;
+  /* Chevron points left at rest, down when open — one glyph, two states. */
+  transform: rotate(0deg);
+  transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+.dt-expand:hover { background: var(--mat); color: var(--ink); }
+.dt-expand.open { transform: rotate(-90deg); color: var(--ink); }
+
+.dt-detail-row > td { padding: 0 !important; background: var(--mat); }
+.dt-detail { padding: 14px 16px; border-top: 1px solid var(--line); }
+
+/* Checklist progress sits with the gate buttons, pushed away from them so it
+   reads as context rather than as a third action. */
+.gate-actions { align-items: center; }
+.gate-progress { margin-right: auto; }
+
+/* ============================================================================
+   Confidence — banded and segmented, so the reading survives greyscale.
+   The old bar rendered 0.31 and 0.97 as the same object at different widths;
+   these three blocks say "weak / plausible / strong" before the number is read.
+   ========================================================================= */
+.confidence { display: inline-flex; align-items: center; gap: 7px; }
+.confidence-meter { display: inline-flex; gap: 2px; align-items: center; }
+.confidence-meter > i {
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  border: 1px solid var(--line2);
+  background: transparent;
+}
+.confidence-meter > i.on { border-color: transparent; }
+.confidence-low .confidence-meter > i.on { background: var(--proc); }
+.confidence-medium .confidence-meter > i.on { background: var(--acc); }
+.confidence-high .confidence-meter > i.on { background: var(--ok); }
+.confidence-value { font-family: var(--mono); font-size: 11.5px; color: var(--ink3); }
+.confidence-band {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.confidence-low .confidence-band { color: var(--proc); }
+.confidence-medium .confidence-band { color: var(--acc); }
+.confidence-high .confidence-band { color: var(--ok); }
+
+/* Unsaved-changes indicator in the studio's save bar. A dot plus a word:
+   the colour alone would not survive greyscale, and this is the one signal
+   standing between an analyst and losing a spec they just edited. */
+.save-bar-dirty { display: inline-flex; align-items: center; gap: 7px; color: var(--proc); font-weight: 600; }
+.save-bar-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--proc); }

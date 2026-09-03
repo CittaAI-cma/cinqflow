@@ -220,6 +220,56 @@ def build_router(
         conn.commit()
         return {"upload_id": upload_id, "status": upload.status, "queued": topic}
 
+    @router.delete("/api/uploads/{upload_id}", status_code=200)
+    def delete_upload(upload_id: str, conn=Depends(get_conn)) -> dict:
+        """Purge an upload's workflow-schema rows (profile, interpretation,
+        approvals, lineage, its batch runs, and - when no sibling upload
+        shares the feed - its mapping drafts/previews too), free its
+        fingerprint for a fresh upload of the same bytes, and remove the
+        original from the landing zone.
+
+        Refuses while a batch of this upload is still `received`/`in_progress`
+        - deleting out from under a worker mid-write would leave it holding an
+        `upload_id` that no longer resolves. Bronze/Silver/quarantine rows are
+        never touched by this: they carry a DB-level append-only guard
+        (dataplane/pg.py) that this endpoint does not attempt to bypass - any
+        batch this upload landed stays queryable by its `batch_id` even after
+        the upload itself is gone; the response says which ones.
+        """
+        store = WorkflowStore(conn, s)
+        try:
+            upload = store.get_upload(upload_id)
+        except UnknownUpload:
+            raise HTTPException(404, detail=f"unknown upload: {upload_id}") from None
+
+        active = [
+            r
+            for r in store.list_runs(upload_id=upload_id, limit=1000)
+            if r.state in ("received", "in_progress")
+        ]
+        if active:
+            raise HTTPException(
+                409,
+                detail={
+                    "message": "a batch for this upload is still running",
+                    "hint": "wait for it to finish (or fail) and try again",
+                    "batch_ids": [r.batch_id for r in active],
+                },
+            )
+
+        summary = store.delete_upload(upload_id)
+        conn.commit()
+
+        # The DB commit is the durable part; a filesystem miss (already moved,
+        # already gone) is not worth failing an otherwise-successful delete over.
+        try:
+            FileStore(s).remove(upload.landing_key)
+            summary["file_removed"] = True
+        except OSError:
+            summary["file_removed"] = False
+
+        return summary
+
     # ------------------------------------------------------------------- G1 gate
     def _decide(upload_id: str, decision: str, approver: str, note: str | None, conn) -> dict:
         """Persist the analyst's decision, then enqueue what it authorises."""

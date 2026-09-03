@@ -41,6 +41,35 @@ export function SkeletonText({
   );
 }
 
+/** Wraps a whole route-level skeleton so the wait is *announced*, not just
+ *  drawn. Every `Skeleton` is `aria-hidden` (shimmer bars are noise to a
+ *  screen reader), which left an assistive-technology user with silence
+ *  between navigating and the content arriving — no shape, no spinner, no
+ *  message. `aria-busy` marks the region as in-flight and the `role="status"`
+ *  line gives it something to say.
+ *
+ *  `label` should name what is loading, not just "Loading" — on a run screen
+ *  the difference between "Loading the run" and "Loading the mapping studio"
+ *  is the only navigational feedback a non-visual user gets. */
+export function SkeletonScreen({
+  label,
+  children,
+  className = "grid",
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={className} aria-busy="true">
+      <span role="status" className="sr-only">
+        {label}
+      </span>
+      {children}
+    </div>
+  );
+}
+
 /** A `.card`-shaped placeholder: a label-sized line, then a few body lines. */
 export function SkeletonCard({ lines = 3 }: { lines?: number }) {
   return (

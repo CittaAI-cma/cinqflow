@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import Checkbox from "@/components/ui/Checkbox";
-import DataTable, { type Column } from "@/components/ui/DataTable";
+import DataTable, { sortRows, type Column, type SortState } from "@/components/ui/DataTable";
 import Pagination from "@/components/ui/Pagination";
 import RowMenu from "@/components/ui/RowMenu";
 import TableToolbar from "@/components/ui/TableToolbar";
+import Timestamp from "@/components/ui/Timestamp";
 import {
   DownloadIcon,
   PlusIcon,
@@ -17,12 +18,9 @@ import {
 } from "@/components/icons";
 import type { Upload } from "@/lib/api";
 
-function formatDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return `${pad(date.getMonth() + 1)}/${pad(date.getDate())}/${date.getFullYear()}`;
-}
+/* Dates render through `<Timestamp>`: formatted inline they hydrated
+   differently from the server's UTC container and discarded this table's
+   subtree — losing selection, search and page position on every load. */
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -33,6 +31,17 @@ function formatSize(bytes: number): string {
 
 /** The objects belonging to one ingest group. Selection drives the export, so
  *  the checkboxes do something rather than just sitting there. */
+/** The comparable projection for each sortable column, kept beside the column
+ *  definitions it mirrors. It lives at module scope because sorting happens
+ *  over the whole filtered set, before pagination slices it — outside the
+ *  `useMemo` that builds the (page-scoped) column renderers. */
+const COLUMN_VALUES: Record<string, (row: Upload) => string | number> = {
+  name: (row) => row.filename.toLowerCase(),
+  path: (row) => row.landing_key.toLowerCase(),
+  size: (row) => row.size_bytes,
+  updated: (row) => Date.parse(row.created_ts) || 0,
+};
+
 export default function ObjectsTable({
   group,
   objects,
@@ -42,6 +51,10 @@ export default function ObjectsTable({
 }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  /** Sort is held here, not inside `DataTable`, because this table paginates:
+   *  the full result set has to be ordered *before* it is sliced, or the sort
+   *  would only ever reorder whichever ten rows happened to be on screen. */
+  const [sort, setSort] = useState<SortState | null>({ key: "updated", dir: "desc" });
   const [pageSize, setPageSize] = useState(10);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const router = useRouter();
@@ -58,9 +71,15 @@ export default function ObjectsTable({
     );
   }, [objects, query]);
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const ordered = useMemo(() => {
+    if (!sort) return filtered;
+    const column = COLUMN_VALUES[sort.key];
+    return column ? sortRows(filtered, column, sort.dir) : filtered;
+  }, [filtered, sort]);
+
+  const pageCount = Math.max(1, Math.ceil(ordered.length / pageSize));
   const currentPage = Math.min(page, pageCount);
-  const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const visible = ordered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const allVisibleSelected =
     visible.length > 0 && visible.every((object) => selected.has(object.upload_id));
@@ -177,7 +196,11 @@ export default function ObjectsTable({
         width: "132px",
         sortable: true,
         value: (row) => Date.parse(row.created_ts) || 0,
-        render: (row) => <span className="cell-plain">{formatDate(row.created_ts)}</span>,
+        render: (row) => (
+          <span className="cell-plain">
+            <Timestamp value={row.created_ts} withSeconds={false} />
+          </span>
+        ),
       },
       {
         key: "actions",
@@ -204,7 +227,16 @@ export default function ObjectsTable({
 
   return (
     <>
-      <TableToolbar query={query} onQueryChange={setQuery} placeholder="Search...">
+      <TableToolbar
+        query={query}
+        onQueryChange={(next) => {
+          setQuery(next);
+          // A narrower result set renumbers the pages; without this, typing a
+          // filter from page 3 lands on the last page of the new results.
+          setPage(1);
+        }}
+        placeholder="Search..."
+      >
         {selected.size ? <span className="selection-count">{selected.size} selected</span> : null}
         <button
           type="button"
@@ -244,7 +276,13 @@ export default function ObjectsTable({
         columns={columns}
         rowKey={(row) => row.upload_id}
         variant="grid"
-        initialSort={{ key: "updated", dir: "desc" }}
+        sort={sort}
+        onSortChange={(next) => {
+          setSort(next);
+          // Re-ordering changes what "page 1" means; staying on page 4 of the
+          // old order would land the user somewhere arbitrary in the new one.
+          setPage(1);
+        }}
         emptyMessage={
           query ? `No object matches “${query}”.` : "No objects in this group yet."
         }

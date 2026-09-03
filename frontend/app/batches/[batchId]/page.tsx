@@ -3,38 +3,13 @@ import { notFound } from "next/navigation";
 import BatchProcessing from "@/components/batch/BatchProcessing";
 import Kpi from "@/components/Kpi";
 import LineageChain from "@/components/LineageChain";
+import ProposalTable from "@/components/ProposalTable";
 import StatusWord from "@/components/StatusWord";
-import {
-  getBatchRows,
-  getBatchQuarantine,
-  getBronzeProfile,
-  getLineage,
-  getProposal,
-  type FieldStatus,
-} from "@/lib/api";
-import { proposalStatusWord, runStatusWord } from "@/lib/statusWords";
+import EmptyState from "@/components/ui/EmptyState";
+import { getBatchRows, getBatchQuarantine, getBronzeProfile, getLineage, getProposal } from "@/lib/api";
+import { runStatusWord } from "@/lib/statusWords";
 
 export const dynamic = "force-dynamic";
-
-const STATUS_ORDER: FieldStatus[] = ["invalid", "candidate", "ambiguous", "unknown"];
-
-const FIELD_KIND: Record<FieldStatus, string> = {
-  candidate: "governed_knowledge",
-  ambiguous: "inference",
-  unknown: "inference",
-  invalid: "recommendation",
-};
-
-/** Evidence strings are free text, but two prefixes carry real meaning worth a
- * viewer noticing at a glance: `precedent:` is a human-approved governance
- * decision applied deterministically (strong); `semantic:` is an unverified
- * lexical-similarity lead surfaced only where nothing structured could place
- * the column (weak, never itself a decision). Everything else renders plain. */
-function evidenceClass(item: string): string {
-  if (item.startsWith("precedent:")) return "evidence-chip--precedent";
-  if (item.startsWith("semantic:")) return "evidence-chip--semantic";
-  return "";
-}
 
 export default async function BatchPage({
   params,
@@ -156,6 +131,45 @@ export default async function BatchPage({
             </div>
           ) : null}
         </>
+      ) : (
+        <>
+          <h2>Silver Raw</h2>
+          <EmptyState
+            title="This batch has not been promoted yet."
+            detail={
+              <>
+                Bronze holds the source-aligned rows. Reaching Silver Raw needs an
+                approved mapping version for this feed — drafted from the proposal
+                below, previewed, then approved at G2. Nothing is written to Silver
+                until that approval exists.
+              </>
+            }
+            action={
+              chain.mapping?.feed ? (
+                <Link href={`/mapping/${encodeURIComponent(chain.mapping.feed)}`} className="btn-dark">
+                  Open mapping studio
+                </Link>
+              ) : null
+            }
+          />
+        </>
+      )}
+
+      {promotion && !(quarantine && quarantine.rows.length) ? (
+        <>
+          <h2>Quarantine</h2>
+          <EmptyState
+            tone="result"
+            title="No rows were refused."
+            detail={
+              <>
+                Every row this batch read was written to Silver Raw by the
+                approved mapping — the balance check on the promotion run
+                confirms it: in = out + quarantined + drops.
+              </>
+            }
+          />
+        </>
       ) : null}
 
       {quarantine && quarantine.rows.length ? (
@@ -238,101 +252,8 @@ export default async function BatchPage({
 
       {proposal ? (
         <>
-          <h2>
-            AI mapping proposal{" "}
-            <span className="meta">
-              · {proposal.provenance.prompt} · {proposal.provenance.model} · advisory only ·{" "}
-              <StatusWord word={proposalStatusWord(proposal.status)} />
-            </span>
-          </h2>
-
-          {proposal.status === "invalid" ? (
-            <p className="alert error">
-              This proposal failed validation: the model named at least one target the
-              canonical model does not have. The offending targets are shown below and were
-              not kept.
-            </p>
-          ) : null}
-
-          <div className="chip-row">
-            {STATUS_ORDER.filter((status) => (proposal.counts?.[status] ?? 0) > 0).map((status) => (
-              <span key={status} className="chip">
-                {status} <span className="mono">{proposal.counts?.[status]}</span>
-              </span>
-            ))}
-          </div>
-
-          <div className="card scroll" style={{ padding: 0 }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Source column</th>
-                  <th>Concept</th>
-                  <th>Proposed target</th>
-                  <th>Transform</th>
-                  <th>Status</th>
-                  <th>Confidence</th>
-                  <th>Evidence</th>
-                </tr>
-              </thead>
-              <tbody>
-                {proposal.content.fields.map((field) => (
-                  <tr key={field.source}>
-                    <td className="mono">{field.source}</td>
-                    <td className="meta">{field.concept ?? "—"}</td>
-                    <td className="mono">
-                      {field.target ?? <span className="unc">—</span>}
-                      {field.rejected_target ? (
-                        <div className="error" style={{ fontSize: 12 }}>
-                          rejected: {field.rejected_target}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="mono">
-                      {field.transform
-                        ? `${field.transform.op}(${Object.values(field.transform.args).join(", ")})`
-                        : "—"}
-                    </td>
-                    <td>
-                      <span className={`claim-kind ${FIELD_KIND[field.status]}`}>{field.status}</span>
-                    </td>
-                    <td className="num">
-                      <span className="confidence-bar">
-                        <i style={{ width: `${Math.round(field.confidence * 100)}%` }} />
-                      </span>{" "}
-                      {field.confidence.toFixed(2)}
-                    </td>
-                    <td>
-                      <span className="evidence-list">
-                        {field.evidence.map((item) => (
-                          <span key={item} className={`evidence-chip ${evidenceClass(item)}`}>
-                            {item}
-                          </span>
-                        ))}
-                      </span>
-                      {field.reason ? <div className="meta">{field.reason}</div> : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {proposal.content.notes.length ? (
-            <div className="card" style={{ marginTop: 14 }}>
-              <label>Notes</label>
-              <ul className="plain">
-                {proposal.content.notes.map((note) => (
-                  <li key={note}>{note}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          <div className="card" style={{ marginTop: 14 }}>
-            <label>Knowledge cited</label>
-            <span className="mono">{proposal.provenance.knowledge.join(" · ") || "none"}</span>
-          </div>
+          <h2>AI mapping proposal</h2>
+          <ProposalTable proposal={proposal} />
 
           <div className="row" style={{ justifyContent: "space-between", marginTop: 14 }}>
             <p className="meta">

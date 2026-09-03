@@ -17,10 +17,15 @@ export default function GateChecklist({
   phiCount,
   unknownCount,
   onChange,
+  onProgress,
 }: {
   phiCount: number;
   unknownCount: number;
   onChange: (note: string) => void;
+  /** Ticked count and total, so the gate can show progress and name the
+   *  unticked items in its confirmation. Still not a control: nothing here
+   *  blocks Approve. */
+  onProgress?: (checked: number, total: number) => void;
 }) {
   const items: ChecklistItem[] = [
     { id: "columns", text: "Column names and types look right" },
@@ -36,6 +41,7 @@ export default function GateChecklist({
       .map((item) => `${checked[item.id] ? "☑" : "☐"} ${item.text}`)
       .join("\n");
     onChange(note);
+    onProgress?.(items.filter((item) => checked[item.id]).length, items.length);
     // Re-compose only when a box actually changes, not on every parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checked, phiCount, unknownCount]);

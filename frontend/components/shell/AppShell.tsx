@@ -34,8 +34,24 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // Escape closes the mobile drawer. The scrim is pointer-only, so without
+  // this a keyboard user who opened the drawer has no way to close it.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setMobileOpen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [mobileOpen]);
+
   return (
     <ToastProvider>
+      {/* First tab stop on every page: the sidebar is ~30 links, and without
+          this a keyboard user traverses all of them before reaching content. */}
+      <a href="#main-content" className="sr-only-focusable skip-link">
+        Skip to main content
+      </a>
       <div className={`shell${collapsed ? " collapsed" : ""}`}>
         {collapsed ? (
           <SidebarRail onExpand={() => setCollapsedPersisted(false)} />
@@ -59,7 +75,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <div className="shell-main">
           <TopBar onOpenNav={() => setMobileOpen(true)} />
-          <div className="shell-content">{children}</div>
+          <main id="main-content" className="shell-content" tabIndex={-1}>
+            {children}
+          </main>
         </div>
       </div>
     </ToastProvider>

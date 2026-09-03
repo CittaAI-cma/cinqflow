@@ -203,7 +203,9 @@ class RecommendMappingGraph:
             legal=legal,
             notes=notes,
         )
-        self._apply_semantic_hints(candidates=by_source, hints=state.get("semantic_hints") or {}, legal=legal)
+        self._apply_semantic_hints(
+            candidates=by_source, hints=state.get("semantic_hints") or {}, legal=legal
+        )
 
         # Two source columns cannot both land in one canonical field. That is real
         # ambiguity for the analyst to resolve, so it is detected here rather than

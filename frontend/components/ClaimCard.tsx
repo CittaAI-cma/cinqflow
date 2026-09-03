@@ -1,4 +1,5 @@
 import EvidenceList from "@/components/EvidenceList";
+import Confidence from "@/components/ui/Confidence";
 import type { Claim } from "@/lib/api";
 
 /** The trust ladder's rule made visible: a fact or a citation is read, not
@@ -15,14 +16,7 @@ export default function ClaimCard({ claim }: { claim: Claim }) {
       <div className="claim-head">
         <span className={`claim-kind ${claim.kind}`}>{claim.kind.replace(/_/g, " ")}</span>
         <span className="claim-field">{claim.field}</span>
-        {scored ? (
-          <>
-            <span className="confidence-bar">
-              <i style={{ width: `${Math.round(claim.confidence * 100)}%` }} />
-            </span>
-            <span className="confidence-value">{claim.confidence.toFixed(2)}</span>
-          </>
-        ) : null}
+        {scored ? <Confidence value={claim.confidence} withLabel /> : null}
       </div>
       <div className="claim-value">{claim.value}</div>
       <EvidenceList items={claim.evidence} />

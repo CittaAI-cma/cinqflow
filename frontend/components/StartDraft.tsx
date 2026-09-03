@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import { useFormStatus } from "react-dom";
 import { startDraft, type StudioState } from "@/app/mapping/actions";
+import { useToast } from "@/lib/useToast";
 
 function Button({ label }: { label: string }) {
   const { pending } = useFormStatus();
@@ -23,6 +24,16 @@ export default function StartDraft({
   deriveFrom?: number;
 }) {
   const [state, action] = useActionState<StudioState, FormData>(startDraft, {});
+  const { push } = useToast();
+
+  // `startDraft` redirects into the new version on success, so this component
+  // unmounts before it could render any inline confirmation — a toast is the
+  // only feedback that can survive the navigation, and without it creating a
+  // draft was completely silent.
+  useEffect(() => {
+    if (state.error) push(state.error, "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.error]);
 
   return (
     <form action={action} className="card grid">
