@@ -24,7 +24,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="CINQFLOW", version="0.1.0", description="Stage 1 foundation")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000"],
+        allow_origins=s.cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )

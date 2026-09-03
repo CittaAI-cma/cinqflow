@@ -1,0 +1,24 @@
+# Railway-only: a real production build (`next build` + `next start`), unlike
+# frontend/Dockerfile (which runs `next dev` for local Compose parity).
+#
+# NEXT_PUBLIC_CINQFLOW_API is baked into the client JS bundle at BUILD time,
+# not read at runtime (Next.js's own NEXT_PUBLIC_ convention) - it has to be
+# an ARG here so Railway injects the service's configured env var into the
+# build, or the browser-side calls (RunProcessing, RetryButton - see
+# frontend/lib/api.ts) ship pointed at nothing.
+FROM node:24-slim
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN corepack enable && corepack prepare pnpm@11.14.0 --activate \
+    && pnpm install --frozen-lockfile
+
+COPY . .
+
+ARG NEXT_PUBLIC_CINQFLOW_API
+ENV NEXT_PUBLIC_CINQFLOW_API=$NEXT_PUBLIC_CINQFLOW_API
+RUN pnpm build
+
+EXPOSE 3000
+CMD ["sh", "-c", "pnpm exec next start -p ${PORT:-3000}"]

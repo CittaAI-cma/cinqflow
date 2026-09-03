@@ -49,6 +49,18 @@ class Settings(BaseSettings):
     profile_sample_values: int = 5
     profile_sample_rows: int = 20
 
+    # Origins allowed to call the API directly from a browser. Some client
+    # components (RunProcessing, RetryButton) poll/retry against the API
+    # themselves rather than going through a server action, so this is not
+    # just a dev convenience - a deployed frontend needs its own public URL
+    # listed here or those calls are blocked by the browser, not by the API.
+    # Comma-separated; localhost:3000 covers native dev and Docker Compose.
+    cors_allowed_origins: str = "http://localhost:3000"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:
