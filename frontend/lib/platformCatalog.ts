@@ -16,11 +16,18 @@ export interface ConnectionEntry extends CatalogEntry {
   kind: ConnectionKind;
 }
 
-export const COMPUTE_CONFIGS: CatalogEntry[] = [
-  { id: "single-node-v2", label: "single-node-v2 (dl-dev-environment)" },
-  { id: "small-cluster-v2", label: "small-cluster-v2 (dl-dev-environment)" },
-  { id: "job-cluster-v3", label: "job-cluster-v3 (dl-dev-environment)" },
-];
+/** A function, not a constant list: the label names the actual environment
+ *  (lib/appConfig.ts's PLATFORM_ENVIRONMENT) rather than baking in
+ *  "dl-dev-environment" regardless of where this is deployed - this field
+ *  isn't sent to the backend (nothing downstream reads `compute_config` yet),
+ *  but a production deployment still shouldn't visibly claim to be dev. */
+export function computeConfigs(environment: string): CatalogEntry[] {
+  return [
+    { id: "single-node-v2", label: `single-node-v2 (${environment})` },
+    { id: "small-cluster-v2", label: `small-cluster-v2 (${environment})` },
+    { id: "job-cluster-v3", label: `job-cluster-v3 (${environment})` },
+  ];
+}
 
 export const FLOW_TEMPLATES: CatalogEntry[] = [
   { id: "databricks-validate-archive-ingest-v1", label: "Databricks Validate Archive Ingest Flow (V1.0.0)" },

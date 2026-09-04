@@ -72,7 +72,18 @@ export const NAV_SECTIONS: NavSectionSpec[] = [
   },
 ];
 
-export const FOOTER_ITEMS: NavItem[] = [{ label: "All Chats", reason: NOT_BUILT }];
+/** Hidden per request - was `[{ label: "All Chats", reason: NOT_BUILT }]`, a
+ *  placeholder link to a surface that doesn't exist on this build. */
+export const FOOTER_ITEMS: NavItem[] = [];
+
+/** Every section defined above, filtered to what the sidebar actually shows.
+ *  Data Gov and DataOps are hidden, not deleted, above - every item in both is
+ *  `reason`-only (no href, nothing to navigate to), and re-enabling one is a
+ *  one-line change to this filter once it ships, rather than reconstructing
+ *  the section from git history. */
+export const VISIBLE_NAV_SECTIONS: NavSectionSpec[] = NAV_SECTIONS.filter(
+  (section) => section.id === "pipeline",
+);
 
 /** Administrator-only. Appended to `NAV_SECTIONS` by the shell, never rendered
  *  for anyone without the `administrator` role (AppShell computes `isAdmin`
@@ -213,7 +224,7 @@ export function breadcrumbsFor(pathname: string): Crumb[] {
 
 /** The rail marks a section active when the current route belongs to it. */
 export function activeSectionId(pathname: string): string | null {
-  for (const section of NAV_SECTIONS) {
+  for (const section of VISIBLE_NAV_SECTIONS) {
     for (const item of section.items) {
       if (item.href && (pathname === item.href || pathname.startsWith(`${item.href}/`))) {
         return section.id;

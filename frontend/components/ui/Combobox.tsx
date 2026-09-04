@@ -162,7 +162,16 @@ export default function Combobox({
               </li>
             ) : null}
 
-            {rowCount === 0 ? <li className="combobox-empty">No match.</li> : null}
+            {rowCount === 0 ? (
+              <li className="combobox-empty">
+                {/* An empty option list with no query typed yet used to dead-end
+                    here — allowCustom's escape hatch only appears once there's
+                    something to search for, so a caller with zero seeded
+                    options (a fresh deployment, before anything's been
+                    ingested) looked unusable rather than just unseeded. */}
+                {allowCustom ? "No options yet — type to add one." : "No match."}
+              </li>
+            ) : null}
           </ul>
         </div>
       ) : null}

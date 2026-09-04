@@ -15,8 +15,8 @@ import {
   ADMIN_SECTION,
   FOOTER_ITEMS,
   HOME_ITEM,
-  NAV_SECTIONS,
   RAIL_UTILITIES,
+  VISIBLE_NAV_SECTIONS,
   activeSectionId,
 } from "@/lib/navigation";
 import { useTheme } from "@/lib/useTheme";
@@ -38,7 +38,7 @@ export default function SidebarRail({
   const HomeGlyph = RAIL_ICONS.home;
   const ChatGlyph = RAIL_ICONS.chat;
   const homeActive = pathname === "/";
-  const sections = isAdmin ? [...NAV_SECTIONS, ADMIN_SECTION] : NAV_SECTIONS;
+  const sections = isAdmin ? [...VISIBLE_NAV_SECTIONS, ADMIN_SECTION] : VISIBLE_NAV_SECTIONS;
 
   return (
     <nav className="rail" aria-label="Platform navigation (collapsed)">

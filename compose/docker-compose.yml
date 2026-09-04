@@ -137,6 +137,14 @@ services:
       # host-published port, not the in-network one.
       CINQFLOW_API: http://api:8000
       NEXT_PUBLIC_CINQFLOW_API: http://localhost:${API_HOST_PORT:-8000}
+      # lib/appConfig.ts. This service runs `next dev` (frontend/Dockerfile),
+      # which reads these fresh at request time - no build-ARG plumbing needed
+      # here the way Dockerfile.railway needs for its production `next build`.
+      # Unset falls back to appConfig.ts's own "dl-dev-..." defaults.
+      NEXT_PUBLIC_PROJECT: ${NEXT_PUBLIC_PROJECT:-}
+      NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-}
+      NEXT_PUBLIC_BRAND_NAME: ${NEXT_PUBLIC_BRAND_NAME:-}
+      NEXT_PUBLIC_UPLOADER: ${NEXT_PUBLIC_UPLOADER:-}
     volumes:
       - ../frontend:/app
       - /app/node_modules
