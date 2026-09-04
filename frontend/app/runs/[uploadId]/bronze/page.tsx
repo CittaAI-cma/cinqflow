@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import BronzeAnalysisWait from "@/components/run/BronzeAnalysisWait";
 import ProposalTable from "@/components/ProposalTable";
 import { getBronzeProfile, getProposal, getUpload, type FieldStatus } from "@/lib/api";
 import { canonicalStep, isStepViewable, runHref } from "@/lib/runStep";
@@ -133,10 +134,7 @@ export default async function BronzePage({
           <ProposalTable proposal={proposal} statuses={statuses} />
         </>
       ) : (
-        <p className="empty">
-          No mapping proposal yet. Bronze analysis is queued — run{" "}
-          <span className="mono">make worker</span> and reload.
-        </p>
+        <BronzeAnalysisWait batchId={landRun.batch_id} />
       )}
 
       <div

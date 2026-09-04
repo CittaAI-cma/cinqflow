@@ -142,8 +142,9 @@ export default function ApproveMapping({
           {state.error ? <p className="alert error">{state.error}</p> : null}
           {state.saved ? (
             <p className="alert ok">
-              Approved. Promotion queued for batch <span className="mono">{state.batchId}</span>{" "}
-              — run <span className="mono">make worker</span> and reload.
+              Approved. Promotion queued for batch <span className="mono">{state.batchId}</span> —{" "}
+              <a href={`/batches/${state.batchId}`}>watch it promote</a>, or reload this page once
+              it's done.
             </p>
           ) : null}
         </form>

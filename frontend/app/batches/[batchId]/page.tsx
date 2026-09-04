@@ -269,9 +269,11 @@ export default async function BatchPage({
           </div>
         </>
       ) : (
+        // BatchProcessing (above) is already polling for exactly this and will
+        // refresh the page the moment it lands - nothing manual needed here.
         <p className="empty">
-          No mapping proposal yet. Bronze analysis is queued — run{" "}
-          <span className="mono">make worker</span> and reload.
+          No mapping proposal yet. Bronze analysis is queued — this updates automatically once
+          it's ready.
         </p>
       )}
 
