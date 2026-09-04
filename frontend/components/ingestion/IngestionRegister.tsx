@@ -1,3 +1,4 @@
+import ApiUnreachable from "@/components/ui/ApiUnreachable";
 import IngestionTable from "@/components/ingestion/IngestionTable";
 import { PLATFORM_ENVIRONMENT } from "@/lib/appConfig";
 import { listUploads } from "@/lib/api";
@@ -16,12 +17,7 @@ export default async function IngestionRegister() {
   }
 
   if (unreachable) {
-    return (
-      <p className="alert error">
-        The API is not responding. Start it with <span className="mono">make api</span>, and the
-        worker with <span className="mono">make worker</span>.
-      </p>
-    );
+    return <ApiUnreachable />;
   }
 
   return <IngestionTable uploads={uploads} environment={PLATFORM_ENVIRONMENT} />;

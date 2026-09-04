@@ -8,12 +8,17 @@ import { useActionState, useEffect, useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 import Kpi from "@/components/Kpi";
 import StatusWord from "@/components/StatusWord";
+import WaitNotice from "@/components/ui/WaitNotice";
 import { runPreview, type StudioState } from "@/app/mapping/actions";
 import { getPreview, type PreviewResult } from "@/lib/api";
 import { previewStatusWord } from "@/lib/statusWords";
 import { usePoll } from "@/lib/usePoll";
 
 const POLL_MS = 1500;
+
+/** A preview is deterministic execution over a bounded sample - it is quick
+ *  once a worker has it. A minute means nothing claimed the job. */
+const STALL_AFTER_MS = 60_000;
 
 const ROW_LIMITS = [10, 25, 50] as const;
 
@@ -74,7 +79,7 @@ export default function PreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.saved]);
 
-  usePoll<PreviewResult | null>(
+  const previewPoll = usePoll<PreviewResult | null>(
     () => getPreview(feed, version, limit),
     {
       enabled: pollBaseline !== null,
@@ -84,6 +89,7 @@ export default function PreviewPanel({
         setPollBaseline(null);
         router.refresh();
       },
+      stallAfterMs: STALL_AFTER_MS,
     },
     [feed, version, limit, pollBaseline],
   );
@@ -139,9 +145,25 @@ export default function PreviewPanel({
         </div>
         {state.error ? <p className="alert error">{state.error}</p> : null}
         {pollBaseline !== null ? (
-          <p className="alert ok" aria-live="polite">
-            Preview queued — this updates automatically once it's ready.
-          </p>
+          previewPoll.offline || previewPoll.stalled ? (
+            <WaitNotice
+              poll={previewPoll}
+              what="the preview"
+              waiting=""
+              stalled={
+                <>
+                  The mapping version is saved and unchanged — only the preview run is
+                  outstanding. No worker appears to have claimed{" "}
+                  <span className="mono">mapping.preview</span>. G2 stays closed until one does,
+                  by design: nobody approves a mapping they have not seen run.
+                </>
+              }
+            />
+          ) : (
+            <p className="alert ok" aria-live="polite">
+              Preview queued — this updates automatically once it&apos;s ready.
+            </p>
+          )
         ) : null}
       </form>
 

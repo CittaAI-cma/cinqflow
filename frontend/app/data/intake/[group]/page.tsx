@@ -1,3 +1,4 @@
+import ApiUnreachable from "@/components/ui/ApiUnreachable";
 import { notFound } from "next/navigation";
 import GroupPanels from "@/components/ingestion/GroupPanels";
 import GroupStageTabs from "@/components/ingestion/GroupStageTabs";
@@ -33,12 +34,7 @@ export default async function IngestGroupPage({
     ({ uploads } = await listUploads());
   } catch (err) {
     console.error("listUploads failed:", err);
-    return (
-      <p className="alert error">
-        The API is not responding. Start it with <span className="mono">make api</span>, and the
-        worker with <span className="mono">make worker</span>.
-      </p>
-    );
+    return <ApiUnreachable />;
   }
 
   const objects = uploads.filter((upload) => upload.feed === group);

@@ -1,3 +1,4 @@
+import ApiUnreachable from "@/components/ui/ApiUnreachable";
 import Link from "next/link";
 import UsersTable from "@/components/admin/UsersTable";
 import { PlusIcon } from "@/components/icons";
@@ -25,10 +26,6 @@ export default async function UsersRegister() {
     );
   } catch (err) {
     console.error("listUsers/listRoles failed:", err);
-    return (
-      <p className="alert error">
-        The API is not responding. Start it with <span className="mono">make api</span>.
-      </p>
-    );
+    return <ApiUnreachable />;
   }
 }

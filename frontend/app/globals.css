@@ -2053,3 +2053,12 @@ button:active:not(:disabled),
   color: var(--ink2);
   border: 1px solid var(--line);
 }
+
+/* --- WaitNotice ------------------------------------------------------------
+   The shared surface for a poll that is waiting, stalled, or has lost the
+   control plane. Its alert/empty children already carry their own colour;
+   this only owns the layout around them so all four waiting screens line up. */
+.wait-notice { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.wait-notice .alert { margin-top: 0; }
+.wait-notice-waiting { display: flex; align-items: baseline; gap: 10px; }
+.wait-notice-elapsed { font-size: 12px; opacity: 0.75; }

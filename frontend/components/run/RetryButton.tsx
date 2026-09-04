@@ -5,12 +5,13 @@ import { useRouter } from "next/navigation";
 import { retryUpload } from "@/lib/api";
 import { useToast } from "@/lib/useToast";
 
-/** A one-shot retry with no live progress tracking, for a state this build
- *  has no timeline screen for yet (landing, from the read-only Review view —
- *  S3 isn't built in this phase). `RunProcessing` has its own bespoke retry
- *  that keeps polling afterward; this one only re-enqueues and says so,
- *  because the status transition happens in the background worker, not at
- *  the moment this call returns. */
+/** A one-shot retry for a state this build has no timeline screen of its own
+ *  for (landing, from the read-only Review view — S3 isn't built in this
+ *  phase). `RunProcessing` has its own bespoke retry that keeps polling
+ *  afterward; this one re-enqueues and hands off, because the status
+ *  transition happens in a background worker rather than when this call
+ *  returns — and `LandingWait` on the same screen is already watching for it,
+ *  which is why this no longer tells anyone to reload. */
 export default function RetryButton({ uploadId, label }: { uploadId: string; label: string }) {
   const router = useRouter();
   const { push } = useToast();
@@ -40,7 +41,9 @@ export default function RetryButton({ uploadId, label }: { uploadId: string; lab
         {pending ? "Queuing…" : label}
       </button>
       {result === "queued" ? (
-        <span className="meta">Queued. This build has no live landing progress yet — reload to check.</span>
+        <span className="meta">
+          Queued. The Review screen picks landing up on its own from here — no reload needed.
+        </span>
       ) : null}
       {result === "error" ? <p className="alert error">{error}</p> : null}
     </div>
