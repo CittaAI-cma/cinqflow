@@ -442,13 +442,13 @@ export async function getProposalById(proposalId: string): Promise<MappingPropos
 export async function decideUpload(
   uploadId: string,
   decision: "approved" | "rejected",
-  body: { approver?: string; note?: string } = {},
+  body: { approver: string; note?: string },
 ): Promise<{ error?: string }> {
   const path = decision === "approved" ? "approve" : "reject";
   const response = await fetch(`${BASE}/api/uploads/${uploadId}/${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ approver: body.approver ?? "analyst@cinqcare.com", note: body.note ?? null }),
+    body: JSON.stringify({ approver: body.approver, note: body.note ?? null }),
   });
   if (response.ok) return {};
 

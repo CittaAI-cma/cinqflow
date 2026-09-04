@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import GateActions from "@/components/GateActions";
+import LandingWait from "@/components/run/LandingWait";
 import RetryButton from "@/components/run/RetryButton";
 import ReviewEvidence from "@/components/run/ReviewEvidence";
 import VerdictCard from "@/components/run/VerdictCard";
 import StatusWord from "@/components/StatusWord";
 import AnnounceOnMount from "@/components/ui/AnnounceOnMount";
 import { getUpload } from "@/lib/api";
+import { requireUser } from "@/lib/auth";
 import { canonicalStep, isStepViewable, runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +41,11 @@ export default async function ReviewPage({
   } catch {
     notFound();
   }
+
+  // Defence in depth, same as `submitDecision` itself: middleware already
+  // gates this route on a session cookie, but the actual decided-by identity
+  // for a still-undecided run comes from here, not a placeholder.
+  const user = await requireUser();
 
   const { upload, profile, interpretation, approvals, runs } = detail;
 
@@ -127,16 +134,14 @@ export default async function ReviewPage({
                 ) : null}
               </div>
             ) : (
-              <p className="empty" style={{ marginTop: 12 }}>
-                Approved. Landing to Bronze is queued — run{" "}
-                <span className="mono">make worker</span> and reload.
-              </p>
+              <LandingWait uploadId={uploadId} />
             )}
           </div>
         ) : (
           <GateActions
             uploadId={uploadId}
             filename={upload.filename}
+            approverEmail={user.email}
             phiCount={profile.facts.phi_candidates.length}
             unknownCount={
               interpretation.content.signals.filter((s) => s.severity === "blocker").length
