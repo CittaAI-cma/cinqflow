@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m pytest tests/ -k intelligence -v)"
+      "Bash(python -m pytest tests/ -k intelligence -v)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
