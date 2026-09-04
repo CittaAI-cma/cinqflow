@@ -36,11 +36,17 @@ export default function PreviewPanel({
   version,
   preview,
   limit = 25,
+  limitHref,
 }: {
   feed: string;
   version: number;
   preview: PreviewResult | null;
   limit?: number;
+  /** Row-limit chip URLs - built by the one caller, `MappingPageBody`, from
+   *  whichever of the two mapping routes (`/mapping/{feed}` or
+   *  `/runs/{uploadId}/mapping`) is actually rendering it, so the chips never
+   *  bounce the analyst onto a different route than the one she's on. */
+  limitHref: (n: number) => string;
 }) {
   const [state, action] = useActionState<StudioState, FormData>(runPreview, {});
   const { push } = useToast();
@@ -232,7 +238,7 @@ export default function PreviewPanel({
               {ROW_LIMITS.map((n) => (
                 <Link
                   key={n}
-                  href={`/mapping/${encodeURIComponent(feed)}?v=${version}&limit=${n}`}
+                  href={limitHref(n)}
                   className={`chip${n === limit ? " on" : ""}`}
                   aria-current={n === limit ? "true" : undefined}
                   title={`Show the first ${n} sampled rows`}

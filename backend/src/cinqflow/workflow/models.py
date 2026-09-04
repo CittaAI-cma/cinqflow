@@ -72,18 +72,55 @@ class Claim(BaseModel):
     evidence: list[str]
 
 
+#: A risk is a concern worth checking; an unknown is the model declining to
+#: guess. Kept as one list, distinguished by `kind`, so a review screen can
+#: render them with one component instead of two near-identical ones.
+SignalKind = Literal["risk", "unknown"]
+
+#: `blocker` is assigned only to `unknown` signals - matches the pre-existing
+#: UI language ("Blockers: N unknowns unresolved"). `risk` signals are `warn`:
+#: worth reading, not something that should read as gating the decision.
+#: Never set by the model - see `intelligence/schemas.py`'s `LlmSignal`.
+SignalSeverity = Literal["blocker", "warn", "info"]
+
+
+class Signal(BaseModel):
+    """A risk or unknown, shaped as the reasoning contract the analyst forward
+    flow calls for (docs/blueprints/analyst-forward-flow.md §1.2) instead of a
+    bare sentence: what's true, why, how to check it without leaving the
+    screen, and what happens if it's accepted as-is."""
+
+    kind: SignalKind
+    claim: str
+    basis: str
+    check: str
+    consequence: str
+    severity: SignalSeverity
+
+
 class Provenance(BaseModel):
     prompt: str
     model: str
     knowledge: list[str]
 
 
+#: Deterministic, computed by `_assemble`/`_validate` from the final claims,
+#: signals and field counts - never asked of the model, for the same reason
+#: the S2 verdict sentence is composed from `ProfileFacts` rather than
+#: generated: an analyst-facing synthesis must never itself be a place the
+#: model could be wrong. `"reject"` is deliberately not a value here - only a
+#: human can decide a file is bad; code can only say "look before approving."
+RecommendedAction = Literal["approve", "review_first"]
+
+
 class InterpretationContent(BaseModel):
     """The structured AI output. No free-form text is authoritative."""
 
     claims: list[Claim]
-    risks: list[str] = Field(default_factory=list)
-    unknowns: list[str] = Field(default_factory=list)
+    signals: list[Signal] = Field(default_factory=list)
+    #: One sentence, computed - see `RecommendedAction`.
+    headline: str = ""
+    recommended_action: RecommendedAction = "approve"
 
 
 class Interpretation(BaseModel):
@@ -235,6 +272,11 @@ class FieldCandidate(BaseModel):
 class ProposalContent(BaseModel):
     fields: list[FieldCandidate] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    #: Deterministic, computed by `_validate` from `counts` - see
+    #: `RecommendedAction` on `InterpretationContent` for why this is code, not
+    #: model output.
+    headline: str = ""
+    recommended_action: RecommendedAction = "approve"
 
     @property
     def counts(self) -> dict[str, int]:
@@ -483,9 +525,7 @@ def mask_facts(facts: ProfileFacts) -> ProfileFacts:
     return facts.model_copy(
         update={
             "columns": [
-                column.model_copy(update={"sample_values": []})
-                if column.phi_candidate
-                else column
+                column.model_copy(update={"sample_values": []}) if column.phi_candidate else column
                 for column in facts.columns
             ],
             "sample_rows": [mask_row(row, phi) for row in facts.sample_rows],

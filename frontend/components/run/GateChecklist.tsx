@@ -3,37 +3,32 @@
 import { useEffect, useState } from "react";
 import Checkbox from "@/components/ui/Checkbox";
 
-interface ChecklistItem {
+export interface ChecklistItem {
   id: string;
   text: string;
 }
 
-/** Composes the gate's freeform `note` field from a short checklist, so the
+/** Composes a gate's freeform `note` field from a short checklist, so the
  *  record left behind reads as "what she checked" rather than a blank
  *  textbox. This is not a control: the API has no field for "checklist
  *  complete", so nothing here disables Approve — an unticked box is the
- *  analyst's own risk to take, not this build's to block. */
+ *  analyst's own risk to take, not this build's to block.
+ *
+ *  Shared by both gates - `items` is built by the caller (`GateActions` for
+ *  G1's PHI/unknowns items, `ApproveMapping` for G2's preview/edit items), so
+ *  the composing logic lives in exactly one place. */
 export default function GateChecklist({
-  phiCount,
-  unknownCount,
+  items,
   onChange,
   onProgress,
 }: {
-  phiCount: number;
-  unknownCount: number;
+  items: ChecklistItem[];
   onChange: (note: string) => void;
   /** Ticked count and total, so the gate can show progress and name the
    *  unticked items in its confirmation. Still not a control: nothing here
    *  blocks Approve. */
   onProgress?: (checked: number, total: number) => void;
 }) {
-  const items: ChecklistItem[] = [
-    { id: "columns", text: "Column names and types look right" },
-    { id: "rowcount", text: "Row count is plausible for this delivery" },
-    ...(phiCount > 0 ? [{ id: "phi", text: "PHI flags look right" }] : []),
-    ...(unknownCount > 0 ? [{ id: "unknowns", text: "The unknowns are acceptable for Bronze" }] : []),
-  ];
-
   const [checked, setChecked] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -44,7 +39,7 @@ export default function GateChecklist({
     onProgress?.(items.filter((item) => checked[item.id]).length, items.length);
     // Re-compose only when a box actually changes, not on every parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checked, phiCount, unknownCount]);
+  }, [checked, items]);
 
   return (
     <ul className="gate-checklist">

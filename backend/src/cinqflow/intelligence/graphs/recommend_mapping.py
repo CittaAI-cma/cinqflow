@@ -22,6 +22,7 @@ from cinqflow.workflow.models import (
     FieldCandidate,
     ProfileFacts,
     ProposalContent,
+    RecommendedAction,
     Transform,
 )
 
@@ -236,8 +237,36 @@ class RecommendMappingGraph:
             notes.append(f"{len(contenders)} columns propose {target}: {names}. One must win.")
 
         candidates.sort(key=lambda c: (c.status != "invalid", c.status, c.source))
-        content = ProposalContent(fields=candidates, notes=notes)
+        headline, recommended_action = self._headline(candidates)
+        content = ProposalContent(
+            fields=candidates, notes=notes, headline=headline, recommended_action=recommended_action
+        )
         return {"content": content.model_dump(), "status": "invalid" if invalid else "proposed"}
+
+    @staticmethod
+    def _headline(candidates: list[FieldCandidate]) -> tuple[str, RecommendedAction]:
+        """Composed from the final field statuses, never asked of the model -
+        same rule as `interpret_file`'s headline (§ its own docstring). Mirrors
+        S4's own filter default: invalid first, then anything needing a
+        decision, matching `ProposalContent.counts`."""
+        total = len(candidates)
+        needs_decision_statuses = ("ambiguous", "unknown", "invalid")
+        invalid = sum(1 for c in candidates if c.status == "invalid")
+        needs_decision = sum(1 for c in candidates if c.status in needs_decision_statuses)
+        if invalid:
+            return (
+                f"{invalid} field{'s' if invalid != 1 else ''} named a target that doesn't "
+                "exist — needs a fix before this can be trusted.",
+                "review_first",
+            )
+        if needs_decision:
+            return (
+                f"{needs_decision} of {total} field{'s' if total != 1 else ''} need a decision "
+                "— the rest look defensible.",
+                "review_first",
+            )
+        plural = "s" if total != 1 else ""
+        return (f"All {total} field{plural} have a defensible target.", "approve")
 
     @staticmethod
     def _apply_precedent_hints(

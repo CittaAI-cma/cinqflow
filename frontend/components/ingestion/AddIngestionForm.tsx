@@ -86,140 +86,10 @@ export default function AddIngestionForm({
   return (
     <form action={action} className="ingestion-form">
       <section className="form-section">
-        <h3 className="form-section-label">Basic Information</h3>
-        <div className="form-grid">
-          <FormField label="Project" htmlFor="project" required hint="From platform configuration">
-            <select id="project" className="native-select" defaultValue={project} disabled>
-              <option value={project}>{project}</option>
-            </select>
-          </FormField>
-
-          <FormField
-            label="Environment"
-            htmlFor="environment"
-            required
-            hint="From platform configuration"
-          >
-            <select id="environment" className="native-select" defaultValue={environment} disabled>
-              <option value={environment}>{environment}</option>
-            </select>
-          </FormField>
-
-          <FormField
-            label="Data domain"
-            htmlFor="domain"
-            required
-            hint="Pick an existing domain or type a new one"
-          >
-            <Combobox
-              id="domain"
-              name="domain"
-              value={domain}
-              onChange={setDomain}
-              options={domainOptions}
-              placeholder="Select a data domain..."
-              searchPlaceholder="Select the domain this data belongs to"
-              allowCustom
-            />
-          </FormField>
-
-          <FormField
-            label="Group Name"
-            htmlFor="feed"
-            required
-            hint="Becomes the feed this file belongs to"
-          >
-            <input
-              id="feed"
-              name="feed"
-              className="text-input"
-              value={groupName}
-              placeholder="e.g., customer data sync"
-              onChange={(event) => setGroupName(event.target.value)}
-              required
-            />
-          </FormField>
-
-          <FormField
-            label="Description"
-            htmlFor="description"
-            span
-            unavailable="Not stored by the control plane on this build"
-          >
-            <textarea
-              id="description"
-              className="textarea"
-              rows={3}
-              placeholder="Not stored by the control plane on this build"
-              disabled
-            />
-          </FormField>
-
-          <FormField label="Compute Config" htmlFor="compute">
-            <select
-              id="compute"
-              name="compute_config"
-              className="native-select"
-              defaultValue={computeConfigOptions[0].id}
-            >
-              {computeConfigOptions.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.label}
-                </option>
-              ))}
-            </select>
-          </FormField>
-
-          <FormField
-            label="Ingestion workflow"
-            htmlFor="workflow"
-            required
-            hint="Profile → interpret → G1 → Bronze → map → preview → G2 → Silver"
-          >
-            <select
-              id="workflow"
-              name="workflow"
-              className="native-select"
-              defaultValue="csv_full_pipeline"
-            >
-              <option value="csv_full_pipeline">CSV — full pipeline</option>
-            </select>
-          </FormField>
-
-          <FormField label="Pipeline Template" htmlFor="pipeline" required>
-            <select
-              id="pipeline"
-              name="pipeline_template"
-              className="native-select"
-              defaultValue={PIPELINE_TEMPLATES[0].id}
-            >
-              {PIPELINE_TEMPLATES.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.label}
-                </option>
-              ))}
-            </select>
-          </FormField>
-
-          <FormField label="Flow Template" htmlFor="flow">
-            <select
-              id="flow"
-              name="flow_template"
-              className="native-select"
-              defaultValue={FLOW_TEMPLATES[0].id}
-            >
-              {FLOW_TEMPLATES.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.label}
-                </option>
-              ))}
-            </select>
-          </FormField>
-        </div>
-      </section>
-
-      <section className="form-section">
-        <h3 className="form-section-label">Source file</h3>
+        <h3 className="form-section-label">This file</h3>
+        <p className="form-section-note">
+          Everything here is read by the profiler. Choose carefully.
+        </p>
         <div className="form-grid">
           <FormField
             label="File"
@@ -264,7 +134,7 @@ export default function AddIngestionForm({
             />
           </FormField>
 
-          <FormField label="Uploader" htmlFor="uploader" required span>
+          <FormField label="Uploader" htmlFor="uploader" required>
             <input
               id="uploader"
               name="uploader"
@@ -277,9 +147,142 @@ export default function AddIngestionForm({
       </section>
 
       <section className="form-section">
-        <h3 className="form-section-label">Source &amp; Target Connections</h3>
+        <h3 className="form-section-label">Where it belongs</h3>
+        <p className="form-section-note">
+          Names the Bronze and Silver Raw tables. Cannot be changed after landing.
+        </p>
         <div className="form-grid">
-          <FormField label="Source Connection" htmlFor="source_connection" required>
+          <FormField
+            label="Data domain"
+            htmlFor="domain"
+            required
+            hint="Pick an existing domain or type a new one"
+          >
+            <Combobox
+              id="domain"
+              name="domain"
+              value={domain}
+              onChange={setDomain}
+              options={domainOptions}
+              placeholder="Select a data domain..."
+              searchPlaceholder="Select the domain this data belongs to"
+              allowCustom
+            />
+          </FormField>
+
+          <FormField
+            label="Group Name"
+            htmlFor="feed"
+            required
+            hint="Becomes the feed this file belongs to"
+          >
+            <input
+              id="feed"
+              name="feed"
+              className="text-input"
+              value={groupName}
+              placeholder="e.g., customer data sync"
+              onChange={(event) => setGroupName(event.target.value)}
+              required
+            />
+          </FormField>
+        </div>
+      </section>
+
+      <CollapsibleSection title="How it will run — recorded now, not used yet">
+        <p className="form-section-note">
+          Everything below is posted with the upload but ignored by the control plane on this
+          build. Nothing here affects this upload.
+        </p>
+        <div className="form-grid">
+          <FormField label="Project" htmlFor="project" hint="From platform configuration">
+            <select id="project" className="native-select" defaultValue={project} disabled>
+              <option value={project}>{project}</option>
+            </select>
+          </FormField>
+
+          <FormField label="Environment" htmlFor="environment" hint="From platform configuration">
+            <select id="environment" className="native-select" defaultValue={environment} disabled>
+              <option value={environment}>{environment}</option>
+            </select>
+          </FormField>
+
+          <FormField
+            label="Description"
+            htmlFor="description"
+            span
+            unavailable="Not stored by the control plane on this build"
+          >
+            <textarea
+              id="description"
+              className="textarea"
+              rows={3}
+              placeholder="Not stored by the control plane on this build"
+              disabled
+            />
+          </FormField>
+
+          <FormField label="Compute Config" htmlFor="compute">
+            <select
+              id="compute"
+              name="compute_config"
+              className="native-select"
+              defaultValue={computeConfigOptions[0].id}
+            >
+              {computeConfigOptions.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+          </FormField>
+
+          <FormField
+            label="Ingestion workflow"
+            htmlFor="workflow"
+            hint="Profile → interpret → G1 → Bronze → map → preview → G2 → Silver"
+          >
+            <select
+              id="workflow"
+              name="workflow"
+              className="native-select"
+              defaultValue="csv_full_pipeline"
+            >
+              <option value="csv_full_pipeline">CSV — full pipeline</option>
+            </select>
+          </FormField>
+
+          <FormField label="Pipeline Template" htmlFor="pipeline">
+            <select
+              id="pipeline"
+              name="pipeline_template"
+              className="native-select"
+              defaultValue={PIPELINE_TEMPLATES[0].id}
+            >
+              {PIPELINE_TEMPLATES.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+          </FormField>
+
+          <FormField label="Flow Template" htmlFor="flow">
+            <select
+              id="flow"
+              name="flow_template"
+              className="native-select"
+              defaultValue={FLOW_TEMPLATES[0].id}
+            >
+              {FLOW_TEMPLATES.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+          </FormField>
+
+          <FormField label="Source Connection" htmlFor="source_connection">
             <Combobox
               id="source_connection"
               name="source_connection"
@@ -291,7 +294,7 @@ export default function AddIngestionForm({
             />
           </FormField>
 
-          <FormField label="Target Connection" htmlFor="target_connection" required>
+          <FormField label="Target Connection" htmlFor="target_connection">
             <Combobox
               id="target_connection"
               name="target_connection"
@@ -303,10 +306,10 @@ export default function AddIngestionForm({
             />
           </FormField>
         </div>
-      </section>
 
-      <CollapsibleSection title="Advanced — Medallion lifecycle">
-        <MedallionTierEditor name="medallion_tiers" />
+        <CollapsibleSection title="Medallion lifecycle">
+          <MedallionTierEditor name="medallion_tiers" />
+        </CollapsibleSection>
       </CollapsibleSection>
 
       {state.error ? <p className="alert error">{state.error}</p> : null}

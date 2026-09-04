@@ -72,10 +72,11 @@ def handle(
     store.set_status(upload_id, UploadStatus.INTERPRETED)
     store.finish_interpretation_run(upload_id=upload_id, status="completed")
     log.info(
-        "interpreted %s: %s claims, %s unknowns",
+        "interpreted %s: %s claims, %s signals (%s)",
         upload_id,
         len(interpretation.content.claims),
-        len(interpretation.content.unknowns),
+        len(interpretation.content.signals),
+        interpretation.content.headline,
     )
     return {
         "upload_id": upload_id,

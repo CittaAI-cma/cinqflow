@@ -24,10 +24,22 @@ function evidenceClass(item: string): string {
 }
 
 /** The AI mapping proposal, rendered identically wherever an analyst needs to
- *  see it: the batch detail page (after the fact) and the Mapping Studio's
- *  empty state (before "Start draft" commits to it) — one component so the
- *  two moments never drift into showing different information. */
-export default function ProposalTable({ proposal }: { proposal: MappingProposal }) {
+ *  see it: the batch detail page (after the fact), the Mapping Studio's
+ *  empty state (before "Start draft" commits to it), and S4's Bronze review
+ *  — one component so those moments never drift into showing different
+ *  information. `statuses` restricts which rows render; omit it to show
+ *  every field (the batch page's original, unfiltered behaviour). */
+export default function ProposalTable({
+  proposal,
+  statuses,
+}: {
+  proposal: MappingProposal;
+  statuses?: FieldStatus[];
+}) {
+  const fields = statuses
+    ? proposal.content.fields.filter((field) => statuses.includes(field.status))
+    : proposal.content.fields;
+
   return (
     <>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
@@ -66,7 +78,7 @@ export default function ProposalTable({ proposal }: { proposal: MappingProposal 
             </tr>
           </thead>
           <tbody>
-            {proposal.content.fields.map((field) => (
+            {fields.map((field) => (
               <tr key={field.source}>
                 <td className="mono">{field.source}</td>
                 <td className="meta">{field.concept ?? "—"}</td>

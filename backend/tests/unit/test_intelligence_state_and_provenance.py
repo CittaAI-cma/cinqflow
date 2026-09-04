@@ -69,7 +69,7 @@ class TestInterpretFileState:
                 payload = json.loads(user)
                 # The payload is what the model sees; sample_rows must not be there
                 assert "sample_rows" not in payload.get("observations", {})
-                return {"claims": [], "risks": [], "unknowns": []}
+                return {"claims": [], "signals": []}
 
         graph_interpret(InspectingClient(), s).run(
             facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
@@ -91,7 +91,7 @@ class TestInterpretFileState:
                 # Context contains source and glossary
                 assert "source" in payload["context"]
                 assert "glossary" in payload["context"]
-                return {"claims": [], "risks": [], "unknowns": []}
+                return {"claims": [], "signals": []}
 
         graph_interpret(InspectingClient(), s).run(
             facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
@@ -121,8 +121,7 @@ class TestInterpretFileState:
                             "evidence": ["y"],
                         },
                     ],
-                    "risks": [],
-                    "unknowns": [],
+                    "signals": [],
                 }
 
         content = graph_interpret(OutOfRangeConfidence(), s).run(
@@ -131,8 +130,9 @@ class TestInterpretFileState:
         # The invalid one is discarded
         assert len(content.claims) == 1
         assert content.claims[0].field == "likely_grain"
-        # Discarded item is recorded as an unknown
-        assert any("malformed claim" in u for u in content.unknowns)
+        # Discarded item is recorded as an unknown signal
+        unknowns = [sig.claim for sig in content.signals if sig.kind == "unknown"]
+        assert any("malformed claim" in u for u in unknowns)
 
     def test_assemble_node_rejects_invalid_claim_kind(self, facts, s):
         """Only valid ClaimKind values are accepted."""
@@ -151,8 +151,7 @@ class TestInterpretFileState:
                             "evidence": ["e"],
                         }
                     ],
-                    "risks": [],
-                    "unknowns": [],
+                    "signals": [],
                 }
 
         content = graph_interpret(InvalidKind(), s).run(
@@ -160,7 +159,8 @@ class TestInterpretFileState:
         )["content"]
         # All claims should be discarded
         assert len(content.claims) == 0
-        assert any("malformed claim" in u for u in content.unknowns)
+        unknowns = [sig.claim for sig in content.signals if sig.kind == "unknown"]
+        assert any("malformed claim" in u for u in unknowns)
 
     def test_stream_mode_supports_on_step_callback(self, facts, s):
         """The run() method with on_step callback records each node's completion."""
@@ -204,11 +204,7 @@ class TestMappingState:
                 entities = context["canonical"]["entities"]
                 assert len(entities) > 0
                 # Fields are fully qualified (table.field)
-                all_fields = [
-                    f["name"]
-                    for entity in entities
-                    for f in entity.get("fields", [])
-                ]
+                all_fields = [f["name"] for entity in entities for f in entity.get("fields", [])]
                 assert any("." in f for f in all_fields)
                 return {"fields": [], "notes": []}
 
@@ -322,7 +318,7 @@ class TestProvenance:
             facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
         )
 
-        assert result["prompt"] == "interpret_file@1"
+        assert result["prompt"] == "interpret_file@2"
         assert result["model"] == "stub-reasoner-1"
 
         # Knowledge citations are version-stamped
@@ -358,7 +354,7 @@ class TestProvenance:
             model_id = "custom-model-v42"
 
             def complete_json(self, *, system, user, response_model=None):
-                return {"claims": [], "risks": [], "unknowns": []}
+                return {"claims": [], "signals": []}
 
         result = graph_interpret(CustomModel(), s).run(
             facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
@@ -423,7 +419,7 @@ class TestFailureModes:
 
             def complete_json(self, *, system, user, response_model=None):
                 # Missing 'claims' field - assemble will use default []
-                return {"risks": [], "unknowns": []}
+                return {"signals": []}
 
         result = graph_interpret(IncompleteClient(), s).run(
             facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
@@ -449,7 +445,7 @@ class TestEdgeCases:
             model_id = "silent"
 
             def complete_json(self, *, system, user, response_model=None):
-                return {"claims": [], "risks": [], "unknowns": []}
+                return {"claims": [], "signals": []}
 
         result = graph_interpret(NoClaimsClient(), s).run(
             facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
@@ -475,8 +471,7 @@ class TestEdgeCases:
                             "evidence": [],  # empty!
                         }
                     ],
-                    "risks": [],
-                    "unknowns": [],
+                    "signals": [],
                 }
 
         content = graph_interpret(NoEvidenceClient(), s).run(
@@ -484,7 +479,8 @@ class TestEdgeCases:
         )["content"]
 
         assert len(content.claims) == 0
-        assert any("without evidence" in u for u in content.unknowns)
+        unknowns = [sig.claim for sig in content.signals if sig.kind == "unknown"]
+        assert any("without evidence" in u for u in unknowns)
 
     def test_non_string_evidence_is_coerced_to_string(self, facts, s):
         """Evidence is coerced to string (defensive programming)."""
@@ -507,8 +503,7 @@ class TestEdgeCases:
                             ],
                         }
                     ],
-                    "risks": [],
-                    "unknowns": [],
+                    "signals": [],
                 }
 
         content = graph_interpret(MixedEvidenceTypes(), s).run(
@@ -522,7 +517,7 @@ class TestEdgeCases:
         assert all(isinstance(e, str) for e in claim.evidence)
 
     def test_very_long_risk_or_unknown_text_is_accepted(self, facts, s):
-        """No artificial limits on risk/unknown text length."""
+        """No artificial limits on signal text length."""
 
         class VerboseClient:
             model_id = "verbose"
@@ -531,16 +526,31 @@ class TestEdgeCases:
                 long_text = "x" * 5000
                 return {
                     "claims": [],
-                    "risks": [long_text],
-                    "unknowns": [long_text],
+                    "signals": [
+                        {
+                            "kind": "risk",
+                            "claim": long_text,
+                            "basis": "test basis",
+                            "check": "test check",
+                            "consequence": "test consequence",
+                        },
+                        {
+                            "kind": "unknown",
+                            "claim": long_text,
+                            "basis": "test basis",
+                            "check": "test check",
+                            "consequence": "test consequence",
+                        },
+                    ],
                 }
 
         content = graph_interpret(VerboseClient(), s).run(
             facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
         )["content"]
 
-        assert len(content.risks) > 0
-        assert len(content.risks[0]) == 5000
+        risks = [sig for sig in content.signals if sig.kind == "risk"]
+        assert len(risks) > 0
+        assert len(risks[0].claim) == 5000
 
     def test_unicode_in_values_and_evidence_is_preserved(self, facts, s):
         """Unicode characters are preserved through the graph."""
@@ -559,8 +569,22 @@ class TestEdgeCases:
                             "evidence": ["column: 患者_ID"],  # Chinese
                         }
                     ],
-                    "risks": ["⚠️ warning"],
-                    "unknowns": ["❓ unknown"],
+                    "signals": [
+                        {
+                            "kind": "risk",
+                            "claim": "⚠️ warning",
+                            "basis": "test basis",
+                            "check": "test check",
+                            "consequence": "test consequence",
+                        },
+                        {
+                            "kind": "unknown",
+                            "claim": "❓ unknown",
+                            "basis": "test basis",
+                            "check": "test check",
+                            "consequence": "test consequence",
+                        },
+                    ],
                 }
 
         content = graph_interpret(UnicodeClient(), s).run(
@@ -569,6 +593,5 @@ class TestEdgeCases:
 
         assert content.claims[0].value == "医疗保险"
         assert "患者_ID" in content.claims[0].evidence[0]
-        assert "⚠️" in content.risks[0]
-
-
+        risks = [sig.claim for sig in content.signals if sig.kind == "risk"]
+        assert "⚠️" in risks[0]

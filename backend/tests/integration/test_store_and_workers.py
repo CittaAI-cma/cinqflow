@@ -142,7 +142,7 @@ def test_interpret_worker_persists_a_structured_artifact(conn, settings, small_c
     assert interpretation is not None
     assert interpretation.version == 1
     assert interpretation.status == "draft"
-    assert interpretation.provenance.prompt == "interpret_file@1"
+    assert interpretation.provenance.prompt == "interpret_file@2"
     assert interpretation.provenance.knowledge  # knowledge was cited
     fields = {c.field for c in interpretation.content.claims}
     assert {"likely_domain", "likely_dataset", "likely_grain"} <= fields

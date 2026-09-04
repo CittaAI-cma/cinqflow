@@ -3,12 +3,17 @@
 import { useState } from "react";
 import ClaimCard from "@/components/ClaimCard";
 import ReadingMode, { type ReadingModeKey } from "@/components/run/ReadingMode";
+import SignalCard from "@/components/run/SignalCard";
 import type { Interpretation, Profile } from "@/lib/api";
 
 /** The evidence column, right of the sticky `VerdictCard` — claims already
  *  arrive from the API in trust-ladder order (facts, then governed
  *  knowledge, then inferences, then recommendations), so this only filters
- *  by reading mode, it never re-sorts. */
+ *  by reading mode, it never re-sorts. Signals (risks/unknowns) render above
+ *  the claims and in every mode, Verdict included — they require a decision,
+ *  which is the one thing a reading mode must never hide
+ *  (docs/blueprints/analyst-forward-flow.md §S2, "Risks and unknowns go
+ *  ABOVE the claims"). */
 export default function ReviewEvidence({
   profile,
   interpretation,
@@ -17,12 +22,19 @@ export default function ReviewEvidence({
   interpretation: Interpretation;
 }) {
   const [mode, setMode] = useState<ReadingModeKey>("evidence");
-  const claims = interpretation.content.claims;
+  const { claims, signals } = interpretation.content;
   const visibleClaims = mode === "verdict" ? claims.filter((c) => c.kind === "recommendation") : claims;
+  // Bookkeeping about discarded model output never earns the analyst's
+  // attention on its own — it's forensic detail, not a decision.
+  const visibleSignals = mode === "forensic" ? signals : signals.filter((s) => s.severity !== "info");
 
   return (
     <div className="review-evidence">
       <ReadingMode mode={mode} onChange={setMode} />
+
+      {visibleSignals.map((signal, index) => (
+        <SignalCard key={`${signal.kind}-${index}`} signal={signal} />
+      ))}
 
       {visibleClaims.length ? (
         visibleClaims.map((claim, index) => (

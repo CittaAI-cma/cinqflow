@@ -15,8 +15,14 @@ from langgraph.graph import END, START, StateGraph
 from cinqflow.intelligence import prompts
 from cinqflow.intelligence.context import ContextBuilder
 from cinqflow.intelligence.llm import LlmClient
-from cinqflow.intelligence.schemas import InterpretationResponse
-from cinqflow.workflow.models import Claim, InterpretationContent, ProfileFacts
+from cinqflow.intelligence.schemas import InterpretationResponse, LlmSignal
+from cinqflow.workflow.models import (
+    Claim,
+    InterpretationContent,
+    ProfileFacts,
+    RecommendedAction,
+    Signal,
+)
 
 
 class State(TypedDict, total=False):
@@ -69,27 +75,89 @@ class InterpretFileGraph:
         )
         return {"raw": raw}
 
+    @staticmethod
+    def _headline(signals: list[Signal]) -> tuple[str, RecommendedAction]:
+        """Composed from the final signal list, never asked of the model - same
+        rule as the S2 verdict sentence (`ProfileFacts`, not the interpretation).
+        `info`-severity signals (bookkeeping about discarded model output) never
+        drive this; they're visible in evidence, not in the synthesis."""
+        blockers = [s for s in signals if s.severity == "blocker"]
+        risks = [s for s in signals if s.severity == "warn"]
+        if blockers:
+            n = len(blockers)
+            return (
+                f"{n} unknown{'s' if n != 1 else ''} unresolved — review before approving.",
+                "review_first",
+            )
+        if risks:
+            n = len(risks)
+            return (
+                f"{n} risk{'s' if n != 1 else ''} to check — likely still approvable.",
+                "approve",
+            )
+        return ("Clean interpretation — no risks or unknowns found.", "approve")
+
+    @staticmethod
+    def _dropped(reason: str) -> Signal:
+        """One discarded model candidate (a claim or a signal), recorded as an
+        `info` signal rather than silently lost - same audit-trail intent the
+        old `unknowns` bucket served for dropped claims."""
+        return Signal(
+            kind="unknown",
+            claim=reason,
+            basis="Assembled deterministically from the model's raw output.",
+            check="Open Forensic mode to see the discarded candidate verbatim.",
+            consequence="Nothing was written for this candidate; it is simply absent.",
+            severity="info",
+        )
+
     def _assemble(self, state: State) -> State:
-        """No model. Validates, drops unusable claims, keeps the record structured."""
+        """No model. Validates, drops unusable claims and signals, keeps the
+        record structured, and composes the headline/recommended_action."""
         raw = state.get("raw") or {}
         claims: list[Claim] = []
-        dropped: list[str] = []
+        signals: list[Signal] = []
 
         for candidate in raw.get("claims", []) or []:
             try:
                 claim = Claim.model_validate(candidate)
             except Exception:
-                dropped.append(f"malformed claim discarded: {str(candidate)[:120]}")
+                signals.append(self._dropped(f"malformed claim discarded: {str(candidate)[:120]}"))
                 continue
             if not claim.evidence:
-                dropped.append(f"claim without evidence discarded: {claim.field}")
+                signals.append(self._dropped(f"claim without evidence discarded: {claim.field}"))
                 continue
             claims.append(claim)
 
+        for candidate in raw.get("signals", []) or []:
+            try:
+                parsed = LlmSignal.model_validate(candidate)
+            except Exception:
+                signals.append(self._dropped(f"malformed signal discarded: {str(candidate)[:120]}"))
+                continue
+            if not parsed.basis.strip():
+                # Same rule as claims: a statement without a basis is not one.
+                signals.append(
+                    self._dropped(f"signal without basis discarded: {parsed.claim[:80]}")
+                )
+                continue
+            signals.append(
+                Signal(
+                    kind=parsed.kind,
+                    claim=parsed.claim,
+                    basis=parsed.basis,
+                    check=parsed.check,
+                    consequence=parsed.consequence,
+                    severity="blocker" if parsed.kind == "unknown" else "warn",
+                )
+            )
+
+        headline, recommended_action = self._headline(signals)
         content = InterpretationContent(
             claims=claims,
-            risks=[str(r) for r in (raw.get("risks") or [])],
-            unknowns=[str(u) for u in (raw.get("unknowns") or [])] + dropped,
+            signals=signals,
+            headline=headline,
+            recommended_action=recommended_action,
         )
         return {"content": content.model_dump()}
 
