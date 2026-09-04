@@ -80,7 +80,7 @@ Backend (`backend/src/cinqflow/auth/`):
 API (`backend/src/cinqflow/api/routers/`):
 - `auth.py` — `POST /api/auth/login`, `POST /api/auth/refresh`, `GET /api/auth/me`.
 - `users.py` — `GET /api/roles`, `POST /api/users`, `GET /api/users`,
-  `PATCH /api/users/{id}` (all administrator-only).
+  `PATCH /api/users/{id}`, `PATCH /api/users/{id}/password` (all administrator-only).
 - `deps.py` — `get_current_user` (Bearer), `require_role(name)`.
 
 Frontend:

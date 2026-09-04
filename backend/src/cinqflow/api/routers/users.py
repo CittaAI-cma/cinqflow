@@ -11,7 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from cinqflow.api.deps import make_get_current_user, require_role
 from cinqflow.auth.ddl import ADMINISTRATOR
-from cinqflow.auth.models import CreateUserRequest, CurrentUser, Role, SetActiveRequest, UserOut
+from cinqflow.auth.models import (
+    CreateUserRequest,
+    CurrentUser,
+    Role,
+    SetActiveRequest,
+    SetPasswordRequest,
+    UserOut,
+)
 from cinqflow.auth.security import hash_password
 from cinqflow.auth.store import AuthStore, EmailAlreadyExists, UnknownRole, UnknownUser
 from cinqflow.settings import Settings
@@ -60,6 +67,18 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
     ):
         try:
             return AuthStore(conn, s).set_active(user_id, body.is_active)
+        except UnknownUser:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown_user") from None
+
+    @router.patch("/api/users/{user_id}/password", response_model=UserOut)
+    def set_password(
+        user_id: str,
+        body: SetPasswordRequest,
+        conn=Depends(get_conn),
+        _admin: CurrentUser = Depends(require_admin),
+    ):
+        try:
+            return AuthStore(conn, s).set_password(user_id, hash_password(body.password))
         except UnknownUser:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown_user") from None
 

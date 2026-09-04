@@ -226,6 +226,67 @@ def test_admin_can_deactivate_a_user(client, conn, settings):
     assert denied.status_code == 401
 
 
+def test_admin_can_reset_a_users_password(client, conn, settings):
+    _create_user(
+        conn,
+        settings,
+        email="admin6@cinqcare.com",
+        password="correct-horse-1",
+        roles=["administrator"],
+    )
+    target = _create_user(
+        conn, settings, email="target2@cinqcare.com", password="old-password", roles=[]
+    )
+    tokens = _login(client, "admin6@cinqcare.com", "correct-horse-1")
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = client.patch(
+        f"/api/users/{target.id}/password", headers=headers, json={"password": "new-password"}
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Old password no longer works; the new one does.
+    denied = client.post(
+        "/api/auth/login", json={"email": "target2@cinqcare.com", "password": "old-password"}
+    )
+    assert denied.status_code == 401
+    _login(client, "target2@cinqcare.com", "new-password")
+
+
+def test_set_password_rejects_short_passwords(client, conn, settings):
+    _create_user(
+        conn,
+        settings,
+        email="admin7@cinqcare.com",
+        password="correct-horse-1",
+        roles=["administrator"],
+    )
+    target = _create_user(
+        conn, settings, email="target3@cinqcare.com", password="old-password", roles=[]
+    )
+    tokens = _login(client, "admin7@cinqcare.com", "correct-horse-1")
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = client.patch(f"/api/users/{target.id}/password", headers=headers, json={"password": "short"})
+    assert resp.status_code == 422
+
+
+def test_non_admin_cannot_reset_a_password(client, conn, settings):
+    _create_user(
+        conn, settings, email="analyst2@cinqcare.com", password="correct-horse-1", roles=[]
+    )
+    target = _create_user(
+        conn, settings, email="target4@cinqcare.com", password="old-password", roles=[]
+    )
+    tokens = _login(client, "analyst2@cinqcare.com", "correct-horse-1")
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = client.patch(
+        f"/api/users/{target.id}/password", headers=headers, json={"password": "new-password"}
+    )
+    assert resp.status_code == 403
+
+
 def test_roles_endpoint_lists_the_mvp_roles(client, conn, settings):
     _create_user(
         conn,
