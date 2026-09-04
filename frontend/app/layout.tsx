@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Instrument_Sans, IBM_Plex_Mono } from "next/font/google";
 import AppShell from "@/components/shell/AppShell";
 import { BRAND_NAME } from "@/lib/appConfig";
+import { getCurrentUser } from "@/lib/auth";
 import "./globals.css";
 
 const sans = Instrument_Sans({
@@ -31,7 +32,11 @@ export const metadata: Metadata = {
  *  <html> below. It suppresses one element's attributes, not the tree. */
 const THEME_BOOTSTRAP = `try{var t=localStorage.getItem("theme");if(t==="dark"||t==="light"){document.documentElement.dataset.theme=t}}catch(e){}`;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Render-safe (never mutates cookies) - see lib/auth.ts. Purely for display:
+  // middleware.ts is what actually gates a request that has no valid session.
+  const user = await getCurrentUser();
+
   return (
     <html
       lang="en"
@@ -42,7 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
       <body>
-        <AppShell>{children}</AppShell>
+        <AppShell user={user}>{children}</AppShell>
       </body>
     </html>
   );

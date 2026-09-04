@@ -8,6 +8,8 @@ import logging
 import shutil
 import sys
 
+from cinqflow.auth import ddl as auth_ddl
+from cinqflow.auth.store import bootstrap_admin
 from cinqflow.dataplane.contract import Layer
 from cinqflow.dataplane.pg import PostgresDataPlane
 from cinqflow.db import connect
@@ -16,19 +18,28 @@ from cinqflow.workflow import ddl
 
 
 def cmd_install(_: argparse.Namespace) -> int:
-    """Idempotent: workflow + queue schemas, and the Bronze layer namespace.
+    """Idempotent: workflow + queue + auth schemas, and the Bronze layer namespace.
 
     Bronze *tables* are provisioned per feed at landing time from the contract,
-    so nothing here assumes which feeds exist.
+    so nothing here assumes which feeds exist. Auth also seeds the MVP role
+    list and, if CINQFLOW_BOOTSTRAP_ADMIN_EMAIL is set, one administrator -
+    see docs/blueprints/auth-and-user-management.md.
     """
     s = get_settings()
     with connect(s) as conn:
         ddl.install(conn, s)
+        auth_ddl.install(conn, s)
         PostgresDataPlane(conn).install_layer(Layer.BRONZE.value)
+        admin = bootstrap_admin(conn, s)
         conn.commit()
     s.landing_root.mkdir(parents=True, exist_ok=True)
-    print(f"installed: schemas {s.workflow_schema}, {s.queue_schema}, {Layer.BRONZE.value}")
+    print(
+        f"installed: schemas {s.workflow_schema}, {s.queue_schema}, "
+        f"{s.auth_schema}, {Layer.BRONZE.value}"
+    )
     print(f"landing root: {s.landing_root}")
+    if admin is not None:
+        print(f"bootstrapped administrator: {admin.email}")
     return 0
 
 
@@ -52,7 +63,13 @@ def cmd_reset(args: argparse.Namespace) -> int:
     everything else stays (workflow/store.py's `delete_upload`).
     """
     s = get_settings()
-    schemas = [s.workflow_schema, s.queue_schema, Layer.BRONZE.value, s.silver_schema]
+    schemas = [
+        s.workflow_schema,
+        s.queue_schema,
+        s.auth_schema,
+        Layer.BRONZE.value,
+        s.silver_schema,
+    ]
 
     if not args.yes:
         print("This drops every table cinqflow owns and starts empty:")
@@ -76,7 +93,9 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
     with connect(s) as conn:
         ddl.install(conn, s)
+        auth_ddl.install(conn, s)
         PostgresDataPlane(conn).install_layer(Layer.BRONZE.value)
+        bootstrap_admin(conn, s)
         conn.commit()
     s.landing_root.mkdir(parents=True, exist_ok=True)
     print("reinstalled: empty, ready for a first upload")
@@ -124,9 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="show queue depth and recent uploads").set_defaults(
         func=cmd_status
     )
-    reset = sub.add_parser(
-        "reset", help="drop every schema this platform owns and reinstall empty"
-    )
+    reset = sub.add_parser("reset", help="drop every schema this platform owns and reinstall empty")
     reset.add_argument(
         "--yes", action="store_true", help="actually do it (otherwise just prints the plan)"
     )

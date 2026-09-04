@@ -1950,3 +1950,83 @@ button:active:not(:disabled),
    standing between an analyst and losing a spec they just edited. */
 .save-bar-dirty { display: inline-flex; align-items: center; gap: 7px; color: var(--proc); font-weight: 600; }
 .save-bar-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--proc); }
+
+/* ============================================================================
+   Auth: the sign-in page and the small admin surfaces around it. No app
+   chrome here (AppShell skips the sidebar/topbar on /login) - just a centred
+   card on the plain page background, same tokens as everywhere else.
+   ========================================================================= */
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--paper);
+}
+.auth-card {
+  width: 100%;
+  max-width: 360px;
+  padding: 28px 26px 24px;
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--ink);
+  margin-bottom: 22px;
+}
+.auth-title { margin: 0 0 4px; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
+.auth-subtitle { margin: 0 0 22px; font-size: 12.5px; color: var(--ink3); line-height: 1.5; }
+.auth-form { display: flex; flex-direction: column; gap: 14px; }
+.auth-form input { width: 100%; }
+.auth-submit { width: 100%; justify-content: center; margin-top: 4px; }
+.auth-error {
+  background: var(--danger-weak);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+}
+.auth-hint { margin: 4px 0 0; font-size: 11.5px; color: var(--ink3); text-align: center; }
+
+/* Account chip + sign-out in the top bar, once there is a real user. */
+.account-menu { display: flex; align-items: center; gap: 8px; }
+.account-name { font-size: 12.5px; color: var(--ink2); white-space: nowrap; }
+.account-signout {
+  border: none;
+  background: transparent;
+  color: var(--ink3);
+  padding: 4px;
+  border-radius: 6px;
+  display: inline-flex;
+}
+.account-signout:hover { color: var(--ink); background: var(--mat); }
+
+/* Admin › Users */
+.admin-users-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.dt-sub { font-size: 11.5px; color: var(--ink3); margin-top: 2px; }
+.role-check-list { display: flex; flex-direction: column; gap: 8px; }
+.role-check-row { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--ink); }
+.user-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.user-status-pill.active { background: color-mix(in srgb, var(--ok) 12%, var(--surf)); color: var(--ok); }
+.user-status-pill.inactive { background: var(--mat); color: var(--ink3); }
+.role-chip-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.role-chip {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--mat);
+  color: var(--ink2);
+  border: 1px solid var(--line);
+}

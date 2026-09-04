@@ -12,6 +12,7 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+from cinqflow.auth import ddl as auth_ddl
 from cinqflow.settings import Settings
 from cinqflow.workflow import ddl
 
@@ -56,9 +57,11 @@ def settings(tmp_path: Path) -> Settings:
         # a schema of their own per test - and `silver_raw` in this database holds
         # the previous implementation's tables.
         silver_schema=f"test_silver_{suffix}",
+        auth_schema=f"test_auth_{suffix}",
         landing_root=tmp_path / "landing",
         knowledge_root=knowledge,
         llm_provider="stub",
+        jwt_secret="test-secret-at-least-32-bytes-long-for-hs256",
     )
 
 
@@ -68,6 +71,7 @@ def conn(settings: Settings):
         settings.database_url, row_factory=dict_row, options="-c TimeZone=UTC"
     ) as connection:
         ddl.install(connection, settings)
+        auth_ddl.install(connection, settings)
         connection.commit()
         try:
             yield connection
@@ -77,6 +81,7 @@ def conn(settings: Settings):
                 cur.execute(f"DROP SCHEMA IF EXISTS {settings.workflow_schema} CASCADE")
                 cur.execute(f"DROP SCHEMA IF EXISTS {settings.queue_schema} CASCADE")
                 cur.execute(f"DROP SCHEMA IF EXISTS {settings.silver_schema} CASCADE")
+                cur.execute(f"DROP SCHEMA IF EXISTS {settings.auth_schema} CASCADE")
             connection.commit()
 
 

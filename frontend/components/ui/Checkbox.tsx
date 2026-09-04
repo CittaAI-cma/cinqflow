@@ -10,6 +10,8 @@ export default function Checkbox({
   label,
   id,
   disabled,
+  name,
+  value,
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
@@ -17,12 +19,18 @@ export default function Checkbox({
   label: string;
   id?: string;
   disabled?: boolean;
+  /** Set both to make this checkbox itself a plain-form field (e.g. inside a
+   *  Server Action's `<form>`), read back via `formData.getAll(name)`. */
+  name?: string;
+  value?: string;
 }) {
   return (
     <span className={`checkbox${disabled ? " disabled" : ""}`}>
       <input
         id={id}
         type="checkbox"
+        name={name}
+        value={value}
         checked={checked}
         disabled={disabled}
         aria-label={label}

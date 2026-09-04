@@ -9,8 +9,10 @@ import {
   RAIL_ICONS,
   SettingsIcon,
 } from "@/components/icons";
+import { signOut } from "@/app/logout/actions";
 import { BRAND_NAME } from "@/lib/appConfig";
 import {
+  ADMIN_SECTION,
   FOOTER_ITEMS,
   HOME_ITEM,
   NAV_SECTIONS,
@@ -23,13 +25,20 @@ import { useTheme } from "@/lib/useTheme";
  *  owning the current route, and the utilities pinned to the bottom. Clicking a
  *  section glyph expands the sidebar rather than navigating, because a section
  *  is not itself a destination. */
-export default function SidebarRail({ onExpand }: { onExpand: () => void }) {
+export default function SidebarRail({
+  onExpand,
+  isAdmin,
+}: {
+  onExpand: () => void;
+  isAdmin: boolean;
+}) {
   const pathname = usePathname();
   const activeId = activeSectionId(pathname);
   const { theme, toggle } = useTheme();
   const HomeGlyph = RAIL_ICONS.home;
   const ChatGlyph = RAIL_ICONS.chat;
   const homeActive = pathname === "/";
+  const sections = isAdmin ? [...NAV_SECTIONS, ADMIN_SECTION] : NAV_SECTIONS;
 
   return (
     <nav className="rail" aria-label="Platform navigation (collapsed)">
@@ -47,7 +56,7 @@ export default function SidebarRail({ onExpand }: { onExpand: () => void }) {
           <HomeGlyph size={19} />
         </Link>
 
-        {NAV_SECTIONS.map((section) => {
+        {sections.map((section) => {
           const Glyph = RAIL_ICONS[section.icon];
           const active = section.id === activeId;
           return (
@@ -92,13 +101,11 @@ export default function SidebarRail({ onExpand }: { onExpand: () => void }) {
         >
           <PaletteIcon size={19} />
         </button>
-        <span
-          className="rail-button unavailable"
-          aria-disabled="true"
-          title={`${RAIL_UTILITIES.logout.label} — ${RAIL_UTILITIES.logout.reason}`}
-        >
-          <LogoutIcon size={19} />
-        </span>
+        <form action={signOut}>
+          <button type="submit" className="rail-button" title={RAIL_UTILITIES.logout.label}>
+            <LogoutIcon size={19} />
+          </button>
+        </form>
       </div>
     </nav>
   );

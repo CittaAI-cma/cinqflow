@@ -1,13 +1,8 @@
-/** Branding and identity. Single place to change what the shell calls itself and
- *  who it greets — there is no auth or user API on this build, so the display
- *  name is configuration rather than a fetched profile. */
+/** Branding. Single place to change what the shell calls itself. Who it greets
+ *  is a fetched profile now (lib/auth.ts's `getCurrentUser`/`requireUser`), not
+ *  configuration — see docs/blueprints/auth-and-user-management.md. */
 
 export const BRAND_NAME = process.env.NEXT_PUBLIC_BRAND_NAME ?? "Digitalurth";
-
-export const USER_DISPLAY_NAME = process.env.NEXT_PUBLIC_USER_NAME ?? "Dexter";
-
-/** Initials for the account chip in the top bar. */
-export const USER_INITIALS = process.env.NEXT_PUBLIC_USER_INITIALS ?? "MR";
 
 /** The deployment this console is pointed at. Shown per row on the ingestion
  *  register, which is why every row carries the same value. */

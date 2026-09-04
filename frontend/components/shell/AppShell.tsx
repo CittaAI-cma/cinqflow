@@ -1,18 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import Sidebar from "@/components/shell/Sidebar";
 import SidebarRail from "@/components/shell/SidebarRail";
 import TopBar from "@/components/shell/TopBar";
 import { ChevronLeft } from "@/components/icons";
+import type { CurrentUser } from "@/lib/auth";
 import { ToastProvider } from "@/lib/useToast";
 
 const COLLAPSE_KEY = "sidebar-collapsed";
 
 /** Owns the two pieces of layout state the shell has: the desktop collapse —
  *  which swaps the full sidebar for an icon rail — and the mobile drawer.
- *  Children are server-rendered pages passed straight through. */
-export default function AppShell({ children }: { children: React.ReactNode }) {
+ *  Children are server-rendered pages passed straight through.
+ *
+ *  `/login` renders with no chrome at all — a sidebar and top bar for a page
+ *  whose entire point is "you aren't signed in yet" would be showing links
+ *  to screens the visitor can't reach. */
+export default function AppShell({
+  user,
+  children,
+}: {
+  user: CurrentUser | null;
+  children: React.ReactNode;
+}) {
+  const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -45,6 +58,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [mobileOpen]);
 
+  // Every hook above must run on every render regardless of route - this
+  // check comes after all of them, not before, so navigating between /login
+  // and everywhere else never changes how many hooks this instance calls.
+  if (pathname === "/login") {
+    return <ToastProvider>{children}</ToastProvider>;
+  }
+
+  const isAdmin = user?.roles.includes("administrator") ?? false;
+
   return (
     <ToastProvider>
       {/* First tab stop on every page: the sidebar is ~30 links, and without
@@ -54,10 +76,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </a>
       <div className={`shell${collapsed ? " collapsed" : ""}`}>
         {collapsed ? (
-          <SidebarRail onExpand={() => setCollapsedPersisted(false)} />
+          <SidebarRail onExpand={() => setCollapsedPersisted(false)} isAdmin={isAdmin} />
         ) : null}
 
-        <Sidebar mobileOpen={mobileOpen} onNavigate={() => setMobileOpen(false)} />
+        <Sidebar
+          mobileOpen={mobileOpen}
+          onNavigate={() => setMobileOpen(false)}
+          isAdmin={isAdmin}
+        />
 
         {mobileOpen ? (
           <div className="shell-scrim" onClick={() => setMobileOpen(false)} aria-hidden="true" />
@@ -74,7 +100,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </button>
 
         <div className="shell-main">
-          <TopBar onOpenNav={() => setMobileOpen(true)} />
+          <TopBar onOpenNav={() => setMobileOpen(true)} user={user} />
           <main id="main-content" className="shell-content" tabIndex={-1}>
             {children}
           </main>
