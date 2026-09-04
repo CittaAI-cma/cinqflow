@@ -143,8 +143,8 @@ export default function ApproveMapping({
           {state.saved ? (
             <p className="alert ok">
               Approved. Promotion queued for batch <span className="mono">{state.batchId}</span> —{" "}
-              <a href={`/batches/${state.batchId}`}>watch it promote</a>, or reload this page once
-              it's done.
+              <a href={`/batches/${state.batchId}`}>watch it promote</a>. That page follows the run
+              to Silver Raw on its own.
             </p>
           ) : null}
         </form>

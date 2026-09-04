@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import StatusWord from "@/components/StatusWord";
+import WaitNotice from "@/components/ui/WaitNotice";
 import {
   getUploadProgress,
   retryUpload,
@@ -15,6 +16,10 @@ import { usePoll } from "@/lib/usePoll";
 import { useToast } from "@/lib/useToast";
 
 const POLL_MS = 1500;
+
+/** Profiling is ~1s; interpretation is a 30-60s model call. Past two minutes
+ *  the likeliest explanation is no longer "slow" but "nothing is running". */
+const STALL_AFTER_MS = 120_000;
 
 function stateWord(state: StageState): StatusWordType {
   switch (state) {
@@ -91,7 +96,7 @@ export default function RunProcessing({
 
   const enabled = isUploadInFlight(initialStatus) || retrying;
 
-  const progress = usePoll<ProgressPayload>(
+  const poll = usePoll<ProgressPayload>(
     () => getUploadProgress(uploadId),
     {
       enabled,
@@ -105,9 +110,11 @@ export default function RunProcessing({
           router.refresh();
         }
       },
+      stallAfterMs: STALL_AFTER_MS,
     },
     [uploadId, enabled],
   );
+  const progress = poll.value;
 
   const runningStageKey = progress?.stages.find((s) => s.state === "running")?.key ?? null;
   const runningStepNode = progress?.stages
@@ -154,13 +161,40 @@ export default function RunProcessing({
 
   if (!isUploadInFlight(initialStatus) && !progress) return null;
 
+  // The very first tick hasn't landed yet — unless it *failed*, in which case
+  // saying "checking" would be the screen's second untruth in a row.
   if (!progress) {
-    return <p className="empty">Checking progress…</p>;
+    return poll.offline ? (
+      <WaitNotice poll={poll} what="this upload" waiting="Checking progress…" />
+    ) : (
+      <p className="empty">Checking progress…</p>
+    );
   }
 
   return (
     <div className="card run-timeline" style={{ marginTop: 14 }} aria-live="polite">
       <span className="panel-label">Processing</span>
+      {poll.offline || poll.stalled ? (
+        <WaitNotice
+          poll={poll}
+          what={runningStageKey === "interpret" ? "the AI interpretation" : "profiling"}
+          waiting=""
+          stalled={
+            runningStageKey === "interpret" ? (
+              <>
+                Profiling finished and its facts are on record above. The model call is either
+                still running long or the worker holding it has died — retrying re-runs only the
+                interpretation, never the upload.
+              </>
+            ) : (
+              <>
+                The file is preserved in landing and nothing has been lost. No worker appears to
+                have claimed this job.
+              </>
+            )
+          }
+        />
+      ) : null}
       <ul className="run-timeline-list">
         {progress.stages
           .filter((stage) => stage.key !== "land")

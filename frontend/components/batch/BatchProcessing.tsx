@@ -3,11 +3,19 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import StatusWord from "@/components/StatusWord";
+import WaitNotice from "@/components/ui/WaitNotice";
 import { getBatchProgress, getProposal, type MappingProposal, type Run } from "@/lib/api";
 import { isRunInFlight } from "@/lib/statusWords";
 import { usePoll } from "@/lib/usePoll";
 
 const POLL_MS = 1500;
+
+/** Landing is a bulk insert a worker starts within a tick; analysis makes a
+ *  model call; promotion executes a mapping in code. Different shapes, so
+ *  different thresholds for "this stopped being slow and started being stuck". */
+const LAND_STALL_MS = 45_000;
+const ANALYSIS_STALL_MS = 120_000;
+const PROMOTION_STALL_MS = 90_000;
 
 /** Batch detail is otherwise a one-shot server render (`page.tsx`): correct
  *  once `land_bronze` and, if it ran, `promote_silver` have both settled and
@@ -37,7 +45,7 @@ export default function BatchProcessing({
   const router = useRouter();
   const [landSettled, setLandSettled] = useState(!isRunInFlight(initialLandRun));
 
-  const landRun = usePoll<Run | null>(
+  const landPoll = usePoll<Run | null>(
     () => getBatchProgress(batchId, "land_bronze"),
     {
       enabled: isRunInFlight(initialLandRun),
@@ -47,6 +55,7 @@ export default function BatchProcessing({
         setLandSettled(true);
         router.refresh();
       },
+      stallAfterMs: LAND_STALL_MS,
     },
     [batchId],
   );
@@ -55,37 +64,89 @@ export default function BatchProcessing({
   // (see `land_bronze.py`), so it only makes sense to wait on it once landing
   // itself is done — polling for a proposal that cannot exist yet would just
   // burn requests.
-  const proposal = usePoll<MappingProposal | null>(
+  const proposalPoll = usePoll<MappingProposal | null>(
     () => getProposal(batchId),
     {
       enabled: landSettled && !hasProposal,
       intervalMs: POLL_MS,
       isSettled: (p) => p !== null,
       onSettle: () => router.refresh(),
+      stallAfterMs: ANALYSIS_STALL_MS,
     },
     [batchId, landSettled],
   );
 
-  const promotionRun = usePoll<Run | null>(
+  const promotionPoll = usePoll<Run | null>(
     () => getBatchProgress(batchId, "promote_silver"),
     {
       enabled: isRunInFlight(initialPromotionRun),
       intervalMs: POLL_MS,
       isSettled: (run) => !isRunInFlight(run),
       onSettle: () => router.refresh(),
+      stallAfterMs: PROMOTION_STALL_MS,
     },
     [batchId],
   );
 
+  const landRun = landPoll.value;
+  const proposal = proposalPoll.value;
+  const promotionRun = promotionPoll.value;
+
   const landingInFlight = isRunInFlight(landRun ?? initialLandRun);
   const analysisInFlight = landSettled && !hasProposal && !proposal;
   const promotionInFlight = isRunInFlight(promotionRun ?? initialPromotionRun);
+
+  // Only one notice, even if two legs go bad together: they share one cause
+  // (the API, or the worker) and stacking three identical alerts on the same
+  // screen tells the analyst nothing the first one didn't.
+  const legs = [
+    landingInFlight && {
+      poll: landPoll,
+      what: "landing to Bronze",
+      stalled: (
+        <>
+          The batch exists and the original file is preserved. No worker has picked up{" "}
+          <span className="mono">bronze.land</span>, so nothing has been written yet.
+        </>
+      ),
+    },
+    analysisInFlight && {
+      poll: proposalPoll,
+      what: "the AI mapping proposal",
+      stalled: (
+        <>
+          Bronze landed and is safe. Only the advisory proposal is outstanding — mapping can be
+          started by hand without it.
+        </>
+      ),
+    },
+    promotionInFlight && {
+      poll: promotionPoll,
+      what: "promotion to Silver Raw",
+      stalled: (
+        <>
+          The approved mapping is frozen and Bronze is untouched. Promotion is re-runnable, so
+          nothing is lost by this waiting.
+        </>
+      ),
+    },
+  ].filter(Boolean) as { poll: typeof landPoll; what: string; stalled: React.ReactNode }[];
+
+  const unhealthy = legs.find((leg) => leg.poll.offline || leg.poll.stalled) ?? null;
 
   if (!landingInFlight && !analysisInFlight && !promotionInFlight) return null;
 
   return (
     <div className="card run-timeline" style={{ marginTop: 14 }} aria-live="polite">
       <span className="panel-label">Processing</span>
+      {unhealthy ? (
+        <WaitNotice
+          poll={unhealthy.poll}
+          what={unhealthy.what}
+          waiting=""
+          stalled={unhealthy.stalled}
+        />
+      ) : null}
       <ul className="run-timeline-list">
         {landingInFlight ? (
           <li>
