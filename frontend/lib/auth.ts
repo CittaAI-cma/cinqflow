@@ -63,12 +63,22 @@ export async function clearSession(): Promise<void> {
  *  instead of throwing, so the form can show it - same shape as
  *  `lib/api.ts`'s `uploadFile`/`decideUpload`. */
 export async function login(email: string, password: string): Promise<{ error?: string }> {
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password }),
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+      cache: "no-store",
+    });
+  } catch {
+    // Same unguarded-fetch bug as `getCurrentUser` had, and it matters most
+    // here: a page behind `requireUser`/`requireRole` redirects to /login when
+    // the API is down, so this form is exactly where someone lands - and
+    // "Invalid email or password" would send them hunting for a credential
+    // problem that does not exist.
+    return { error: "Can't reach the sign-in service. The API may be down — your credentials are fine." };
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     if (body?.detail === "account_deactivated") {
@@ -87,10 +97,26 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   const store = await cookies();
   const token = store.get(ACCESS_COOKIE)?.value;
   if (!token) return null;
-  const res = await fetch(`${API_BASE}/api/auth/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+  } catch {
+    // The API is unreachable. `fetch` *throws* on a refused connection rather
+    // than returning a non-ok response, and the root layout calls this on
+    // every render - so letting it propagate takes down the entire tree and
+    // renders a blank page, which is also why every page's own
+    // API-unreachable handling never got a chance to run. Middleware already
+    // set this precedent (`attemptRefresh`: "API unreachable - treat as
+    // could not refresh, not a crash"); this is the same call.
+    //
+    // `null` reads as "signed out" in the shell, which is imprecise - but the
+    // page below now renders `ApiUnreachable`, which names the real cause,
+    // and an imprecise chrome beats a white screen.
+    return null;
+  }
   if (!res.ok) return null;
   return (await res.json()) as CurrentUser;
 }
