@@ -57,6 +57,15 @@ services:
       # 127.0.0.1 as different origins even though they reach the same
       # container port.
       CINQFLOW_CORS_ALLOWED_ORIGINS: http://localhost:${FRONTEND_HOST_PORT:-3000},http://127.0.0.1:${FRONTEND_HOST_PORT:-3000}
+      # docs/blueprints/auth-and-user-management.md. Same dev-only fallback as
+      # settings.py's own default, so compose and bare `poetry run` behave the
+      # same when neither sets it - never rely on this default outside dev.
+      CINQFLOW_JWT_SECRET: ${CINQFLOW_JWT_SECRET:-dev-only-insecure-secret-change-me-before-any-real-deploy}
+      # `cinqflow install` (the `migrate` service) seeds one administrator from
+      # these if no user with this email exists yet. Empty by default - unset
+      # is the normal state once a real admin exists.
+      CINQFLOW_BOOTSTRAP_ADMIN_EMAIL: ${CINQFLOW_BOOTSTRAP_ADMIN_EMAIL:-}
+      CINQFLOW_BOOTSTRAP_ADMIN_PASSWORD: ${CINQFLOW_BOOTSTRAP_ADMIN_PASSWORD:-}
     volumes: &backend-volumes
       # Live code, so `--reload` (api) and iteration work without a rebuild.
       - ../backend/src:/app/backend/src

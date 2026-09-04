@@ -361,6 +361,17 @@ export function ShieldIcon(props: IconProps) {
   );
 }
 
+export function UsersIcon(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M3.5 19c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5" />
+      <path d="M16 8.3a3 3 0 1 1 0-5.6" />
+      <path d="M18.5 19c0-2.7-1.7-4.7-4-5.3" />
+    </svg>
+  );
+}
+
 export function CloseIcon(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
@@ -409,6 +420,7 @@ export const RAIL_ICONS = {
   pipeline: PipelineIcon,
   grid: GridIcon,
   chat: ChatIcon,
+  admin: ShieldIcon,
 } as const;
 
 export type RailIconName = keyof typeof RAIL_ICONS;

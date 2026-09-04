@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     workflow_schema: str = "workflow"
     queue_schema: str = "jobq"
 
+    # Users, roles and role membership - kept out of `workflow` deliberately:
+    # auth data has a different lifecycle and blast radius than pipeline data
+    # (see docs/blueprints/auth-and-user-management.md).
+    auth_schema: str = "auth"
+
     # The physical namespace the SILVER_RAW layer renders into. `silver_raw` in this
     # database holds the previous implementation's `members` table, whose shape this
     # build does not populate (NOT NULL columns it has no mapping for), so the layer
@@ -60,6 +65,22 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+    # Auth. `jwt_secret` defaults to an obviously-fake value for zero-friction local
+    # dev, the same way `database_url` defaults to a local Postgres above - Railway
+    # (or any real deploy) must set CINQFLOW_JWT_SECRET explicitly, or every token
+    # issued is verifiable by anyone who reads this file.
+    jwt_secret: str = "dev-only-insecure-secret-change-me-before-any-real-deploy"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 15
+    jwt_refresh_token_expire_days: int = 7
+
+    # Optional: idempotently create one administrator on `cinqflow install` if no
+    # user with this email exists yet. Unset in normal operation once an admin
+    # exists - this is only the bootstrap out of "no users at all".
+    bootstrap_admin_email: str | None = None
+    bootstrap_admin_password: str | None = None
+    bootstrap_admin_name: str = "Administrator"
 
 
 @lru_cache

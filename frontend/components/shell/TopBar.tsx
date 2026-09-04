@@ -11,10 +11,20 @@ import {
   DatabaseIcon,
   GridIcon,
   HomeIcon,
+  LogoutIcon,
   MenuIcon,
 } from "@/components/icons";
-import { BRAND_NAME, USER_INITIALS } from "@/lib/appConfig";
+import { signOut } from "@/app/logout/actions";
+import { BRAND_NAME } from "@/lib/appConfig";
+import type { CurrentUser } from "@/lib/auth";
 import { TOP_NAV, breadcrumbsFor, type TopNavIcon } from "@/lib/navigation";
+
+function initialsOf(user: CurrentUser): string {
+  const source = user.display_name?.trim() || user.email;
+  const parts = source.split(/\s+/).filter(Boolean);
+  const letters = parts.length > 1 ? [parts[0][0], parts[parts.length - 1][0]] : [source[0]];
+  return letters.join("").toUpperCase();
+}
 
 const TOP_NAV_ICONS: Record<TopNavIcon, typeof DatabaseIcon> = {
   catalog: DatabaseIcon,
@@ -27,7 +37,13 @@ const TOP_NAV_ICONS: Record<TopNavIcon, typeof DatabaseIcon> = {
 /** Breadcrumb chrome for inner surfaces. On home there are no crumbs — the
  *  greeting is that page's own header — so the bar collapses to the mobile
  *  navigation trigger and hides itself entirely on wide screens. */
-export default function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
+export default function TopBar({
+  onOpenNav,
+  user,
+}: {
+  onOpenNav: () => void;
+  user: CurrentUser | null;
+}) {
   const pathname = usePathname();
   const crumbs = breadcrumbsFor(pathname);
   const bare = crumbs.length === 0;
@@ -93,12 +109,19 @@ export default function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
           <BrandMark size={18} />
           Ask AI
         </span>
-        <span
-          className="account-chip"
-          title="Signed-in account (configured — there is no auth on this build)"
-        >
-          {USER_INITIALS}
-        </span>
+        {user ? (
+          <span className="account-menu">
+            <span className="account-chip" title={user.email}>
+              {initialsOf(user)}
+            </span>
+            <span className="account-name">{user.display_name}</span>
+            <form action={signOut}>
+              <button type="submit" className="account-signout" title="Sign out">
+                <LogoutIcon size={16} />
+              </button>
+            </form>
+          </span>
+        ) : null}
       </div>
     </header>
   );

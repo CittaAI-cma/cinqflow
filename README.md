@@ -88,6 +88,17 @@ sourced from `.env` — no credentials or paths hardcoded elsewhere. Set
 `CINQFLOW_LLM_PROVIDER=stub` for a fully offline, deterministic run, or
 `anthropic`/`openai` with `CINQFLOW_LLM_API_KEY` for the real thing.
 
+### First sign-in
+
+The whole app sits behind a login page — there is no self-registration, an
+administrator creates every account. To get your first admin, set
+`CINQFLOW_BOOTSTRAP_ADMIN_EMAIL` / `CINQFLOW_BOOTSTRAP_ADMIN_PASSWORD` before
+running `cinqflow install` (or `make up`/`make install-db`) — it creates that
+one user, idempotently, if no user with that email exists yet. Sign in, then
+create everyone else from **Admin › Users**. See
+[`docs/blueprints/auth-and-user-management.md`](docs/blueprints/auth-and-user-management.md)
+for the roles, the token/cookie design, and what's still open (Phase 2/3).
+
 ## Testing
 
 ```bash
@@ -119,6 +130,7 @@ The full specification lives in [`docs/blueprints/`](docs/blueprints/):
 - [`structure.md`](docs/blueprints/structure.md) — where every piece lives and the boundaries between them
 - [`templates.md`](docs/blueprints/templates.md) — canonical shapes for every artifact, knowledge document, and API contract
 - [`checklist.md`](docs/blueprints/checklist.md) — execution discipline and definition-of-done per stage
+- [`auth-and-user-management.md`](docs/blueprints/auth-and-user-management.md) — login, roles, admin user provisioning: the design and what's still open
 
 Per-stage completion reports are recorded under `docs/reports/`.
 

@@ -74,6 +74,18 @@ export const NAV_SECTIONS: NavSectionSpec[] = [
 
 export const FOOTER_ITEMS: NavItem[] = [{ label: "All Chats", reason: NOT_BUILT }];
 
+/** Administrator-only. Appended to `NAV_SECTIONS` by the shell, never rendered
+ *  for anyone without the `administrator` role (AppShell computes `isAdmin`
+ *  from the signed-in user and passes it down) - see
+ *  docs/blueprints/auth-and-user-management.md. */
+export const ADMIN_SECTION: NavSectionSpec = {
+  id: "admin",
+  label: "Admin",
+  icon: "admin",
+  defaultOpen: true,
+  items: [{ label: "Users", href: "/admin/users" }],
+};
+
 /** Product areas in the top bar. None of these ship on this build, so each one
  *  renders with its reason rather than as a link into a 404. */
 export type TopNavIcon = "catalog" | "design" | "opshub" | "explore" | "observability";
@@ -129,10 +141,10 @@ export function groupStageHref(stage: GroupStage, group: string): string | undef
   return stage.hrefTemplate?.replace(":group", encodeURIComponent(group));
 }
 
-/** Bottom-of-rail utilities. Only the theme one does anything on this build. */
+/** Bottom-of-rail utilities. Theme and sign-out both work; settings doesn't yet. */
 export const RAIL_UTILITIES = {
   settings: { label: "Settings", reason: NOT_BUILT },
-  logout: { label: "Sign out", reason: "No auth on this build" },
+  logout: { label: "Sign out" },
 } as const;
 
 // ------------------------------------------------------------------ breadcrumbs
@@ -191,6 +203,11 @@ export function breadcrumbsFor(pathname: string): Crumb[] {
     return [PIPELINE, INGESTION, { label: `Mapping ${decodeURIComponent(mapping[1])}` }];
   }
 
+  if (pathname === "/admin/users") return [{ label: "Admin" }, { label: "Users" }];
+  if (pathname === "/admin/users/new") {
+    return [{ label: "Admin" }, { label: "Users", href: "/admin/users" }, { label: "New user" }];
+  }
+
   return [];
 }
 
@@ -205,5 +222,6 @@ export function activeSectionId(pathname: string): string | null {
   }
   // Upload, run, batch and mapping detail routes all hang off Ingestion.
   if (/^\/(uploads|runs|batches|mapping)\//.test(pathname)) return "pipeline";
+  if (pathname.startsWith("/admin")) return "admin";
   return null;
 }

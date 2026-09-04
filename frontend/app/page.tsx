@@ -1,5 +1,5 @@
 import ActionLauncher from "@/components/home/ActionLauncher";
-import { USER_DISPLAY_NAME } from "@/lib/appConfig";
+import { requireUser } from "@/lib/auth";
 
 /** Rendered per request so the greeting matches the hour it is read in — and so
  *  server and client never disagree about which greeting to show. */
@@ -11,13 +11,15 @@ function greetingFor(hour: number): string {
   return "Good evening";
 }
 
-export default function Home() {
+export default async function Home() {
+  const user = await requireUser();
   const greeting = greetingFor(new Date().getHours());
+  const name = user.display_name?.trim() || user.email;
 
   return (
     <div className="home">
       <h1 className="greeting">
-        {greeting}, {USER_DISPLAY_NAME} <span aria-hidden="true">👋</span>
+        {greeting}, {name} <span aria-hidden="true">👋</span>
       </h1>
       <ActionLauncher />
     </div>
