@@ -36,17 +36,20 @@ export default function PreviewPanel({
   version,
   preview,
   limit = 25,
-  limitHref,
+  baseHref,
 }: {
   feed: string;
   version: number;
   preview: PreviewResult | null;
   limit?: number;
-  /** Row-limit chip URLs - built by the one caller, `MappingPageBody`, from
-   *  whichever of the two mapping routes (`/mapping/{feed}` or
-   *  `/runs/{uploadId}/mapping`) is actually rendering it, so the chips never
-   *  bounce the analyst onto a different route than the one she's on. */
-  limitHref: (n: number) => string;
+  /** The row-limit chips build their own `?v=&limit=` URL from this plus
+   *  `version` - a *string*, not a callback, because this component is
+   *  "use client": a Server Component caller (`MappingPageBody`) cannot pass
+   *  a function prop across that boundary ("Functions cannot be passed
+   *  directly to Client Components"), only serializable data. `baseHref`
+   *  is whichever of the two mapping routes (`/mapping/{feed}` or
+   *  `/runs/{uploadId}/mapping`) is actually rendering this. */
+  baseHref: string;
 }) {
   const [state, action] = useActionState<StudioState, FormData>(runPreview, {});
   const { push } = useToast();
@@ -238,7 +241,7 @@ export default function PreviewPanel({
               {ROW_LIMITS.map((n) => (
                 <Link
                   key={n}
-                  href={limitHref(n)}
+                  href={`${baseHref}?v=${version}&limit=${n}`}
                   className={`chip${n === limit ? " on" : ""}`}
                   aria-current={n === limit ? "true" : undefined}
                   title={`Show the first ${n} sampled rows`}

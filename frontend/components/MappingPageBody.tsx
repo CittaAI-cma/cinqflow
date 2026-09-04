@@ -25,11 +25,12 @@ const PREVIEW_LIMITS = [10, 25, 50] as const;
  *
  *  `baseHref` is the one thing each caller supplies its own value for - the
  *  durable page keeps `/mapping/{feed}`, the run flow keeps
- *  `/runs/{uploadId}/mapping`. Every link built here (version chips, row-limit
- *  chips) derives from it and from the version this render actually resolved,
- *  never from the raw, possibly-absent `v` search param a caller was given -
- *  a link built from an unresolved param would point `limit=` at nothing if
- *  the caller's URL had no `?v=` yet. */
+ *  `/runs/{uploadId}/mapping`. The version chips built here derive from it and
+ *  from the version this render actually resolved, never from the raw,
+ *  possibly-absent `v` search param a caller was given. `PreviewPanel`'s
+ *  row-limit chips get the same `baseHref` as a plain string, not a callback
+ *  - it is itself a Client Component, and a Server Component (this one)
+ *  cannot pass a function across that boundary. */
 export default async function MappingPageBody({
   feed,
   v,
@@ -235,7 +236,7 @@ export default async function MappingPageBody({
             version={mapping.version}
             preview={preview}
             limit={previewLimit}
-            limitHref={(n) => `${baseHref}?v=${mapping.version}&limit=${n}`}
+            baseHref={baseHref}
           />
 
           <ApproveMapping
