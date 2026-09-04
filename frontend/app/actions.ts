@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { requireUser } from "@/lib/auth";
 import { decideUpload, uploadFile } from "@/lib/api";
 
 export interface UploadState {
@@ -43,7 +44,12 @@ export async function submitDecision(
     return { error: "Choose approve or reject." };
   }
 
+  // Whoever is actually signed in, not `decideUpload`'s fallback - a G1
+  // decision is an audit record, and it must name the person who made it.
+  const user = await requireUser();
+
   const { error } = await decideUpload(uploadId, decision, {
+    approver: user.email,
     note: String(form.get("note") ?? "") || undefined,
   });
   if (error) {

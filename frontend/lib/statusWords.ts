@@ -44,13 +44,23 @@ export function uploadStatusWord(status: UploadStatus): StatusWord | null {
 }
 
 /** Whether polling `/uploads/{id}/progress` still has something new to learn.
- *  Every other status is one the server-rendered page already tells in full. */
+ *  Every other status is one the server-rendered page already tells in full.
+ *
+ *  Includes `approved`/`landing`: `UploadProgress.batch_id` is set the
+ *  instant the `land_bronze` run exists, which is before it finishes
+ *  (`PipelineRunner.land_bronze` commits before any row moves) - so a poll
+ *  started right after G1 approval has something to learn the moment a
+ *  worker (always running - docker compose's `worker` service, Railway's
+ *  combined process) picks the queued message up, not just once landing
+ *  completes. */
 export function isUploadInFlight(status: UploadStatus): boolean {
   return (
     status === "received" ||
     status === "profiling" ||
     status === "profiled" ||
-    status === "interpreting"
+    status === "interpreting" ||
+    status === "approved" ||
+    status === "landing"
   );
 }
 

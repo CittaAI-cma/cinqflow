@@ -6,7 +6,6 @@ import { submitDecision, type DecisionState } from "@/app/actions";
 import GateChecklist, { type ChecklistItem } from "@/components/run/GateChecklist";
 import { announceOnSubmit } from "@/components/ui/AnnounceOnMount";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
-import { DEFAULT_UPLOADER } from "@/lib/appConfig";
 
 type Decision = "approved" | "rejected";
 
@@ -87,11 +86,16 @@ function VisibleButtons({
 export default function GateActions({
   uploadId,
   filename,
+  approverEmail,
   phiCount = 0,
   unknownCount = 0,
 }: {
   uploadId: string;
   filename?: string;
+  /** The signed-in analyst, from `getCurrentUser()` server-side - `submitDecision`
+   *  records this same identity as the decision's `approver`, so the
+   *  confirmation dialog names exactly who the audit trail will say decided. */
+  approverEmail: string;
   phiCount?: number;
   unknownCount?: number;
 }) {
@@ -181,7 +185,7 @@ export default function GateActions({
         audit={
           <>
             <span>
-              Decision recorded as <span className="mono">{DEFAULT_UPLOADER}</span>
+              Decision recorded as <span className="mono">{approverEmail}</span>
             </span>
             {filename ? (
               <span>
