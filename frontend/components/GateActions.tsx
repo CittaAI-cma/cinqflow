@@ -3,7 +3,7 @@
 import { useActionState, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { submitDecision, type DecisionState } from "@/app/actions";
-import GateChecklist from "@/components/run/GateChecklist";
+import GateChecklist, { type ChecklistItem } from "@/components/run/GateChecklist";
 import { announceOnSubmit } from "@/components/ui/AnnounceOnMount";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { DEFAULT_UPLOADER } from "@/lib/appConfig";
@@ -121,6 +121,14 @@ export default function GateActions({
   }
 
   const unticked = totalCount - checkedCount;
+  const items: ChecklistItem[] = [
+    { id: "columns", text: "Column names and types look right" },
+    { id: "rowcount", text: "Row count is plausible for this delivery" },
+    ...(phiCount > 0 ? [{ id: "phi", text: "PHI flags look right" }] : []),
+    ...(unknownCount > 0
+      ? [{ id: "unknowns", text: "The unknowns are acceptable for Bronze" }]
+      : []),
+  ];
 
   return (
     <form action={action} onSubmit={handleSubmit} className="gate-box">
@@ -132,8 +140,7 @@ export default function GateActions({
         and writes nothing to the data plane.
       </p>
       <GateChecklist
-        phiCount={phiCount}
-        unknownCount={unknownCount}
+        items={items}
         onChange={setNote}
         onProgress={(checked, total) => {
           setCheckedCount(checked);

@@ -7,7 +7,7 @@ import VerdictCard from "@/components/run/VerdictCard";
 import StatusWord from "@/components/StatusWord";
 import AnnounceOnMount from "@/components/ui/AnnounceOnMount";
 import { getUpload } from "@/lib/api";
-import { canonicalStep, runHref } from "@/lib/runStep";
+import { canonicalStep, isStepViewable, runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +20,11 @@ export const dynamic = "force-dynamic";
  *  - `rejected`: read-only, the decision record, and the one legal way
  *    forward (re-upload — reject has no other legal transition, states.py).
  *  - `approved` and later: read-only, the decision record, and whatever this
- *    phase can honestly offer past G1 — `/batches/{id}` once a run exists
- *    (built in an earlier phase; S3 itself isn't built yet), or a retry if
- *    landing failed.
+ *    phase can honestly offer past G1 — Bronze review (S4) once `landed`, or
+ *    `/batches/{id}` while landing is still in flight or has failed (S3
+ *    itself isn't built), with a retry in the latter case. Stays viewable
+ *    (not redirected away) once canonical has moved past it - see
+ *    `isStepViewable`.
  */
 export default async function ReviewPage({
   params,
@@ -40,7 +42,7 @@ export default async function ReviewPage({
 
   const { upload, profile, interpretation, approvals, runs } = detail;
 
-  if (canonicalStep(upload.status) !== "review") {
+  if (!isStepViewable("review", canonicalStep(upload.status))) {
     redirect(runHref(uploadId, canonicalStep(upload.status)));
   }
 
@@ -100,7 +102,18 @@ export default async function ReviewPage({
               </div>
             ) : landRun ? (
               <div className="run-processing-actions" style={{ marginTop: 12 }}>
-                <Link href={`/batches/${landRun.batch_id}`} className="btn-dark">
+                {/* Bronze review's own guard only opens once `landed` - while
+                 *  landing is still running or has failed, the batch page's
+                 *  `BatchProcessing` is what actually polls/handles that, so
+                 *  this keeps pointing there until landing is real. */}
+                <Link
+                  href={
+                    upload.status === "landed"
+                      ? runHref(uploadId, "bronze")
+                      : `/batches/${landRun.batch_id}`
+                  }
+                  className="btn-dark"
+                >
                   Continue to Bronze
                 </Link>
                 {upload.status === "land_failed" ? (

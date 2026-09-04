@@ -1,9 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { approveVersion, type StudioState } from "@/app/mapping/actions";
 import AnnounceOnMount, { announceOnSubmit } from "@/components/ui/AnnounceOnMount";
+import GateChecklist, { type ChecklistItem } from "@/components/run/GateChecklist";
 import type { PreviewResult } from "@/lib/api";
 
 function ApproveButton() {
@@ -22,13 +23,21 @@ export default function ApproveMapping({
   version,
   status,
   preview,
+  editedCount = 0,
 }: {
   feed: string;
   version: number;
   status: string;
   preview: PreviewResult | null;
+  /** From the version's diff against what it was derived from - "how much of
+   *  this is mine?" is the analyst's own question, so a version with edits
+   *  gets an extra checklist item asking her to stand behind them. */
+  editedCount?: number;
 }) {
   const [state, action] = useActionState<StudioState, FormData>(approveVersion, {});
+  const [note, setNote] = useState("");
+  const [checkedCount, setCheckedCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
   const storageKey = `g2:${feed}:${version}`;
 
   if (status === "approved") {
@@ -66,6 +75,17 @@ export default function ApproveMapping({
   }
 
   const approvable = Boolean(preview?.approvable);
+  const failureCount =
+    (preview?.aggregates.rows_with_failures ?? 0) +
+    (preview?.aggregates.rows_quarantined ?? 0) +
+    (preview?.aggregates.rows_rejected ?? 0);
+  const items: ChecklistItem[] = [
+    { id: "preview", text: "This preview reflects the current draft" },
+    ...(editedCount > 0 ? [{ id: "edits", text: "The fields I edited look right" }] : []),
+    ...(failureCount > 0
+      ? [{ id: "failures", text: "The failures/quarantine counts are acceptable" }]
+      : []),
+  ];
 
   return (
     <>
@@ -87,18 +107,14 @@ export default function ApproveMapping({
         >
           <input type="hidden" name="feed" value={feed} />
           <input type="hidden" name="version" value={version} />
+          <input type="hidden" name="note" value={note} />
           <p className="gate-note">
             Approving freezes v{version} and queues the promotion of batch{" "}
             <span className="mono">{preview?.sample.batch_id}</span> to Silver Raw:{" "}
             <span className="mono">{preview?.aggregates.rows_ok}</span> of{" "}
             <span className="mono">{preview?.aggregates.rows_previewed}</span> previewed rows
-            mapped cleanly, and{" "}
-            <span className="mono">
-              {(preview?.aggregates.rows_with_failures ?? 0) +
-                (preview?.aggregates.rows_quarantined ?? 0) +
-                (preview?.aggregates.rows_rejected ?? 0)}
-            </span>{" "}
-            would be quarantined with their reasons.
+            mapped cleanly, and <span className="mono">{failureCount}</span> would be quarantined
+            with their reasons.
             {preview?.sample_is_partial ? (
               <>
                 {" "}
@@ -109,11 +125,18 @@ export default function ApproveMapping({
               </>
             ) : null}
           </p>
-          <div style={{ marginBottom: 12 }}>
-            <label htmlFor="g2-note">Note (recorded with the decision)</label>
-            <input id="g2-note" name="note" type="text" placeholder="what you checked" />
-          </div>
+          <GateChecklist
+            items={items}
+            onChange={setNote}
+            onProgress={(checked, total) => {
+              setCheckedCount(checked);
+              setTotalCount(total);
+            }}
+          />
           <div className="gate-actions">
+            <span className="gate-progress meta">
+              {checkedCount} of {totalCount} checked
+            </span>
             <ApproveButton />
           </div>
           {state.error ? <p className="alert error">{state.error}</p> : null}
