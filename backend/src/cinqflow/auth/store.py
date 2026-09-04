@@ -132,6 +132,16 @@ class AuthStore:
         )
         return self.get_user(user_id)
 
+    def set_password(self, user_id: str, hashed_password: str) -> UserOut:
+        self.get_user(user_id)  # raises UnknownUser
+        execute(
+            self.conn,
+            f"""UPDATE {self.s.auth_schema}."user"
+                SET hashed_password = %s, updated_ts = now() WHERE id = %s""",
+            (hashed_password, user_id),
+        )
+        return self.get_user(user_id)
+
     def roles_for_user(self, user_id: str) -> list[str]:
         rows = fetch_all(
             self.conn,

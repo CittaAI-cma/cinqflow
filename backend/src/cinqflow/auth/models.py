@@ -35,6 +35,14 @@ class SetActiveRequest(BaseModel):
     is_active: bool
 
 
+class SetPasswordRequest(BaseModel):
+    """Admin-only reset - there is still no self-service "forgot password"
+    flow (no email sending in this build), so this is the only way anyone's
+    password ever changes after account creation."""
+
+    password: str = Field(min_length=8)
+
+
 class UserOut(BaseModel):
     """A user as the admin console lists/creates them. No password, ever."""
 
