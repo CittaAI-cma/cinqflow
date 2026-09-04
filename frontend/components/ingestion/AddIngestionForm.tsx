@@ -10,11 +10,11 @@ import CollapsibleSection from "@/components/ui/CollapsibleSection";
 import { DatabaseIcon, GlobeIcon } from "@/components/icons";
 import { submitUpload, type UploadState } from "@/app/actions";
 import {
-  COMPUTE_CONFIGS,
   FLOW_TEMPLATES,
   PIPELINE_TEMPLATES,
   SOURCE_CONNECTIONS,
   TARGET_CONNECTIONS,
+  computeConfigs,
   type ConnectionEntry,
 } from "@/lib/platformCatalog";
 
@@ -70,6 +70,7 @@ export default function AddIngestionForm({
   const [sourceConnection, setSourceConnection] = useState(SOURCE_CONNECTIONS[0].id);
   const [targetConnection, setTargetConnection] = useState(TARGET_CONNECTIONS[0].id);
   const [hasFile, setHasFile] = useState(false);
+  const computeConfigOptions = computeConfigs(environment);
 
   /** No "No domain" row: the control plane requires a domain to resolve
    *  canonical knowledge, so offering one would only earn a 422. */
@@ -159,9 +160,9 @@ export default function AddIngestionForm({
               id="compute"
               name="compute_config"
               className="native-select"
-              defaultValue={COMPUTE_CONFIGS[0].id}
+              defaultValue={computeConfigOptions[0].id}
             >
-              {COMPUTE_CONFIGS.map((entry) => (
+              {computeConfigOptions.map((entry) => (
                 <option key={entry.id} value={entry.id}>
                   {entry.label}
                 </option>

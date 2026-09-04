@@ -6,7 +6,7 @@ import NavSection from "@/components/shell/NavSection";
 import ThemeToggle from "@/components/shell/ThemeToggle";
 import { BrandMark } from "@/components/icons";
 import { BRAND_NAME } from "@/lib/appConfig";
-import { ADMIN_SECTION, FOOTER_ITEMS, HOME_ITEM, NAV_SECTIONS } from "@/lib/navigation";
+import { ADMIN_SECTION, FOOTER_ITEMS, HOME_ITEM, VISIBLE_NAV_SECTIONS } from "@/lib/navigation";
 
 /** Presentational: all state (collapsed, mobile open) lives in AppShell so the
  *  sidebar can be rendered in either context without owning layout concerns. */
@@ -19,7 +19,7 @@ export default function Sidebar({
   onNavigate: () => void;
   isAdmin: boolean;
 }) {
-  const sections = isAdmin ? [...NAV_SECTIONS, ADMIN_SECTION] : NAV_SECTIONS;
+  const sections = isAdmin ? [...VISIBLE_NAV_SECTIONS, ADMIN_SECTION] : VISIBLE_NAV_SECTIONS;
 
   return (
     <aside

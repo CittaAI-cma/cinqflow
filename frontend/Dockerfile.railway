@@ -1,11 +1,16 @@
 # Railway-only: a real production build (`next build` + `next start`), unlike
 # frontend/Dockerfile (which runs `next dev` for local Compose parity).
 #
-# NEXT_PUBLIC_CINQFLOW_API is baked into the client JS bundle at BUILD time,
-# not read at runtime (Next.js's own NEXT_PUBLIC_ convention) - it has to be
-# an ARG here so Railway injects the service's configured env var into the
-# build, or the browser-side calls (RunProcessing, RetryButton - see
-# frontend/lib/api.ts) ship pointed at nothing.
+# Every NEXT_PUBLIC_* var below is baked into the client JS bundle at BUILD
+# time, not read at runtime (Next.js's own NEXT_PUBLIC_ convention) - each one
+# has to be a declared ARG here so Railway injects the service's configured
+# env var into the build. NEXT_PUBLIC_CINQFLOW_API was the first one fixed
+# this way (see git history: "CINQFLOW_API was baked to localhost:8000 at
+# build time") - PROJECT/ENVIRONMENT/BRAND_NAME/UPLOADER (lib/appConfig.ts)
+# had the identical bug: setting them in Railway's Variables tab silently did
+# nothing, because nothing here ever forwarded them into the build. A var
+# left unset here still works - appConfig.ts's own `?? "dl-dev-..."` fallback
+# applies - so this is additive, not a requirement to set all four.
 FROM node:24-slim
 
 WORKDIR /app
@@ -17,7 +22,15 @@ RUN corepack enable && corepack prepare pnpm@11.14.0 --activate \
 COPY . .
 
 ARG NEXT_PUBLIC_CINQFLOW_API
+ARG NEXT_PUBLIC_PROJECT
+ARG NEXT_PUBLIC_ENVIRONMENT
+ARG NEXT_PUBLIC_BRAND_NAME
+ARG NEXT_PUBLIC_UPLOADER
 ENV NEXT_PUBLIC_CINQFLOW_API=$NEXT_PUBLIC_CINQFLOW_API
+ENV NEXT_PUBLIC_PROJECT=$NEXT_PUBLIC_PROJECT
+ENV NEXT_PUBLIC_ENVIRONMENT=$NEXT_PUBLIC_ENVIRONMENT
+ENV NEXT_PUBLIC_BRAND_NAME=$NEXT_PUBLIC_BRAND_NAME
+ENV NEXT_PUBLIC_UPLOADER=$NEXT_PUBLIC_UPLOADER
 RUN pnpm build
 
 EXPOSE 3000
