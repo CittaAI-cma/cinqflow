@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useToast } from "@/lib/useToast";
 import EmptyState from "@/components/ui/EmptyState";
 import { useActionState, useEffect, useMemo, useState } from "react";
@@ -8,8 +9,11 @@ import { useFormStatus } from "react-dom";
 import Kpi from "@/components/Kpi";
 import StatusWord from "@/components/StatusWord";
 import { runPreview, type StudioState } from "@/app/mapping/actions";
-import type { PreviewResult } from "@/lib/api";
+import { getPreview, type PreviewResult } from "@/lib/api";
 import { previewStatusWord } from "@/lib/statusWords";
+import { usePoll } from "@/lib/usePoll";
+
+const POLL_MS = 1500;
 
 const ROW_LIMITS = [10, 25, 50] as const;
 
@@ -51,9 +55,38 @@ export default function PreviewPanel({
    *  `/runs/{uploadId}/mapping`) is actually rendering this. */
   baseHref: string;
 }) {
+  const router = useRouter();
   const [state, action] = useActionState<StudioState, FormData>(runPreview, {});
   const { push } = useToast();
   const [fieldFilter, setFieldFilter] = useState<string>("");
+
+  // Waits out the same gap `LandingWait` was built for: `runPreview` only
+  // queues `mapping.preview` (`app/mapping/actions.ts`) - the actual preview
+  // row is written by a worker, which is always running in every real
+  // deployment (docker compose's `worker` service, Railway's combined
+  // process). `pollBaseline` is the preview_id already on screen (or the
+  // sentinel "none") at the moment this run was queued, so a "Run preview
+  // again" on an already-current preview still waits for a genuinely new
+  // one rather than settling immediately on the one it just replaced.
+  const [pollBaseline, setPollBaseline] = useState<string | null>(null);
+  useEffect(() => {
+    if (state.saved) setPollBaseline(preview?.preview_id ?? "__none__");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.saved]);
+
+  usePoll<PreviewResult | null>(
+    () => getPreview(feed, version, limit),
+    {
+      enabled: pollBaseline !== null,
+      intervalMs: POLL_MS,
+      isSettled: (next) => next !== null && next.preview_id !== pollBaseline,
+      onSettle: () => {
+        setPollBaseline(null);
+        router.refresh();
+      },
+    },
+    [feed, version, limit, pollBaseline],
+  );
 
   // The fields actually present across the loaded sample, in source order of
   // first appearance — what the dropdown offers. Recomputed only when the
@@ -105,9 +138,9 @@ export default function PreviewPanel({
           <RunButton label={preview ? "Run preview again" : "Run preview"} />
         </div>
         {state.error ? <p className="alert error">{state.error}</p> : null}
-        {state.saved ? (
-          <p className="alert ok">
-            Preview queued — run <span className="mono">make worker</span> and reload.
+        {pollBaseline !== null ? (
+          <p className="alert ok" aria-live="polite">
+            Preview queued — this updates automatically once it's ready.
           </p>
         ) : null}
       </form>
