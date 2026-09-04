@@ -57,7 +57,7 @@ def test_provenance_records_prompt_model_and_knowledge_versions(facts, s):
     result = graph_with(StubClient(), s).run(
         facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
     )
-    assert result["prompt"] == "interpret_file@1"
+    assert result["prompt"] == "interpret_file@2"
     assert result["model"] == "stub-reasoner-1"
     assert any(
         c.startswith("sources/fidelis_ny_upstate__member_roster.yaml@") for c in result["knowledge"]
@@ -96,8 +96,7 @@ def test_claims_without_evidence_are_discarded_not_stored(facts, s):
                         "evidence": ["candidate_key:member_id"],
                     },
                 ],
-                "risks": [],
-                "unknowns": [],
+                "signals": [],
             }
 
     content = graph_with(NoEvidence(), s).run(
@@ -106,7 +105,8 @@ def test_claims_without_evidence_are_discarded_not_stored(facts, s):
     fields = [c.field for c in content.claims]
     assert "likely_domain" not in fields
     assert "likely_grain" in fields
-    assert any("without evidence" in u for u in content.unknowns)
+    unknowns = [sig.claim for sig in content.signals if sig.kind == "unknown"]
+    assert any("without evidence" in u for u in unknowns)
 
 
 def test_malformed_model_output_is_discarded_and_recorded(facts, s):
@@ -125,16 +125,25 @@ def test_malformed_model_output_is_discarded_and_recorded(facts, s):
                     },
                     "not even an object",
                 ],
-                "risks": ["ok"],
-                "unknowns": [],
+                "signals": [
+                    {
+                        "kind": "risk",
+                        "claim": "ok",
+                        "basis": "test basis",
+                        "check": "test check",
+                        "consequence": "test consequence",
+                    }
+                ],
             }
 
     content = graph_with(Malformed(), s).run(
         facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
     )["content"]
     assert content.claims == []
-    assert len(content.unknowns) == 2
-    assert content.risks == ["ok"]
+    dropped = [sig for sig in content.signals if sig.kind == "unknown" and sig.severity == "info"]
+    assert len(dropped) == 2
+    risks = [sig.claim for sig in content.signals if sig.kind == "risk"]
+    assert risks == ["ok"]
 
 
 def test_stub_reasoner_is_deterministic(facts, s):
@@ -151,4 +160,5 @@ def test_risks_report_real_null_rates(facts, s):
     content = graph_with(StubClient(), s).run(
         facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
     )["content"]
-    assert any("member_dob is null" in r for r in content.risks)
+    risks = [sig.claim for sig in content.signals if sig.kind == "risk"]
+    assert any("member_dob is null" in r for r in risks)

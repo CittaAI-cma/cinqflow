@@ -960,6 +960,14 @@ select.page-size { width: auto; min-width: 132px; flex: 0 0 auto; }
   font-weight: 600;
   color: var(--ink3);
 }
+/* The honest margin note under each fieldset's label (S0, analyst-forward-flow.md) -
+   says what the fieldset is for, or that it isn't used yet, before the analyst
+   reads a single field. */
+.form-section-note {
+  margin: -8px 0 14px;
+  font-size: 12.5px;
+  color: var(--ink3);
+}
 .form-grid { display: grid; grid-template-columns: 1fr; gap: 16px 22px; }
 @media (min-width: 720px) { .form-grid { grid-template-columns: 1fr 1fr; } }
 .field { min-width: 0; }
@@ -1372,6 +1380,19 @@ tr:last-child td { border-bottom: none; }
 .claim-kind.recommendation { background: var(--warn-weak); color: var(--proc); }
 .claim-field { font-family: var(--mono); font-size: 12px; color: var(--ink3); }
 .claim-value { font-size: 14.5px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
+
+/* A risk or unknown (`Signal`), in the reasoning-contract shape - same card
+   frame as `.claim`, so a risk/unknown reads as a sibling of a claim rather
+   than a different kind of thing. `info` severity (dropped-candidate
+   bookkeeping) is deliberately quieter than the two the model actually means. */
+.signal-kind {
+  font-family: var(--mono); font-size: 10px; padding: 1.5px 6px; border-radius: 3px;
+  background: var(--warn-weak); color: var(--proc);
+}
+.signal-kind.info { background: var(--mat); color: var(--ink2); }
+.signal-basis { font-size: 13px; color: var(--ink2); margin-bottom: 6px; }
+.signal-meta { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink3); }
+.signal-meta b { color: var(--ink2); font-weight: 600; }
 /* `.confidence-bar` retired: every confidence display now renders through
    `components/ui/Confidence.tsx`, which bands the value instead of drawing a
    continuous bar that made 0.31 and 0.97 look like the same kind of claim. */
@@ -1525,6 +1546,9 @@ a.run-step:hover { background: var(--mat); }
 }
 .review-right { display: flex; flex-direction: column; gap: 12px; }
 
+/* The one sentence composed from the final claims/signals - see VerdictCard's
+   own comment on why this is never model-generated text. */
+.verdict-headline { margin: 8px 0 0; font-size: 14px; font-weight: 600; color: var(--ink); }
 .verdict-facts { margin: 8px 0 0; line-height: 1.6; }
 .verdict-claim-counts { margin: 10px 0 0; font-size: 12.5px; color: var(--ink2); }
 .verdict-section-label {
@@ -1535,7 +1559,6 @@ a.run-step:hover { background: var(--mat); }
   color: var(--ink3);
   margin-top: 12px;
 }
-.verdict-risks ul { margin: 4px 0 0; padding-left: 16px; font-size: 13px; }
 .verdict-blockers { margin-top: 12px; }
 
 .reading-mode {

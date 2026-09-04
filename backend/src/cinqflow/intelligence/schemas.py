@@ -33,12 +33,27 @@ class LlmClaim(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+SignalKind = Literal["risk", "unknown"]
+
+
+class LlmSignal(BaseModel):
+    """A risk or unknown, in the four-slot shape the review screen renders.
+    No `severity` - that is assigned by `_assemble` from `kind`, the same
+    "the model never populates a field only code should set" rule this
+    module's docstring states for `FieldCandidate.rejected_target`/`.reason`."""
+
+    kind: SignalKind
+    claim: str
+    basis: str
+    check: str
+    consequence: str
+
+
 class InterpretationResponse(BaseModel):
     """`interpret_file`'s contract - mirrors `prompts/interpret_file_v1.md` exactly."""
 
     claims: list[LlmClaim] = Field(default_factory=list)
-    risks: list[str] = Field(default_factory=list)
-    unknowns: list[str] = Field(default_factory=list)
+    signals: list[LlmSignal] = Field(default_factory=list)
 
 
 #: The model may only ever claim one of these three - `invalid` is assigned

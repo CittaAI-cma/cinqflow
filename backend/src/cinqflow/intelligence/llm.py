@@ -306,8 +306,29 @@ class StubClient:
         cadence = source.get("cadence")
 
         claims: list[dict[str, Any]] = []
-        risks: list[str] = []
-        unknowns: list[str] = []
+        signals: list[dict[str, Any]] = []
+
+        def risk(claim: str, *, basis: str, check: str, consequence: str) -> None:
+            signals.append(
+                {
+                    "kind": "risk",
+                    "claim": claim,
+                    "basis": basis,
+                    "check": check,
+                    "consequence": consequence,
+                }
+            )
+
+        def unknown(claim: str, *, basis: str, check: str, consequence: str) -> None:
+            signals.append(
+                {
+                    "kind": "unknown",
+                    "claim": claim,
+                    "basis": basis,
+                    "check": check,
+                    "consequence": consequence,
+                }
+            )
 
         # Domain: governed knowledge when the feed is registered, else inferred.
         if domain:
@@ -333,7 +354,15 @@ class StubClient:
                 }
             )
             if not member_like:
-                unknowns.append("Domain could not be established from columns or knowledge.")
+                unknown(
+                    "Domain could not be established from columns or knowledge.",
+                    basis="No member-id-shaped column, and no registered source knowledge "
+                    "for this feed to fall back on.",
+                    check="Open the Forensic column table and confirm no domain-identifying "
+                    "column was missed.",
+                    consequence="This upload lands in Bronze with domain left as a guess; "
+                    "nothing downstream depends on it yet.",
+                )
 
         dataset = source.get("feed") or "unregistered feed"
         claims.append(
@@ -361,7 +390,13 @@ class StubClient:
                 }
             )
         else:
-            unknowns.append("No candidate key found; grain is unresolved.")
+            unknown(
+                "No candidate key found; grain is unresolved.",
+                basis="The profiler found no column, or combination of columns, with full "
+                "row cardinality.",
+                check="Open the candidate-key panel — the profiler lists every column it checked.",
+                consequence="Bronze accepts the rows regardless; grain is simply not asserted.",
+            )
 
         claims.append(
             {
@@ -388,23 +423,51 @@ class StubClient:
             if column["null_count"] and facts["row_count"]:
                 pct = 100 * column["null_count"] / facts["row_count"]
                 if pct >= 1:
-                    risks.append(
+                    risk(
                         f"{column['name']} is null in {pct:.1f}% of rows "
-                        f"({column['null_count']}/{facts['row_count']})."
+                        f"({column['null_count']}/{facts['row_count']}).",
+                        basis=f"Computed directly from the profiled column ({column['name']}).",
+                        check=f"Open Forensic mode and check {column['name']}'s null count "
+                        "against the sample rows.",
+                        consequence="The rows still land in Bronze unchanged; a mapping rule "
+                        "can enforce this later if needed.",
                     )
         if facts.get("duplicate_rows"):
-            risks.append(f"{facts['duplicate_rows']} fully duplicated rows present.")
+            risk(
+                f"{facts['duplicate_rows']} fully duplicated rows present.",
+                basis="Computed by the profiler by comparing every column across rows.",
+                check="Open Forensic mode to see the duplicate-row count restated against the "
+                "sample.",
+                consequence="Duplicates are not removed at this stage; Bronze is a verbatim "
+                "copy of the file.",
+            )
 
         expected = set(source.get("expected_columns") or [])
         if expected:
             missing = sorted(expected - set(columns))
             extra = sorted(set(columns) - expected)
             if missing:
-                risks.append("Expected columns absent: " + ", ".join(missing))
+                risk(
+                    "Expected columns absent: " + ", ".join(missing),
+                    basis=f"The registered source knowledge for this feed lists these columns "
+                    f"as expected: {', '.join(sorted(expected))}.",
+                    check="Compare the column list above with the source definition in the "
+                    "knowledge base.",
+                    consequence="Any claim or mapping depending on a missing column is marked "
+                    "unknown, not guessed.",
+                )
             if extra:
-                unknowns.append("Columns not described by source knowledge: " + ", ".join(extra))
+                unknown(
+                    "Columns not described by source knowledge: " + ", ".join(extra),
+                    basis="These columns are present in the file but not listed in the "
+                    "registered source for this feed.",
+                    check="Check the source knowledge YAML to see if it needs updating for "
+                    "this delivery.",
+                    consequence="These columns still land in Bronze; they are simply not yet "
+                    "interpreted against governed knowledge.",
+                )
 
-        return {"claims": claims, "risks": risks, "unknowns": unknowns}
+        return {"claims": claims, "signals": signals}
 
 
 def build_client(settings: Settings | None = None) -> LlmClient:

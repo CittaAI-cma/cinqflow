@@ -125,7 +125,9 @@ export default async function ReviewPage({
             uploadId={uploadId}
             filename={upload.filename}
             phiCount={profile.facts.phi_candidates.length}
-            unknownCount={interpretation.content.unknowns.length}
+            unknownCount={
+              interpretation.content.signals.filter((s) => s.severity === "blocker").length
+            }
           />
         )}
       </div>
