@@ -145,6 +145,13 @@ services:
       NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-}
       NEXT_PUBLIC_BRAND_NAME: ${NEXT_PUBLIC_BRAND_NAME:-}
       NEXT_PUBLIC_UPLOADER: ${NEXT_PUBLIC_UPLOADER:-}
+      # Pins the key Next.js uses to sign/encrypt Server Action references
+      # instead of letting `next dev` generate a fresh random one per process.
+      # Unset, every `docker compose restart`/rebuild invalidates every
+      # already-open tab's server actions ("Server Action '...' was not found
+      # on the server") until it's hard-refreshed - login included. Set in
+      # compose/.env; see .env.example for how to generate one.
+      NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}
     volumes:
       - ../frontend:/app
       - /app/node_modules

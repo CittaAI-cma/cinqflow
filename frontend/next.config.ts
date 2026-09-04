@@ -17,6 +17,15 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: "50mb",
     },
+    // `middleware.ts` runs on every route except /login (the session-cookie
+    // gate), /data/intake/new included - middleware has its own, separate
+    // body-size cap from the Server Action it fronts, and its own default is
+    // much smaller (~1MB, surfaced as Next silently truncating the request at
+    // ~10MB in practice and the Server Action then failing to parse the cut-
+    // off multipart body: "Error: Unexpected end of form"). A real ingestion
+    // file routinely exceeds that, so this has to match serverActions' limit
+    // or the smaller of the two silently wins.
+    middlewareClientMaxBodySize: "50mb",
   },
 };
 
