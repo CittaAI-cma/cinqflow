@@ -119,6 +119,48 @@ def test_g2_refuses_a_touched_entity_missing_its_identifier(client, settings, pr
     assert client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["status"] == "draft"
 
 
+def test_the_gate_reports_every_reason_it_is_closed_before_the_button_is_pressed(
+    client, settings, previewed
+):
+    """The defect this endpoint exists for: `approvable` on the preview is
+    literally `is_current`, so a draft with a current preview and an unmapped
+    required field reported approvable and then 409'd. The gate answers the
+    whole question, from the same list the approve handler refuses from."""
+    open_now = client.get(f"/api/feeds/{FEED}/mapping-versions/1/gate").json()
+    assert open_now["approvable"] is True and open_now["blockers"] == []
+
+    spec = client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["spec"]
+    spec["fields"] = [f for f in spec["fields"] if f["target"] != "members.source_system_id"]
+    assert client.put(f"/api/feeds/{FEED}/mapping-versions/1", json=spec).status_code == 200
+
+    # Dropping a field changes what executes, so this closes the gate twice
+    # over. Both reasons are reported: the analyst fixes them in one pass
+    # instead of finding the second only after fixing the first.
+    closed = client.get(f"/api/feeds/{FEED}/mapping-versions/1/gate").json()
+    assert closed["approvable"] is False
+    codes = [b["code"] for b in closed["blockers"]]
+    assert codes == ["missing_required", "no_current_preview"]
+
+    missing = closed["blockers"][0]
+    assert "members.source_system_id" in missing["missing_required"]
+    assert missing["anchor"] == "unmapped"
+
+    # And the button agrees with the page: the refusal is the first blocker.
+    refused = client.post(f"/api/feeds/{FEED}/mapping-versions/1/approve", json={})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == codes[0]
+
+
+def test_the_gate_names_an_approved_version_as_decided_not_pending(client, settings, previewed):
+    """Terminal states are things to know, not work to do - the strip has to say
+    'already approved', not 'nothing left to do'."""
+    client.post(f"/api/feeds/{FEED}/mapping-versions/1/approve", json={})
+    gate = client.get(f"/api/feeds/{FEED}/mapping-versions/1/gate").json()
+    assert gate["approvable"] is False
+    assert [b["code"] for b in gate["blockers"]] == ["already_approved"]
+    assert gate["blockers"][0]["approver"]
+
+
 def test_g2_is_queued_not_executed_inline(client, settings, previewed):
     _, batch_id = previewed
     response = client.post(

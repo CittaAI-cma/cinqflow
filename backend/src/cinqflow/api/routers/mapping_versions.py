@@ -34,6 +34,7 @@ from cinqflow.queue.queue import Queue
 from cinqflow.settings import Settings
 from cinqflow.workers import promote_silver, run_preview
 from cinqflow.workflow.dag import feed_version_scope
+from cinqflow.workflow.g2_gate import g2_blockers
 from cinqflow.workflow.models import MappingSpec, build_step_progress, mask_preview_rows
 from cinqflow.workflow.store import (
     DraftAlreadyOpen,
@@ -458,6 +459,33 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
             "steps": [p.model_dump(mode="json") for p in build_step_progress(step_runs)],
         }
 
+    @router.get("/api/feeds/{feed}/mapping-versions/{version}/gate")
+    def mapping_version_gate(feed: str, version: int, conn=Depends(get_conn)) -> dict:
+        """Whether G2 will open, and every reason it will not.
+
+        `GET .../preview` already reported `approvable`, but that field is
+        literally `is_current` - it answers "does a preview describe this spec",
+        which is one of four rules. A draft with a current preview and an
+        unmapped `members.source_system_id` rendered an enabled Approve button
+        that 409s. This endpoint answers the whole question from the same list
+        the approve handler refuses from, so the two cannot disagree.
+
+        Not gated on `can_decide_gates`: knowing what is left to do is not
+        deciding. Whoever presses the button still needs the capability.
+        """
+        store = WorkflowStore(conn, s)
+        mapping = store.get_mapping_version(feed, version)
+        if mapping is None:
+            raise HTTPException(404, detail=f"unknown mapping version: {feed} v{version}")
+        canonical, _ = _canonical_for(s, mapping.domain)
+        blockers = g2_blockers(store, canonical, mapping, feed, version)
+        return {
+            "feed": feed,
+            "version": version,
+            "approvable": not blockers,
+            "blockers": [b.as_dict() for b in blockers],
+        }
+
     # --------------------------------------------------------------- G2 (S6)
     @router.post("/api/feeds/{feed}/mapping-versions/{version}/approve", status_code=202)
     def approve_mapping_version(
@@ -479,56 +507,16 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
         if mapping is None:
             raise HTTPException(404, detail=f"unknown mapping version: {feed} v{version}")
 
-        decided = store.approval_for_mapping(feed=feed, version=version)
-        if decided is not None:
-            raise HTTPException(
-                409,
-                detail={
-                    "message": f"{feed} v{version} is already approved",
-                    "approval_id": decided.approval_id,
-                    "approver": decided.approver,
-                    "decided_ts": decided.decided_ts.isoformat(),
-                },
-            )
-        if mapping.status == "superseded":
-            raise HTTPException(
-                409,
-                detail={"message": f"{feed} v{version} was superseded by a later version"},
-            )
-
+        # One list, shared with `GET .../gate`, so the button the studio renders
+        # and the answer this handler gives are derived from the same rules. The
+        # refusal keeps the shape it always had: the first blocker's own body.
         canonical, _ = _canonical_for(s, mapping.domain)
-        touched_tables = {canonical.table_of(t) for t in mapping.spec.targets if t}
-        missing_required = [
-            target
-            for target in canonical.required_targets(t for t in touched_tables if t)
-            if target not in mapping.spec.targets
-        ]
-        if missing_required:
-            raise HTTPException(
-                409,
-                detail={
-                    "message": (
-                        f"{len(missing_required)} required field(s) are not mapped: "
-                        + ", ".join(sorted(missing_required))
-                    ),
-                    "hint": "map each entity's primary key before approving",
-                    "missing_required": sorted(missing_required),
-                },
-            )
+        blockers = g2_blockers(store, canonical, mapping, feed, version)
+        if blockers:
+            raise HTTPException(409, detail=blockers[0].as_dict())
 
         preview = store.get_current_preview(feed, version, spec_fingerprint(mapping.spec))
-        if preview is None:
-            raise HTTPException(
-                409,
-                detail={
-                    "message": "this version has no preview of its current spec",
-                    "hint": "run a preview and approve what you saw",
-                },
-            )
-
         landing = store.get_run(preview.sample.batch_id, kind="land_bronze")
-        if landing is None:  # pragma: no cover - a preview always samples a batch
-            raise HTTPException(409, detail={"message": "the previewed batch has no landing run"})
 
         approval, frozen = store.approve_mapping_version(
             feed=feed,
