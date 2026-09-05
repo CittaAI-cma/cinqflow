@@ -20,7 +20,8 @@ cinqflow/
 │   │   ├── settings.py            # pydantic-settings; ALL env difference lives here
 │   │   ├── api/                   # CONTROL PLANE (thin)
 │   │   │   ├── app.py             # create_app() — composition root
-│   │   │   ├── deps.py            # request-scoped wiring (db, stores, queue)
+│   │   │   ├── deps.py            # request-scoped wiring (db, current user,
+│   │   │   │                      #   require_role / require_capability)
 │   │   │   └── routers/
 │   │   │       ├── uploads.py     # POST/GET uploads, profile, interpretation, G1
 │   │   │       ├── mappings.py    # proposals, mapping versions, preview, G2
@@ -31,6 +32,10 @@ cinqflow/
 │   │   │   │                      #   Proposal, MappingVersion, Preview, Approval, Run, Lineage
 │   │   │   ├── states.py          # allowed states + legal transitions (enforced here)
 │   │   │   └── store.py           # SQL persistence for the artifacts (schema: workflow)
+│   │   ├── auth/                  # WHO: users, roles, sessions (schema: auth)
+│   │   │   ├── store.py           # AuthStore: users, memberships, login → CurrentUser
+│   │   │   └── persona.py         # roles → persona (emphasis) + capabilities (authority);
+│   │   │                          #   routers enforce capabilities, the UI only mirrors them
 │   │   ├── migrations/            # CONTROL-PLANE SCHEMA CHANGES: NNN_name.sql, applied in
 │   │   │                          #   order by `cinqflow install` / `cinqflow migrate`;
 │   │   │                          #   recorded in workflow.schema_version (see module docstring)
@@ -147,6 +152,12 @@ mechanism (`migrations/__init__.py`).
    workflow SQL. Parameterised statements everywhere; no ORM on the data plane.
 7. Nothing executes LLM-generated code, ever. Mappings are data (`engine/mapping_spec.py`),
    validated then executed by `engine/mapping_exec.py`.
+8. Authority is a capability, never a persona. `auth/persona.py` derives both from roles;
+   a router that changes state on someone's behalf takes `Depends(require_capability(...))`
+   and records the session's user, never a body-supplied name. The frontend
+   (`lib/persona.ts`) holds *defaults* and mirrors the same flags to hide or explain a
+   control — it never decides permission, and capability-gated calls go through Server
+   Actions (`authMutate`), not `lib/api.ts`.
 
 ## Runtime processes (dev)
 

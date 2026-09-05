@@ -8,6 +8,8 @@ from datetime import date
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 
+from cinqflow.api.deps import make_get_current_user, require_capability
+from cinqflow.auth.models import CurrentUser
 from cinqflow.dataplane.filestore import (
     FileStore,
     Folder,
@@ -45,11 +47,16 @@ def _file_type(filename: str) -> str:
     raise HTTPException(415, detail=f"unsupported file type: {filename} (expected .csv or .xlsx)")
 
 
-def build_router(
-    settings: Settings, get_conn: Callable[[], Iterator]
-) -> APIRouter:
+def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRouter:
     s = settings
     router = APIRouter()
+    # Who may do what - derived from roles (auth/persona.py), enforced here.
+    # Uploading, reading and progress stay open in this phase (W1 gates the
+    # rest); the two decisions and the retry are the calls that change state
+    # on someone's authority.
+    get_current_user = make_get_current_user(s, get_conn)
+    require_decide = require_capability("can_decide_gates", get_current_user)
+    require_rerun = require_capability("can_rerun_steps", get_current_user)
 
     @router.post("/api/uploads", status_code=202)
     async def create_upload(
@@ -185,7 +192,11 @@ def build_router(
         return build_upload_progress(upload, run, land_run).model_dump(mode="json")
 
     @router.post("/api/uploads/{upload_id}/retry", status_code=202)
-    def retry_upload(upload_id: str, conn=Depends(get_conn)) -> dict:
+    def retry_upload(
+        upload_id: str,
+        conn=Depends(get_conn),
+        _user: CurrentUser = Depends(require_rerun),
+    ) -> dict:
         """Re-enqueue the work a `*_failed` upload failed at. A transient failure
         (the API restarting mid-parse, an LLM timeout, a dropped connection to
         the data plane) should not require re-uploading the file - the original
@@ -329,9 +340,7 @@ def build_router(
                 409, detail={"message": f"already {exc.decision}", "approval_id": exc.approval_id}
             ) from None
 
-        new_status = (
-            UploadStatus.APPROVED if decision == "approved" else UploadStatus.REJECTED
-        )
+        new_status = UploadStatus.APPROVED if decision == "approved" else UploadStatus.REJECTED
         store.set_status(upload_id, new_status)
 
         topic = land_bronze.TOPIC if decision == "approved" else reject_upload.TOPIC
@@ -347,22 +356,28 @@ def build_router(
             "queued": topic,
         }
 
+    # G1 is decided by whoever is signed in and allowed to - never by a name the
+    # request body chose. The audit record (`approval.approver`) is the caller's
+    # own email; the old `approver: Body("analyst@cinqcare.com")` default was
+    # the same fictional identity the frontend used to send, now closed at both
+    # ends. `require_capability("can_decide_gates")`: approver / business
+    # analyst sign gates (auth/persona.py); a steward can review, not decide.
     @router.post("/api/uploads/{upload_id}/approve", status_code=202)
     def approve_upload(
         upload_id: str,
-        approver: str = Body("analyst@cinqcare.com"),
-        note: str | None = Body(None),
+        note: str | None = Body(None, embed=True),
         conn=Depends(get_conn),
+        user: CurrentUser = Depends(require_decide),
     ) -> dict:
-        return _decide(upload_id, "approved", approver, note, conn)
+        return _decide(upload_id, "approved", user.email, note, conn)
 
     @router.post("/api/uploads/{upload_id}/reject", status_code=202)
     def reject_upload_route(
         upload_id: str,
-        approver: str = Body("analyst@cinqcare.com"),
-        note: str | None = Body(None),
+        note: str | None = Body(None, embed=True),
         conn=Depends(get_conn),
+        user: CurrentUser = Depends(require_decide),
     ) -> dict:
-        return _decide(upload_id, "rejected", approver, note, conn)
+        return _decide(upload_id, "rejected", user.email, note, conn)
 
     return router

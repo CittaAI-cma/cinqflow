@@ -17,11 +17,15 @@ import type { Interpretation, Profile } from "@/lib/api";
 export default function ReviewEvidence({
   profile,
   interpretation,
+  initialMode = "evidence",
 }: {
   profile: Profile;
   interpretation: Interpretation;
+  /** The persona's default (`lib/persona.ts`). `ReadingMode` restores the
+   *  analyst's own saved choice on mount, which still wins over this. */
+  initialMode?: ReadingModeKey;
 }) {
-  const [mode, setMode] = useState<ReadingModeKey>("evidence");
+  const [mode, setMode] = useState<ReadingModeKey>(initialMode);
   const { claims, signals } = interpretation.content;
   const visibleClaims = mode === "verdict" ? claims.filter((c) => c.kind === "recommendation") : claims;
   // Bookkeeping about discarded model output never earns the analyst's

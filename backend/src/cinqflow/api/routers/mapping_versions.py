@@ -6,6 +6,8 @@ from collections.abc import Callable, Iterator
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from cinqflow.api.deps import make_get_current_user, require_capability
+from cinqflow.auth.models import CurrentUser
 from cinqflow.engine.mapping_exec import (
     DEFAULT_STRATEGY,
     SAMPLE_STRATEGIES,
@@ -42,11 +44,12 @@ def _canonical_for(settings: Settings, domain: str):
     return load_canonical(YamlKnowledgeProvider(settings), singular), singular
 
 
-def build_router(
-    settings: Settings, get_conn: Callable[[], Iterator]
-) -> APIRouter:
+def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRouter:
     s = settings
     router = APIRouter()
+    # G2 is a decision: same capability gate as G1 (auth/persona.py).
+    get_current_user = make_get_current_user(s, get_conn)
+    require_decide = require_capability("can_decide_gates", get_current_user)
 
     @router.get("/api/mapping-proposals/{proposal_id}")
     def get_mapping_proposal(proposal_id: str, conn=Depends(get_conn)) -> dict:
@@ -286,9 +289,7 @@ def build_router(
         if mapping is None:
             raise HTTPException(404, detail=f"unknown mapping version: {feed} v{version}")
         if not mapping.spec.fields:
-            raise HTTPException(
-                409, detail={"message": "this version has no fields to preview"}
-            )
+            raise HTTPException(409, detail={"message": "this version has no fields to preview"})
 
         target_batch = batch_id
         if target_batch is None:
@@ -353,9 +354,7 @@ def build_router(
 
         preview = store.get_preview(feed, version)
         if preview is None:
-            raise HTTPException(
-                404, detail={"message": f"no preview yet for {feed} v{version}"}
-            )
+            raise HTTPException(404, detail={"message": f"no preview yet for {feed} v{version}"})
 
         fingerprint = spec_fingerprint(mapping.spec)
         is_current = preview.spec_fingerprint == fingerprint
@@ -394,11 +393,12 @@ def build_router(
     def approve_mapping_version(
         feed: str,
         version: int,
-        approver: str = Body("analyst@cinqcare.com"),
-        note: str | None = Body(None),
+        note: str | None = Body(None, embed=True),
         conn=Depends(get_conn),
+        user: CurrentUser = Depends(require_decide),
     ) -> dict:
-        """G2: the analyst takes responsibility for this mapping.
+        """G2: the analyst takes responsibility for this mapping - whoever holds
+        the session and `can_decide_gates`, recorded under their own email.
 
         Refused without a preview of *this* spec, because approving a version
         nobody has seen run is the one thing the gate exists to prevent. The
@@ -464,7 +464,7 @@ def build_router(
             feed=feed,
             version=version,
             upload_id=landing.upload_id,
-            approver=approver,
+            approver=user.email,
             note=note,
         )
         Queue(conn, s).enqueue(

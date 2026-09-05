@@ -45,3 +45,11 @@ export function setUserActive(userId: string, isActive: boolean) {
     body: JSON.stringify({ is_active: isActive }),
   });
 }
+
+/** Replaces the user's role set (`PATCH /api/users/{id}/roles`, admin-only). */
+export function setUserRoles(userId: string, roles: string[]) {
+  return authMutate<AdminUser>(`/api/users/${userId}/roles`, {
+    method: "PATCH",
+    body: JSON.stringify({ roles }),
+  });
+}

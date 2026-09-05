@@ -14,7 +14,7 @@ from cinqflow.dataplane.contract import bronze_table
 from cinqflow.dataplane.pg import PostgresDataPlane
 from cinqflow.queue.worker import drain
 from cinqflow.workflow.states import RunState, UploadStatus
-from tests.conftest import requires_db
+from tests.conftest import TEST_OPERATOR_EMAIL, authed_client, requires_db
 
 pytestmark = requires_db
 
@@ -23,7 +23,7 @@ FEED = "test_e2e_roster"
 
 @pytest.fixture
 def client(conn, settings):
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 @pytest.fixture(autouse=True)
@@ -69,7 +69,7 @@ def test_approve_lands_bronze_with_lineage(client, settings, conn, small_csv_byt
 
     approve = client.post(
         f"/api/uploads/{upload_id}/approve",
-        json={"approver": "info@cittaai.com", "note": "Grain confirmed with payer."},
+        json={"note": "Grain confirmed with payer."},
     )
     assert approve.status_code == 202, approve.text
     assert approve.json()["status"] == UploadStatus.APPROVED
@@ -98,7 +98,8 @@ def test_approve_lands_bronze_with_lineage(client, settings, conn, small_csv_byt
     approval = detail["approvals"][0]
     assert approval["gate"] == "G1"
     assert approval["decision"] == "approved"
-    assert approval["approver"] == "info@cittaai.com"
+    # The approver is whoever holds the session - never a body field (PR-1).
+    assert approval["approver"] == TEST_OPERATOR_EMAIL
 
     # Bronze is queryable, and PHI in the source row is masked on the way out
     rows = client.get(f"/api/batches/{batch_id}/rows").json()
@@ -127,9 +128,7 @@ def test_approve_lands_bronze_with_lineage(client, settings, conn, small_csv_byt
 def test_reject_writes_nothing_to_the_plane(client, settings, conn, small_csv_bytes):
     upload_id = _upload_and_interpret(client, settings, small_csv_bytes, "reject_me.csv")
 
-    reject = client.post(
-        f"/api/uploads/{upload_id}/reject", json={"note": "Wrong business date."}
-    )
+    reject = client.post(f"/api/uploads/{upload_id}/reject", json={"note": "Wrong business date."})
     assert reject.status_code == 202
     assert reject.json()["queued"] == "upload.reject"
     _drain(settings)

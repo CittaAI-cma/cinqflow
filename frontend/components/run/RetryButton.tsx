@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { retryUpload } from "@/lib/api";
+import { submitRetry } from "@/app/actions";
 import { useToast } from "@/lib/useToast";
 
 /** A one-shot retry for a state this build has no timeline screen of its own
@@ -11,7 +11,11 @@ import { useToast } from "@/lib/useToast";
  *  afterward; this one re-enqueues and hands off, because the status
  *  transition happens in a background worker rather than when this call
  *  returns — and `LandingWait` on the same screen is already watching for it,
- *  which is why this no longer tells anyone to reload. */
+ *  which is why this no longer tells anyone to reload.
+ *
+ *  Goes through the `submitRetry` Server Action: `/retry` is capability-gated
+ *  and the browser never holds the token. The page only renders this for a
+ *  caller with `can_rerun_steps` - the 403 path is a safety net, not the UX. */
 export default function RetryButton({ uploadId, label }: { uploadId: string; label: string }) {
   const router = useRouter();
   const { push } = useToast();
@@ -22,7 +26,7 @@ export default function RetryButton({ uploadId, label }: { uploadId: string; lab
   async function onClick() {
     setPending(true);
     setError(null);
-    const response = await retryUpload(uploadId);
+    const response = await submitRetry(uploadId);
     setPending(false);
     if (response.error) {
       setResult("error");

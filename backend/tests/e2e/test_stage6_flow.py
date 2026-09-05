@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 from cinqflow.api.app import create_app
 from cinqflow.dataplane.contract import bronze_table
 from cinqflow.queue.worker import drain
-from tests.conftest import requires_db
+from tests.conftest import authed_client, requires_db
 
 pytestmark = requires_db
 
@@ -33,7 +33,7 @@ ROSTER = (
 
 @pytest.fixture
 def client(conn, settings):
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 @pytest.fixture(autouse=True)
@@ -123,7 +123,7 @@ def test_g2_is_queued_not_executed_inline(client, settings, previewed):
     _, batch_id = previewed
     response = client.post(
         f"/api/feeds/{FEED}/mapping-versions/1/approve",
-        json={"approver": "lead@cinqcare.com", "note": "matches the preview"},
+        json={"note": "matches the preview"},
     )
     assert response.status_code == 202, response.text
     body = response.json()
@@ -329,9 +329,7 @@ def test_nothing_reaches_silver_without_g2(client, settings, previewed):
     assert _drain(settings) == 0
 
     with psycopg.connect(settings.database_url) as check, check.cursor() as cur:
-        cur.execute(
-            "SELECT to_regclass(%s) AS present", (f'{settings.silver_schema}."members"',)
-        )
+        cur.execute("SELECT to_regclass(%s) AS present", (f'{settings.silver_schema}."members"',))
         assert cur.fetchone()[0] is None
 
     from cinqflow.workers import promote_silver

@@ -12,7 +12,7 @@ from psycopg.rows import dict_row
 from cinqflow.api.app import create_app
 from cinqflow.dataplane.contract import bronze_table
 from cinqflow.queue.worker import drain
-from tests.conftest import requires_db
+from tests.conftest import authed_client, requires_db
 
 pytestmark = requires_db
 
@@ -27,7 +27,7 @@ ROSTER = (
 
 @pytest.fixture
 def client(conn, settings):
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 @pytest.fixture(autouse=True)
@@ -116,8 +116,8 @@ def test_the_analyst_sees_source_values_mapped_values_and_failures(client, setti
     aggregates = preview["aggregates"]
     assert aggregates["rows_previewed"] == 3
     assert aggregates["rows_ok"] == 1
-    assert aggregates["rows_with_failures"] == 1   # the unparseable date
-    assert aggregates["rows_rejected"] == 1        # the missing identifier
+    assert aggregates["rows_with_failures"] == 1  # the unparseable date
+    assert aggregates["rows_rejected"] == 1  # the missing identifier
     assert "member_dob:parse_date" in aggregates["failures_by_rule"]
     assert "member_id:on_null" in aggregates["failures_by_rule"]
     assert aggregates["null_or_invalid"]["members.date_of_birth"] == 1
@@ -229,9 +229,7 @@ def test_preview_is_refused_without_a_batch_or_version(client, settings):
         json={"domain": "enrollment"},
     )
     assert unknown.status_code == 201
-    refused = client.post(
-        "/api/feeds/feed_with_no_batch/mapping-versions/1/preview", json={}
-    )
+    refused = client.post("/api/feeds/feed_with_no_batch/mapping-versions/1/preview", json={})
     # an empty draft has nothing to preview
     assert refused.status_code == 409
     assert "no fields" in refused.json()["detail"]["message"]

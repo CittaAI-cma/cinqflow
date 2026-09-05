@@ -1,8 +1,10 @@
 /** The only module that talks to the backend.
  *
  *  Imported from both server code (pages, actions) and client components
- *  (`RunProcessing`, `RetryButton` poll/retry directly) - so it needs two
- *  possible base URLs, not one. Inside Docker Compose, `CINQFLOW_API` is the
+ *  (`RunProcessing`, `BatchProcessing` poll directly) - so it needs two
+ *  possible base URLs, not one. Anything capability-gated (G1/G2 decisions,
+ *  retry) is NOT here: only the Next.js server holds the bearer token, so
+ *  those go through Server Actions and `lib/auth.ts`'s `authMutate`. Inside Docker Compose, `CINQFLOW_API` is the
  *  in-network hostname (`http://api:8000`), reachable from the Next.js server
  *  process but not from a browser on the host; `NEXT_PUBLIC_CINQFLOW_API` is
  *  the host-published URL the browser actually needs. `typeof window`
@@ -295,18 +297,6 @@ export const getUpload = cache(function getUpload(uploadId: string) {
   return get<UploadDetail>(`/api/uploads/${uploadId}`);
 });
 
-/** Re-enqueues the work a `*_failed` upload failed at. Returns an error
- *  message rather than throwing, matching `decideUpload`. */
-export async function retryUpload(uploadId: string): Promise<{ error?: string }> {
-  const response = await fetch(`${BASE}/api/uploads/${uploadId}/retry`, { method: "POST" });
-  if (response.ok) return {};
-  const payload = await response.json().catch(() => ({}));
-  const detail = payload?.detail;
-  if (typeof detail === "string") return { error: detail };
-  if (detail?.message) return { error: detail.message };
-  return { error: `retry failed with status ${response.status}` };
-}
-
 export interface DeleteUploadResult {
   upload_id: string;
   feed: string;
@@ -436,29 +426,6 @@ export async function getProposalById(proposalId: string): Promise<MappingPropos
   } catch {
     return null;
   }
-}
-
-/** G1. Returns an error message rather than throwing, so the gate can show it. */
-export async function decideUpload(
-  uploadId: string,
-  decision: "approved" | "rejected",
-  body: { approver: string; note?: string },
-): Promise<{ error?: string }> {
-  const path = decision === "approved" ? "approve" : "reject";
-  const response = await fetch(`${BASE}/api/uploads/${uploadId}/${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ approver: body.approver, note: body.note ?? null }),
-  });
-  if (response.ok) return {};
-
-  const payload = await response.json().catch(() => ({}));
-  const detail = payload?.detail;
-  if (typeof detail === "string") return { error: detail };
-  if (detail?.message) {
-    return { error: detail.status ? `${detail.message} (status: ${detail.status})` : detail.message };
-  }
-  return { error: `decision failed with status ${response.status}` };
 }
 
 /** Forwards the analyst's file to the control plane. Returns an error message
@@ -696,29 +663,6 @@ export async function getPreview(
   } catch {
     return null;
   }
-}
-
-/** G2. The promotion itself is queued: this returns as soon as the decision is
- *  recorded, and 409 carries why the gate stayed shut. */
-export async function approveMappingVersion(
-  feed: string,
-  version: number,
-  note?: string,
-): Promise<{ error?: string; batchId?: string }> {
-  const response = await fetch(
-    `${BASE}/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/approve`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ note: note || null }),
-    },
-  );
-  const payload = await response.json().catch(() => ({}));
-  if (response.ok) return { batchId: payload?.batch_id };
-  const detail = payload?.detail;
-  if (typeof detail === "string") return { error: detail };
-  if (detail?.message) return { error: detail.hint ? `${detail.message} — ${detail.hint}` : detail.message };
-  return { error: `could not approve v${version} (status ${response.status})` };
 }
 
 export async function requestPreview(

@@ -622,6 +622,55 @@ applies, `migrate` applies, `reset --yes` re-applies, a bad set fails install lo
 Railway: both already run `cinqflow install`. *Docs:* `structure.md` layout tree + "Data
 stores" paragraph.
 
+### PR-1 — Persona + capabilities — **built** (branch `feat/w0-versioned-migrations`)
+
+*Backend.* `auth/persona.py` exactly as §14.1: `PLATFORM_ROLES` / `ANALYST_ROLES` /
+`GATE_ROLES`, `persona_for` (any platform role wins), `capabilities_for` (three predicates, each
+a role intersection). `CurrentUser` carries `persona` and `capabilities`, computed once in
+`AuthStore.current_user` — so login, refresh and `/me` all return them and nothing downstream
+re-derives the mapping. `api/deps.py` gains `require_capability(name, get_current_user)`, the
+one-line sibling of `require_role` (403 `missing_capability:<name>`). Guards land where the
+table said: G1 approve/reject and G2 approve take `Depends(require_decide)`, `POST /retry`
+takes `Depends(require_rerun)`. **The approver is now the session's user** — the `approver`
+body field is gone from both gates (it was `Body("analyst@cinqcare.com")` on G2), so an
+approval row can no longer name someone who didn't press the button. One addition the plan
+missed: `PATCH /api/users/{id}/roles` (`AuthStore.set_roles`, validates every name before the
+first write). Without it every bootstrap account stays `administrator`-only — Data Platform
+persona, `can_decide_gates = false` — and *nobody* can sign a gate; the four production
+accounts are exactly that shape today. `POST /api/uploads`' `uploader` form field is
+unchanged (W1's "gate every router").
+
+*Tests.* Unit (`tests/unit/test_persona.py`): every role alone, platform-wins precedence,
+`read_only` → analyst with nothing, empty roles, unknown role names ignored. Integration
+(`tests/integration/test_capabilities.py`): no token → 401; `data_steward` → 403 on both gates
+and on retry; `approver` passes the gate check (reaches the 404 for an unknown upload) but 403
+on retry; `data_engineer` the inverse; `administrator` alone cannot decide until given
+`approver` via the new endpoint, after which the next request succeeds; non-admin → 403 on
+the endpoint; unknown role → 400 with no partial write. `tests/conftest.py` gains
+`authed_client(...)` (`approver` + `data_engineer`, so it can do everything the e2e flows
+need); every e2e module uses it, and `test_stage2_flow` now asserts the recorded approver is
+the session's email, not a body value.
+
+*Frontend.* `lib/auth.ts`: `Persona`, `Capabilities`, the two `CurrentUser` fields; the API's
+object-shaped 409/404 (`message — hint`) and the two `missing_capability` codes are humanised
+in `authMutate`. `lib/persona.ts`: the §14.2 defaults table as data (`personaDefaults`), plus
+the two locked-reason sentences. Applied this PR: reading mode (`ReviewEvidence` starts in the
+persona's mode; the analyst's saved choice still wins), S4 proposal filter (`/bronze` shows
+"needs a decision" for Data Analyst, everything for Data Platform, either overridable from
+the URL), gate controls (`GateActions` and `ApproveMapping` render iff `can_decide_gates`,
+otherwise `components/run/GateLocked.tsx` states why, verbatim from the table), re-run
+controls (`RetryButton` on review and the failure surface in `RunProcessing` render iff
+`can_rerun_steps`, otherwise the reason). Home, register columns, group-view panels and the
+`WorkflowSteps` default wait for PR-4 / PR-8 / PR-2 as planned. `TopBar` shows the persona
+beside the name. `/admin/users` gets an inline `RolesEditor` per row (`updateRoles` action).
+Every capability-gated call now goes through a Server Action with `authMutate`
+(`submitDecision`, new `submitRetry`, `approveVersion`) — `decideUpload`, `retryUpload` and
+`approveMappingVersion` are removed from `lib/api.ts`, because only the Next.js server holds
+the bearer token and those three were the unauthenticated fetches the guards would now refuse.
+
+*Infra.* None: no schema change (roles and memberships already exist), no env. *Docs:*
+`structure.md` tree (`auth/`) and boundary 8 (authority is a capability, never a persona).
+
 ### PR-2 — Step ledger
 
 *Backend.*

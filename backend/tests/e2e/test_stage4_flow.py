@@ -13,7 +13,7 @@ from cinqflow.api.app import create_app
 from cinqflow.dataplane.contract import bronze_table
 from cinqflow.queue.worker import drain
 from cinqflow.workflow.store import WorkflowStore
-from tests.conftest import requires_db
+from tests.conftest import authed_client, requires_db
 
 pytestmark = requires_db
 
@@ -27,7 +27,7 @@ ROSTER = (
 
 @pytest.fixture
 def client(conn, settings):
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 @pytest.fixture(autouse=True)
@@ -103,8 +103,7 @@ def test_proposal_is_fetchable_by_its_own_id_before_any_draft_exists(client, pro
 
 def test_unknown_proposal_id_is_404(client):
     assert (
-        client.get("/api/mapping-proposals/00000000-0000-0000-0000-000000000000").status_code
-        == 404
+        client.get("/api/mapping-proposals/00000000-0000-0000-0000-000000000000").status_code == 404
     )
 
 
@@ -230,22 +229,18 @@ def test_editing_an_approved_version_is_refused_and_creates_nothing(
     assert "derive_from_version" in refused.json()["detail"]["hint"]
 
     # no implicit version was created
-    assert [v["version"] for v in client.get(f"/api/feeds/{FEED}/mapping-versions").json()[
-        "versions"
-    ]] == [1]
+    assert [
+        v["version"] for v in client.get(f"/api/feeds/{FEED}/mapping-versions").json()["versions"]
+    ] == [1]
 
 
-def test_editing_after_approval_derives_the_next_version(
-    client, conn, settings, proposal_id
-):
+def test_editing_after_approval_derives_the_next_version(client, conn, settings, proposal_id):
     """Acceptance 2: v(N+1) copies the spec and records derived_from."""
     client.post(f"/api/feeds/{FEED}/mapping-versions", json={"from_proposal_id": proposal_id})
     WorkflowStore(conn, settings).set_mapping_status(feed=FEED, version=1, status="approved")
     conn.commit()
 
-    created = client.post(
-        f"/api/feeds/{FEED}/mapping-versions", json={"derive_from_version": 1}
-    )
+    created = client.post(f"/api/feeds/{FEED}/mapping-versions", json={"derive_from_version": 1})
     assert created.status_code == 201
     v2 = created.json()
     assert v2["version"] == 2

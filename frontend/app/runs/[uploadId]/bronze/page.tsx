@@ -3,6 +3,8 @@ import { notFound, redirect } from "next/navigation";
 import BronzeAnalysisWait from "@/components/run/BronzeAnalysisWait";
 import ProposalTable from "@/components/ProposalTable";
 import { getBronzeProfile, getProposal, getUpload, type FieldStatus } from "@/lib/api";
+import { requireUser } from "@/lib/auth";
+import { personaDefaults } from "@/lib/persona";
 import { canonicalStep, isStepViewable, runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +37,8 @@ export default async function BronzePage({
     notFound();
   }
   const { upload, profile, runs } = detail;
+  const user = await requireUser();
+  const defaults = personaDefaults(user.persona);
 
   if (!isStepViewable("bronze", canonicalStep(upload.status))) {
     redirect(runHref(uploadId, canonicalStep(upload.status)));
@@ -57,7 +61,10 @@ export default async function BronzePage({
     getProposal(landRun.batch_id),
   ]);
 
-  const showAll = filter === "all";
+  // Persona default (analyst: what needs a decision; platform: everything),
+  // overridable either way from the URL.
+  const showAll =
+    filter === "all" || (filter !== "decisions" && defaults.proposalFilter === "all");
   const decisionCount = proposal
     ? NEEDS_DECISION.reduce((n, status) => n + (proposal.counts?.[status] ?? 0), 0)
     : 0;
@@ -128,7 +135,17 @@ export default async function BronzePage({
                 </Link>
               </span>
             ) : (
-              <span className="meta">· showing all {totalFields} fields</span>
+              <span className="meta">
+                · showing all {totalFields} fields
+                {decisionCount > 0 ? (
+                  <>
+                    {" — "}
+                    <Link href={`${runHref(uploadId, "bronze")}?filter=decisions`}>
+                      only the {decisionCount} needing a decision
+                    </Link>
+                  </>
+                ) : null}
+              </span>
             )}
           </h2>
           <ProposalTable proposal={proposal} statuses={statuses} />

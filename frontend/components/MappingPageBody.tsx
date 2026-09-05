@@ -12,6 +12,7 @@ import {
   getProposalById,
   listMappingVersions,
 } from "@/lib/api";
+import { getCurrentUser } from "@/lib/auth";
 import { mappingStatusWord } from "@/lib/statusWords";
 
 const PREVIEW_LIMITS = [10, 25, 50] as const;
@@ -44,6 +45,10 @@ export default async function MappingPageBody({
   limit?: string;
   baseHref: string;
 }) {
+  // Whether the gate below renders as a form or as a stated reason - the API
+  // enforces `can_decide_gates` regardless (`require_capability`).
+  const user = await getCurrentUser();
+  const canDecide = user?.capabilities.can_decide_gates ?? false;
   const { versions } = await listMappingVersions(feed).catch(() => ({ versions: [] }));
   const selected = v ? Number(v) : versions[0]?.version;
   const previewLimit = PREVIEW_LIMITS.includes(Number(limitParam) as (typeof PREVIEW_LIMITS)[number])
@@ -245,6 +250,7 @@ export default async function MappingPageBody({
             status={mapping.status}
             preview={preview}
             editedCount={diff?.diff.analyst_edited.length ?? 0}
+            canDecide={canDecide}
           />
         </>
       )}

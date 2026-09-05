@@ -2,7 +2,6 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  approveMappingVersion,
   createMappingVersion,
   requestPreview,
   saveMappingSpec,
@@ -10,6 +9,7 @@ import {
   type MappingSpecShape,
   type SpecFieldError,
 } from "@/lib/api";
+import { authMutate } from "@/lib/auth";
 
 export interface StudioState {
   errors?: SpecFieldError[];
@@ -145,7 +145,9 @@ export async function startDraft(_previous: StudioState, form: FormData): Promis
 }
 
 /** G2: the analyst takes responsibility for this version. The write happens in a
- *  worker, so this returns as soon as the decision is recorded. */
+ *  worker, so this returns as soon as the decision is recorded. Authenticated:
+ *  the API records the session's user as the approver and refuses anyone
+ *  without `can_decide_gates`; a 409's `message — hint` comes back verbatim. */
 export async function approveVersion(
   _previous: StudioState,
   form: FormData,
@@ -154,10 +156,13 @@ export async function approveVersion(
   const version = Number(form.get("version") ?? 0);
   const note = String(form.get("note") ?? "").trim();
 
-  const { error, batchId } = await approveMappingVersion(feed, version, note);
+  const { data, error } = await authMutate<{ batch_id?: string }>(
+    `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/approve`,
+    { method: "POST", body: JSON.stringify({ note: note || null }) },
+  );
   if (error) return { error };
   revalidatePath(`/mapping/${feed}`);
-  return { saved: true, batchId };
+  return { saved: true, batchId: data?.batch_id };
 }
 
 export async function runPreview(_previous: StudioState, form: FormData): Promise<StudioState> {

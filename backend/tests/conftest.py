@@ -10,9 +10,12 @@ from pathlib import Path
 
 import psycopg
 import pytest
+from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 
 from cinqflow.auth import ddl as auth_ddl
+from cinqflow.auth.security import hash_password
+from cinqflow.auth.store import AuthStore
 from cinqflow.settings import Settings
 from cinqflow.workflow import ddl
 
@@ -83,6 +86,52 @@ def conn(settings: Settings):
                 cur.execute(f"DROP SCHEMA IF EXISTS {settings.silver_schema} CASCADE")
                 cur.execute(f"DROP SCHEMA IF EXISTS {settings.auth_schema} CASCADE")
             connection.commit()
+
+
+# ------------------------------------------------------------- authenticated client
+
+TEST_OPERATOR_EMAIL = "operator@test.cinqflow"
+TEST_OPERATOR_PASSWORD = "operator-pass-1"
+#: Hashed once per session, not once per test: bcrypt is deliberately slow, and
+#: dozens of e2e tests each signing a client in would otherwise add seconds apiece.
+_TEST_OPERATOR_HASH = hash_password(TEST_OPERATOR_PASSWORD)
+
+#: One role from each side of the persona split, so a single signed-in client can
+#: both decide a gate (`approver`) and retry a step (`data_engineer`) - which is
+#: what the stage e2e tests exercise end to end.
+TEST_OPERATOR_ROLES: tuple[str, ...] = ("approver", "data_engineer")
+
+
+def authed_client(
+    client: TestClient,
+    conn,
+    settings: Settings,
+    *,
+    roles: tuple[str, ...] = TEST_OPERATOR_ROLES,
+    email: str = TEST_OPERATOR_EMAIL,
+) -> TestClient:
+    """Signs `client` in as a throwaway user holding `roles` and returns it.
+
+    The gate and retry endpoints are capability-gated (`require_capability`,
+    api/deps.py), so a test that exercises a stage end to end has to be
+    someone. The user is created directly through `AuthStore` and committed
+    (the client serves requests on its own connection), then signed in through
+    the real `/api/auth/login` so the bearer token is a real one.
+    """
+    store = AuthStore(conn, settings)
+    if store.get_user_by_email(email) is None:
+        store.create_user(
+            email=email,
+            hashed_password=_TEST_OPERATOR_HASH,
+            display_name="Test Operator",
+            role_names=list(roles),
+            created_by="test",
+        )
+        conn.commit()
+    res = client.post("/api/auth/login", json={"email": email, "password": TEST_OPERATOR_PASSWORD})
+    assert res.status_code == 200, res.text
+    client.headers["Authorization"] = f"Bearer {res.json()['access_token']}"
+    return client
 
 
 @pytest.fixture

@@ -60,3 +60,19 @@ def require_role(name: str, get_current_user: Callable):
         return user
 
     return dependency
+
+
+def require_capability(name: str, get_current_user: Callable):
+    """Like `require_role`, but on a derived capability (`auth/persona.py`) -
+    `can_decide_gates`, `can_rerun_steps`, `can_manage_users`. The gate
+    endpoints and retry/re-run use this: the question is "may this caller
+    *do* this", which several roles answer yes to, not "does the caller hold
+    role X". The 403 detail names the capability so the UI can say, in the
+    analyst's words, why the control is not hers."""
+
+    def dependency(user=Depends(get_current_user)):
+        if not user.has_capability(name):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"missing_capability:{name}")
+        return user
+
+    return dependency

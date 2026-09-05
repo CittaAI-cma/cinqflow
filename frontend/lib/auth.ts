@@ -20,11 +20,24 @@ export const REFRESH_COOKIE = "cinqflow_rt";
 const ACCESS_TTL_SECONDS = 60 * 15;
 const REFRESH_TTL_SECONDS = 60 * 60 * 24 * 7;
 
+/** Mirrors `backend/src/cinqflow/auth/persona.py` - derived there from roles,
+ *  never re-derived here. Persona is emphasis (defaults, see `lib/persona.ts`);
+ *  capabilities are authority (the API enforces them; the UI only mirrors). */
+export type Persona = "data_analyst" | "data_platform";
+
+export interface Capabilities {
+  can_decide_gates: boolean;
+  can_rerun_steps: boolean;
+  can_manage_users: boolean;
+}
+
 export interface CurrentUser {
   id: string;
   email: string;
   display_name: string;
   roles: string[];
+  persona: Persona;
+  capabilities: Capabilities;
 }
 
 export interface TokenPair {
@@ -61,7 +74,7 @@ export async function clearSession(): Promise<void> {
 
 /** The `login` Server Action's one call to the backend. Returns a message
  *  instead of throwing, so the form can show it - same shape as
- *  `lib/api.ts`'s `uploadFile`/`decideUpload`. */
+ *  `lib/api.ts`'s `uploadFile`/`createMappingVersion`. */
 export async function login(email: string, password: string): Promise<{ error?: string }> {
   let res: Response;
   try {
@@ -169,18 +182,42 @@ export async function authMutate<T>(
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const detail = body?.detail;
-    return {
-      error: typeof detail === "string" ? humanizeAuthError(detail) : `request failed (${res.status})`,
-    };
+    return { error: humanizeError(body?.detail, res.status) };
   }
   return { data: body as T };
+}
+
+/** The API's two error shapes, in the analyst's words. A string `detail` is an
+ *  auth/admin code; an object `detail` is a control-plane 409/404 carrying
+ *  `message` and often a `hint` the spec says to render verbatim. */
+function humanizeError(detail: unknown, status: number): string {
+  if (typeof detail === "string") return humanizeAuthError(detail);
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const d = detail as { message: string; hint?: string; status?: string };
+    if (d.hint) return `${d.message} — ${d.hint}`;
+    if (d.status) return `${d.message} (status: ${d.status})`;
+    return d.message;
+  }
+  return `request failed (${status})`;
 }
 
 function humanizeAuthError(detail: string): string {
   if (detail === "email_already_exists") return "A user with this email already exists.";
   if (detail.startsWith("unknown_role")) return "One of the selected roles doesn't exist.";
   if (detail === "missing_role:administrator") return "Administrator access is required.";
+  if (detail === "missing_capability:can_decide_gates") {
+    return "Your role can review this run but not decide it — an approver or business analyst signs the gate.";
+  }
+  if (detail === "missing_capability:can_rerun_steps") {
+    return "Retrying and re-running are Data Platform actions — a data engineer or operations role.";
+  }
+  if (
+    detail === "not_authenticated" ||
+    detail === "invalid_token" ||
+    detail === "user_not_found_or_inactive"
+  ) {
+    return "Your session has ended — sign in again.";
+  }
   if (detail === "unknown_user") return "That user no longer exists.";
   return detail;
 }

@@ -2,9 +2,10 @@
 
 import { useFormStatus } from "react-dom";
 import { toggleActive } from "@/app/admin/users/actions";
+import RolesEditor from "@/components/admin/RolesEditor";
 import DataTable, { type Column } from "@/components/ui/DataTable";
 import Timestamp from "@/components/ui/Timestamp";
-import type { AdminUser } from "@/lib/users";
+import type { AdminUser, Role } from "@/lib/users";
 
 function ToggleActiveButton({ user }: { user: AdminUser }) {
   const { pending } = useFormStatus();
@@ -20,7 +21,7 @@ function ToggleActiveButton({ user }: { user: AdminUser }) {
   );
 }
 
-export default function UsersTable({ users }: { users: AdminUser[] }) {
+export default function UsersTable({ users, roles }: { users: AdminUser[]; roles: Role[] }) {
   const columns: Column<AdminUser>[] = [
     {
       key: "email",
@@ -37,19 +38,7 @@ export default function UsersTable({ users }: { users: AdminUser[] }) {
     {
       key: "roles",
       header: "Roles",
-      render: (row) => (
-        <span className="role-chip-list">
-          {row.roles.length === 0 ? (
-            <span className="role-chip">no role</span>
-          ) : (
-            row.roles.map((role) => (
-              <span key={role} className="role-chip">
-                {role.replace(/_/g, " ")}
-              </span>
-            ))
-          )}
-        </span>
-      ),
+      render: (row) => <RolesEditor userId={row.id} current={row.roles} roles={roles} />,
     },
     {
       key: "status",

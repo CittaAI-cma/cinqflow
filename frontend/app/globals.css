@@ -1316,6 +1316,9 @@ tr:last-child td { border-bottom: none; }
   padding: 0.5px 5px;
 }
 .tag.cite { background: var(--cite-weak); color: var(--cite); }
+/* The signed-in user's persona (lib/persona.ts) beside their name. Neutral on
+   purpose: violet is the gates', teal is citations' - this is identity metadata. */
+.tag.persona { background: var(--mat); color: var(--ink2); margin-left: 6px; }
 
 .chip-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .chip {

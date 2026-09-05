@@ -12,14 +12,14 @@ from psycopg.rows import dict_row
 from cinqflow.api.app import create_app
 from cinqflow.queue.worker import drain
 from cinqflow.workflow.states import UploadStatus
-from tests.conftest import requires_db
+from tests.conftest import authed_client, requires_db
 
 pytestmark = requires_db
 
 
 @pytest.fixture
 def client(conn, settings):  # conn creates/drops the schemas
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 def _drain(settings) -> int:

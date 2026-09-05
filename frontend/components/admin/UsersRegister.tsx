@@ -17,7 +17,7 @@ export default async function UsersRegister() {
             <PlusIcon size={15} /> New user
           </Link>
         </div>
-        <UsersTable users={users} />
+        <UsersTable users={users} roles={roles} />
         <p className="dt-sub" style={{ marginTop: 10 }}>
           {roles.length} roles available — Business Analyst, Data Steward, Data Engineer,
           Operations, Approver, Administrator, Read-Only User.

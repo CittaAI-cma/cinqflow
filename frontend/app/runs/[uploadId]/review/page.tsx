@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import GateActions from "@/components/GateActions";
+import GateLocked from "@/components/run/GateLocked";
 import LandingWait from "@/components/run/LandingWait";
 import RetryButton from "@/components/run/RetryButton";
 import ReviewEvidence from "@/components/run/ReviewEvidence";
@@ -9,6 +10,7 @@ import StatusWord from "@/components/StatusWord";
 import AnnounceOnMount from "@/components/ui/AnnounceOnMount";
 import { getUpload } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
+import { personaDefaults, RERUN_LOCKED_REASON } from "@/lib/persona";
 import { canonicalStep, isStepViewable, runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +48,7 @@ export default async function ReviewPage({
   // gates this route on a session cookie, but the actual decided-by identity
   // for a still-undecided run comes from here, not a placeholder.
   const user = await requireUser();
+  const defaults = personaDefaults(user.persona);
 
   const { upload, profile, interpretation, approvals, runs } = detail;
 
@@ -74,7 +77,11 @@ export default async function ReviewPage({
       <VerdictCard profile={profile} interpretation={interpretation} />
 
       <div className="review-right">
-        <ReviewEvidence profile={profile} interpretation={interpretation} />
+        <ReviewEvidence
+          profile={profile}
+          interpretation={interpretation}
+          initialMode={defaults.readingMode}
+        />
 
         {decision ? (
           <div className="card gate-box">
@@ -129,7 +136,13 @@ export default async function ReviewPage({
                       {upload.error ?? "Landing failed."} The write was rolled back — Bronze has
                       no rows from this batch.
                     </p>
-                    <RetryButton uploadId={uploadId} label="Retry landing" />
+                    {user.capabilities.can_rerun_steps ? (
+                      <RetryButton uploadId={uploadId} label="Retry landing" />
+                    ) : (
+                      <p className="meta" style={{ margin: 0, flex: "1 1 100%" }}>
+                        {RERUN_LOCKED_REASON}
+                      </p>
+                    )}
                   </>
                 ) : null}
               </div>
@@ -137,7 +150,7 @@ export default async function ReviewPage({
               <LandingWait uploadId={uploadId} />
             )}
           </div>
-        ) : (
+        ) : user.capabilities.can_decide_gates ? (
           <GateActions
             uploadId={uploadId}
             filename={upload.filename}
@@ -147,6 +160,8 @@ export default async function ReviewPage({
               interpretation.content.signals.filter((s) => s.severity === "blocker").length
             }
           />
+        ) : (
+          <GateLocked gate="G1" />
         )}
       </div>
     </div>
