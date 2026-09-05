@@ -8,6 +8,7 @@ import {
   SOURCE_SYSTEMS,
 } from "@/lib/appConfig";
 import { listUploads } from "@/lib/api";
+import { getCurrentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -41,10 +42,15 @@ export default async function AddIngestionPage({
 }: {
   searchParams: Promise<{ feed?: string }>;
 }) {
-  const [{ domains, sourceSystems }, { feed }] = await Promise.all([
+  const [{ domains, sourceSystems }, { feed }, user] = await Promise.all([
     pickerOptions(),
     searchParams,
+    getCurrentUser(),
   ]);
+  // The upload record names who uploaded it: the signed-in user, not a fixed
+  // placeholder (found by the 2026-09-05 end-to-end run). The seed stays as the
+  // fallback for a render without a session.
+  const uploader = user?.email ?? DEFAULT_UPLOADER;
 
   return (
     <>
@@ -54,7 +60,7 @@ export default async function AddIngestionPage({
         environment={PLATFORM_ENVIRONMENT}
         domains={domains}
         sourceSystems={sourceSystems}
-        uploader={DEFAULT_UPLOADER}
+        uploader={uploader}
         initialGroupName={feed ?? ""}
       />
     </>

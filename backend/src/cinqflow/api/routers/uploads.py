@@ -20,7 +20,7 @@ from cinqflow.queue.queue import Queue
 from cinqflow.settings import Settings
 from cinqflow.workers import interpret_upload, land_bronze, profile_upload, reject_upload
 from cinqflow.workflow.dag import feed_version_scope, step_for_topic
-from cinqflow.workflow.models import UploadDetail, build_upload_progress, mask_row
+from cinqflow.workflow.models import UploadDetail, build_upload_progress, mask_facts
 from cinqflow.workflow.rerun import RerunRefused, rerun_step
 from cinqflow.workflow.states import UploadStatus
 from cinqflow.workflow.store import (
@@ -162,16 +162,11 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
 
         profile = store.get_profile(upload_id)
         if profile is not None:
-            phi = set(profile.facts.phi_candidates)
-            profile = profile.model_copy(
-                update={
-                    "facts": profile.facts.model_copy(
-                        update={
-                            "sample_rows": [mask_row(r, phi) for r in profile.facts.sample_rows]
-                        }
-                    )
-                }
-            )
+            # PHI never leaves the API unmasked - `mask_facts` strips example values,
+            # value frequencies and bounds for PHI columns and masks the sample rows.
+            # (Found by the 2026-09-05 end-to-end run: this handler masked only the
+            # sample rows, so PHI `sample_values` reached the client.)
+            profile = profile.model_copy(update={"facts": mask_facts(profile.facts)})
 
         detail = UploadDetail(
             upload=upload,
