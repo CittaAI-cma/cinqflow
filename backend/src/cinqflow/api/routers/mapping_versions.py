@@ -34,7 +34,13 @@ from cinqflow.queue.queue import Queue
 from cinqflow.settings import Settings
 from cinqflow.workers import promote_silver, run_preview
 from cinqflow.workflow.dag import feed_version_scope
-from cinqflow.workflow.models import MappingSpec, build_step_progress, mask_preview_rows
+from cinqflow.workflow.g2_gate import g2_blockers
+from cinqflow.workflow.models import (
+    MappingSpec,
+    build_step_progress,
+    mask_facts,
+    mask_preview_rows,
+)
 from cinqflow.workflow.store import (
     DraftAlreadyOpen,
     NotEditable,
@@ -287,6 +293,135 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
             },
         }
 
+    @router.get("/api/feeds/{feed}/mapping-versions/{version}/columns")
+    def mapping_version_columns(feed: str, version: int, conn=Depends(get_conn)) -> dict:
+        """Every source column in the batch, mapped or not.
+
+        The studio has only ever been able to show the columns that made it into
+        the spec. The ones the model was not confident enough to place - exactly
+        the ones needing a person - were computed, dropped at the render
+        boundary, and never seen again. An analyst could finish the table, see
+        no unfinished work, and be refused at G2 for a required target sitting
+        in a column the screen never showed.
+
+        The roster resolves its batch server-side, the same feed -> batch join
+        `mapping_version_progress` already does. Deliberately *not* built from
+        `ai_context` alone: that is `{}` on any version created with
+        `derive_from_version`, which is the normal path after the first
+        approval, so an `ai_context`-only roster would silently degrade to
+        today's table from v2 onward - correct in the demo, wrong in use.
+
+        Facts come from the batch's own Bronze profile, through `mask_facts`:
+        PHI columns keep their name, type and null ratio and lose their example
+        values, because "what is in this column" is the one question a mapping
+        screen must answer without showing anyone a patient.
+        """
+        store = WorkflowStore(conn, s)
+        mapping = store.get_mapping_version(feed, version)
+        if mapping is None:
+            raise HTTPException(404, detail=f"unknown mapping version: {feed} v{version}")
+
+        preview = store.get_preview(feed, version)
+        batch_id = preview.sample.batch_id if preview else None
+        if batch_id is None:
+            latest = store.latest_batch_for_feed(feed)
+            batch_id = latest.batch_id if latest else None
+
+        profile = store.get_bronze_profile(batch_id) if batch_id else None
+        if profile is None:
+            # No landing to enumerate against. An empty roster with its reason
+            # beats a roster silently narrowed to the spec, which is the failure
+            # this endpoint exists to remove.
+            return {
+                "feed": feed,
+                "version": version,
+                "batch_id": batch_id,
+                "resolved_from": None,
+                "unresolved_reason": (
+                    "no bronze profile for this feed yet, so the full column list is unknown"
+                ),
+                "columns": [],
+            }
+
+        facts = mask_facts(profile.facts)
+
+        # The AI's own read of each column, from the proposal this draft was
+        # seeded from. Absent on a derived version - which is why it decorates
+        # the roster rather than defining it.
+        candidates: dict[str, dict] = {}
+        origin = (
+            store.get_proposal_by_id(mapping.origin_proposal_id)
+            if mapping.origin_proposal_id
+            else None
+        )
+        if origin is not None:
+            candidates = {
+                f.source: {
+                    "target": f.target,
+                    "rejected_target": f.rejected_target,
+                    "concept": f.concept,
+                    "confidence": f.confidence,
+                    "evidence": f.evidence,
+                    "status": f.status,
+                    "reason": f.reason,
+                }
+                for f in origin.content.fields
+            }
+
+        in_spec = {field.source: field.target for field in mapping.spec.fields}
+
+        # What the last preview actually did to each column. Counted over the
+        # persisted run, so "4 issues" is a fact about rows that ran, not a
+        # prediction - and it is 0, not absent, when a preview exists and the
+        # column was clean.
+        issue_counts: dict[str, int] = {}
+        if preview is not None:
+            for row in preview.row_results:
+                for outcome in row.fields:
+                    if outcome.outcome in ("failure", "quarantined", "rejected"):
+                        issue_counts[outcome.source] = issue_counts.get(outcome.source, 0) + 1
+
+        columns = [
+            {
+                "name": column.name,
+                "inferred_type": column.inferred_type,
+                "role": column.hint,
+                "null_ratio": column.null_ratio,
+                "distinct_count": column.distinct_count,
+                "sentinel_count": column.sentinel_count,
+                "constant": column.constant,
+                "sample_values": column.sample_values,
+                "phi_masked": column.phi_candidate,
+                "in_spec": column.name in in_spec,
+                "mapped_target": in_spec.get(column.name),
+                "candidate": candidates.get(column.name),
+                "issue_count": issue_counts.get(column.name, 0) if preview else None,
+            }
+            for column in facts.columns
+        ]
+
+        return {
+            "feed": feed,
+            "version": version,
+            "batch_id": batch_id,
+            # Said out loud because the roster's authority depends on it: these
+            # are the columns of *this* batch, profiled over however many rows
+            # the profiler actually read.
+            "resolved_from": {
+                "batch_id": batch_id,
+                "row_count": facts.row_count,
+                "is_sample": profile.is_sample,
+                "profiled_ts": profile.profiled_ts.isoformat(),
+            },
+            "unresolved_reason": None,
+            "counts": {
+                "total": len(columns),
+                "in_spec": sum(1 for c in columns if c["in_spec"]),
+                "unplaced": sum(1 for c in columns if not c["in_spec"]),
+            },
+            "columns": columns,
+        }
+
     @router.get("/api/feeds/{feed}/mapping-versions/{version}/diff")
     def diff_mapping_version(
         feed: str, version: int, against: int | None = None, conn=Depends(get_conn)
@@ -458,6 +593,33 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
             "steps": [p.model_dump(mode="json") for p in build_step_progress(step_runs)],
         }
 
+    @router.get("/api/feeds/{feed}/mapping-versions/{version}/gate")
+    def mapping_version_gate(feed: str, version: int, conn=Depends(get_conn)) -> dict:
+        """Whether G2 will open, and every reason it will not.
+
+        `GET .../preview` already reported `approvable`, but that field is
+        literally `is_current` - it answers "does a preview describe this spec",
+        which is one of four rules. A draft with a current preview and an
+        unmapped `members.source_system_id` rendered an enabled Approve button
+        that 409s. This endpoint answers the whole question from the same list
+        the approve handler refuses from, so the two cannot disagree.
+
+        Not gated on `can_decide_gates`: knowing what is left to do is not
+        deciding. Whoever presses the button still needs the capability.
+        """
+        store = WorkflowStore(conn, s)
+        mapping = store.get_mapping_version(feed, version)
+        if mapping is None:
+            raise HTTPException(404, detail=f"unknown mapping version: {feed} v{version}")
+        canonical, _ = _canonical_for(s, mapping.domain)
+        blockers = g2_blockers(store, canonical, mapping, feed, version)
+        return {
+            "feed": feed,
+            "version": version,
+            "approvable": not blockers,
+            "blockers": [b.as_dict() for b in blockers],
+        }
+
     # --------------------------------------------------------------- G2 (S6)
     @router.post("/api/feeds/{feed}/mapping-versions/{version}/approve", status_code=202)
     def approve_mapping_version(
@@ -479,56 +641,16 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
         if mapping is None:
             raise HTTPException(404, detail=f"unknown mapping version: {feed} v{version}")
 
-        decided = store.approval_for_mapping(feed=feed, version=version)
-        if decided is not None:
-            raise HTTPException(
-                409,
-                detail={
-                    "message": f"{feed} v{version} is already approved",
-                    "approval_id": decided.approval_id,
-                    "approver": decided.approver,
-                    "decided_ts": decided.decided_ts.isoformat(),
-                },
-            )
-        if mapping.status == "superseded":
-            raise HTTPException(
-                409,
-                detail={"message": f"{feed} v{version} was superseded by a later version"},
-            )
-
+        # One list, shared with `GET .../gate`, so the button the studio renders
+        # and the answer this handler gives are derived from the same rules. The
+        # refusal keeps the shape it always had: the first blocker's own body.
         canonical, _ = _canonical_for(s, mapping.domain)
-        touched_tables = {canonical.table_of(t) for t in mapping.spec.targets if t}
-        missing_required = [
-            target
-            for target in canonical.required_targets(t for t in touched_tables if t)
-            if target not in mapping.spec.targets
-        ]
-        if missing_required:
-            raise HTTPException(
-                409,
-                detail={
-                    "message": (
-                        f"{len(missing_required)} required field(s) are not mapped: "
-                        + ", ".join(sorted(missing_required))
-                    ),
-                    "hint": "map each entity's primary key before approving",
-                    "missing_required": sorted(missing_required),
-                },
-            )
+        blockers = g2_blockers(store, canonical, mapping, feed, version)
+        if blockers:
+            raise HTTPException(409, detail=blockers[0].as_dict())
 
         preview = store.get_current_preview(feed, version, spec_fingerprint(mapping.spec))
-        if preview is None:
-            raise HTTPException(
-                409,
-                detail={
-                    "message": "this version has no preview of its current spec",
-                    "hint": "run a preview and approve what you saw",
-                },
-            )
-
         landing = store.get_run(preview.sample.batch_id, kind="land_bronze")
-        if landing is None:  # pragma: no cover - a preview always samples a batch
-            raise HTTPException(409, detail={"message": "the previewed batch has no landing run"})
 
         approval, frozen = store.approve_mapping_version(
             feed=feed,

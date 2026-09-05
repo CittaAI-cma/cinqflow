@@ -10,6 +10,7 @@ import {
   type SpecFieldError,
 } from "@/lib/api";
 import { authMutate } from "@/lib/auth";
+import { valueMapRecord } from "@/lib/valueMap";
 
 export interface StudioState {
   errors?: SpecFieldError[];
@@ -83,12 +84,9 @@ export async function saveSpec(_previous: StudioState, form: FormData): Promise<
         preservedArgs = {};
       }
     }
-    const valueMapRaw = String(form.get(`value_map_${i}`) ?? "").trim();
-    const valueMap: Record<string, string> = {};
-    for (const pair of valueMapRaw.split(",")) {
-      const [key, value] = pair.split("=").map((part) => part?.trim());
-      if (key && value) valueMap[key] = value;
-    }
+    // Parsed by the same function the row echoes back, so what the analyst
+    // reads under the box is what the spec will carry - see lib/valueMap.ts.
+    const valueMap = valueMapRecord(String(form.get(`value_map_${i}`) ?? ""));
 
     fields.push({
       source,

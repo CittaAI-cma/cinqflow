@@ -1,12 +1,16 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useRef, useState } from "react";
+import { useActionState, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { saveSpec, type StudioState } from "@/app/mapping/actions";
 import Confidence from "@/components/ui/Confidence";
+import UnplacedColumns from "@/components/UnplacedColumns";
 import { evidenceClass } from "@/lib/evidence";
+import { formatValueMap, parseValueMap } from "@/lib/valueMap";
 import { useToast } from "@/lib/useToast";
 import type {
+  ColumnRoster,
+  MappingColumn,
   MappingFieldSpec,
   MappingVersionDetail,
   MappingVocabulary,
@@ -184,6 +188,7 @@ function SpecRow({
   errors,
   rationale,
   requiredTargets,
+  onTargetChange,
 }: {
   field: MappingFieldSpec;
   index: number;
@@ -191,12 +196,17 @@ function SpecRow({
   errors: SpecFieldError[] | undefined;
   rationale: MappingVersionDetail["ai_context"][string] | undefined;
   requiredTargets: Set<string>;
+  /** Reports this row's target as it changes, so the roster can tell which
+   *  canonical targets are claimed before the next save rather than after. */
+  onTargetChange?: (index: number, target: string) => void;
 }) {
   const [target, setTarget] = useState(field.target);
   const [cast, setCast] = useState(field.cast);
   const [op, setOp] = useState(field.transform?.op ?? "");
   const [onNull, setOnNull] = useState(field.on_null);
   const [onUnmapped, setOnUnmapped] = useState(field.on_unmapped_value);
+  const [valueMapText, setValueMapText] = useState(formatValueMap(field.value_map));
+  const valueMap = useMemo(() => parseValueMap(valueMapText), [valueMapText]);
   /** Set when changing the target forced the cast to change with it, so the
    *  substitution is stated rather than just happening. */
   const [castFollowed, setCastFollowed] = useState<string | null>(null);
@@ -228,6 +238,11 @@ function SpecRow({
    *  the one that fits, and says so, rather than waiting to be refused. */
   function chooseTarget(next: string) {
     setTarget(next);
+    // Reported upward so the roster below knows which canonical targets are
+    // claimed *right now*, not only which were claimed at the last save.
+    // Without it, Taking a suggestion for a target the analyst has just
+    // pointed another row at would build a spec the validator refuses whole.
+    onTargetChange?.(index, next);
     const nextDeclared = vocabulary.target_types[next];
     const nextAllowed = nextDeclared ? vocabulary.casts_for_type?.[nextDeclared] : undefined;
     if (nextAllowed?.length && !nextAllowed.includes(cast)) {
@@ -299,34 +314,98 @@ function SpecRow({
       </td>
       <td>
         <select
-          name={`cast_${index}`}
-          value={cast}
-          onChange={(event) => {
-            setCast(event.target.value);
-            setCastFollowed(null);
-          }}
-          className={castError || castIsIllegal ? "bad" : undefined}
-          aria-invalid={castError || castIsIllegal ? true : undefined}
-          aria-label={`Cast for ${field.source}`}
+          name={`on_null_${index}`}
+          value={onNull}
+          onChange={(event) => setOnNull(event.target.value)}
+          aria-label={`Null handling for ${field.source}`}
         >
-          {castOptions.map((option) => (
-            <option key={option} value={option}>
-              {option}
-              {allowed && !allowed.includes(option) ? " · cannot satisfy the target" : ""}
+          {vocabulary.on_null.map((rule) => (
+            <option key={rule} value={rule}>
+              {rule}
             </option>
           ))}
         </select>
-        {castFollowed ? (
-          <div className="meta small">
-            followed the target to <span className="mono">{castFollowed}</span>
-          </div>
-        ) : declared && allowed ? (
-          <div className="meta small">
-            {declared}
-            {allowed.length === 1 ? " · the only cast that fits" : ""}
+        <input
+          name={`default_${index}`}
+          defaultValue={field.default ?? ""}
+          placeholder="default"
+          required={defaultRequired}
+          aria-label={`Default value for ${field.source}`}
+          title={defaultRequired ? "on_null 'default' cannot be saved without a value" : undefined}
+          aria-invalid={nullError ? true : undefined}
+          className={nullError ? "bad narrow" : "narrow"}
+        />
+        {defaultRequired ? <div className="meta small">needs a value</div> : null}
+        {nullError ? <div className="error small">{nullError}</div> : null}
+      </td>
+      <td>
+        {/* Controlled, unlike the other text boxes, because this one is the
+            only input whose text is not what gets stored: `M=male, F=female`
+            becomes two pairs, and a fragment missing either half becomes
+            nothing at all. The echo below is the parse, so the analyst reads
+            what the spec will carry rather than what they typed. */}
+        <input
+          name={`value_map_${index}`}
+          value={valueMapText}
+          onChange={(event) => setValueMapText(event.target.value)}
+          placeholder="M=male, F=female"
+          required={valueMapRequired}
+          aria-label={`Value map for ${field.source}`}
+          title={
+            valueMapRequired
+              ? `on_unmapped_value '${onUnmapped}' only means something with a value map`
+              : undefined
+          }
+          aria-invalid={mapError || valueMap.dropped.length ? true : undefined}
+          className={mapError || valueMap.dropped.length ? "bad" : undefined}
+        />
+        <select
+          name={`on_unmapped_${index}`}
+          value={onUnmapped}
+          onChange={(event) => setOnUnmapped(event.target.value)}
+          aria-label={`Unmapped value rule for ${field.source}`}
+        >
+          {vocabulary.on_unmapped_value.map((rule) => (
+            <option key={rule} value={rule}>
+              {rule}
+            </option>
+          ))}
+        </select>
+        {valueMap.pairs.length ? (
+          <div className="value-map-echo">
+            {valueMap.pairs.map(([code, value]) => (
+              <span key={code} className="value-map-pair">
+                <span className="mono">{code}</span>
+                <span aria-hidden="true">→</span>
+                <span className="mono">{value}</span>
+              </span>
+            ))}
           </div>
         ) : null}
-        {castError ? <div className="error small">{castError}</div> : null}
+        {/* A fragment with no `=`, or nothing on one side of it, cannot become
+            a mapping and is dropped. It used to be dropped in silence, so a
+            typo meant those codes quietly fell through to `on_unmapped_value`
+            and the analyst found out from a preview. */}
+        {valueMap.dropped.length ? (
+          <div className="error small">
+            not a pair, so not mapped:{" "}
+            {valueMap.dropped.map((fragment) => (
+              <span key={fragment} className="mono">
+                {fragment}{" "}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {valueMap.duplicates.length ? (
+          <div className="meta small">
+            listed twice, last wins:{" "}
+            <span className="mono">{[...new Set(valueMap.duplicates)].join(", ")}</span>
+          </div>
+        ) : null}
+        {valueMapRequired && !valueMap.pairs.length ? (
+          <div className="meta small">needs a map</div>
+        ) : null}
+        {mapError ? <div className="error small">{mapError}</div> : null}
       </td>
       <td>
         <select
@@ -379,61 +458,34 @@ function SpecRow({
       </td>
       <td>
         <select
-          name={`on_null_${index}`}
-          value={onNull}
-          onChange={(event) => setOnNull(event.target.value)}
-          aria-label={`Null handling for ${field.source}`}
+          name={`cast_${index}`}
+          value={cast}
+          onChange={(event) => {
+            setCast(event.target.value);
+            setCastFollowed(null);
+          }}
+          className={castError || castIsIllegal ? "bad" : undefined}
+          aria-invalid={castError || castIsIllegal ? true : undefined}
+          aria-label={`Cast for ${field.source}`}
         >
-          {vocabulary.on_null.map((rule) => (
-            <option key={rule} value={rule}>
-              {rule}
+          {castOptions.map((option) => (
+            <option key={option} value={option}>
+              {option}
+              {allowed && !allowed.includes(option) ? " · cannot satisfy the target" : ""}
             </option>
           ))}
         </select>
-        <input
-          name={`default_${index}`}
-          defaultValue={field.default ?? ""}
-          placeholder="default"
-          required={defaultRequired}
-          aria-label={`Default value for ${field.source}`}
-          title={defaultRequired ? "on_null 'default' cannot be saved without a value" : undefined}
-          aria-invalid={nullError ? true : undefined}
-          className={nullError ? "bad narrow" : "narrow"}
-        />
-        {defaultRequired ? <div className="meta small">needs a value</div> : null}
-        {nullError ? <div className="error small">{nullError}</div> : null}
-      </td>
-      <td>
-        <input
-          name={`value_map_${index}`}
-          defaultValue={Object.entries(field.value_map)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(", ")}
-          placeholder="M=male, F=female"
-          required={valueMapRequired}
-          aria-label={`Value map for ${field.source}`}
-          title={
-            valueMapRequired
-              ? `on_unmapped_value '${onUnmapped}' only means something with a value map`
-              : undefined
-          }
-          aria-invalid={mapError ? true : undefined}
-          className={mapError ? "bad" : undefined}
-        />
-        <select
-          name={`on_unmapped_${index}`}
-          value={onUnmapped}
-          onChange={(event) => setOnUnmapped(event.target.value)}
-          aria-label={`Unmapped value rule for ${field.source}`}
-        >
-          {vocabulary.on_unmapped_value.map((rule) => (
-            <option key={rule} value={rule}>
-              {rule}
-            </option>
-          ))}
-        </select>
-        {valueMapRequired ? <div className="meta small">needs a map</div> : null}
-        {mapError ? <div className="error small">{mapError}</div> : null}
+        {castFollowed ? (
+          <div className="meta small">
+            followed the target to <span className="mono">{castFollowed}</span>
+          </div>
+        ) : declared && allowed ? (
+          <div className="meta small">
+            {declared}
+            {allowed.length === 1 ? " · the only cast that fits" : ""}
+          </div>
+        ) : null}
+        {castError ? <div className="error small">{castError}</div> : null}
       </td>
       <td className="center">
         <input
@@ -458,9 +510,14 @@ function SpecRow({
 
 export default function MappingStudio({
   mapping,
+  roster,
   basePath,
 }: {
   mapping: MappingVersionDetail;
+  /** Every source column in the batch, from `GET .../columns`. Null on an API
+   *  too old to serve it, in which case the studio renders exactly what it
+   *  rendered before: the columns the spec already carries. */
+  roster?: ColumnRoster | null;
   /** The route this studio is being rendered on — `/mapping/{feed}` or
    *  `/runs/{uploadId}/mapping`. Submitted with the form so `saveSpec` can
    *  revalidate the surface the analyst is actually looking at; without it a
@@ -470,6 +527,65 @@ export default function MappingStudio({
 }) {
   const [state, action] = useActionState<StudioState, FormData>(saveSpec, {});
   const { spec, vocabulary, ai_context: aiContext } = mapping;
+
+  /** Columns taken from the roster this session, appended to the table as real
+   *  rows. They are ordinary fields from the moment they appear: the same
+   *  `SpecRow`, the same names, the same `field_count` — so the save path,
+   *  the validation and the error annotation need to know nothing about them.
+   *  `edited: true`, because a column a person chose to place is theirs. */
+  const [taken, setTaken] = useState<MappingFieldSpec[]>([]);
+
+  /** Each row's target as it stands right now. Seeded from the stored spec and
+   *  updated by `SpecRow` as the analyst edits, so "is this target already
+   *  claimed" is answered against the screen rather than against the last
+   *  save. A row marked Drop still counts as claiming its target until the
+   *  save actually removes it — conservative in the safe direction, since the
+   *  cost is one sentence and the alternative is a refused save. */
+  const [liveTargets, setLiveTargets] = useState<Record<number, string>>({});
+  const noteTarget = useCallback(
+    (index: number, target: string) => setLiveTargets((prev) => ({ ...prev, [index]: target })),
+    [],
+  );
+
+  const rows = useMemo(() => [...spec.fields, ...taken], [spec.fields, taken]);
+  const takenTargets = useMemo(() => {
+    const claimed = new Map<string, string>();
+    rows.forEach((field, index) => {
+      const target = liveTargets[index] ?? field.target;
+      if (target) claimed.set(target, field.source);
+    });
+    return claimed;
+  }, [rows, liveTargets]);
+
+  /** What the batch has and this mapping does not — minus anything taken since
+   *  the page rendered, which is already a row above. */
+  const unplacedColumns = useMemo(() => {
+    if (!roster?.columns.length) return [];
+    const placed = new Set(rows.map((field) => field.source));
+    return roster.columns.filter((column) => !placed.has(column.name));
+  }, [roster, rows]);
+
+  function take(column: MappingColumn, target: string) {
+    setTaken((prev) => [
+      ...prev,
+      {
+        source: column.name,
+        target,
+        // The cast the target's declared type accepts, so a taken row is never
+        // born invalid. `castsFor` is the same helper the row's own dropdown
+        // reads, from the server's published `casts_for_type`.
+        cast: castsFor(vocabulary, target, "string").allowed?.[0] ?? "string",
+        transform: null,
+        value_map: {},
+        on_null: "pass",
+        default: null,
+        on_unmapped_value: "pass",
+        edited: true,
+        note: null,
+      },
+    ]);
+    setDirty(true);
+  }
   const specLevel = state.errors?.filter((e) => e.field_index === -1) ?? [];
   const requiredTargets = useMemo(
     () => new Set(Object.values(vocabulary.primary_keys).flat()),
@@ -583,7 +699,7 @@ export default function MappingStudio({
     >
       <input type="hidden" name="feed" value={mapping.feed} />
       <input type="hidden" name="version" value={mapping.version} />
-      <input type="hidden" name="field_count" value={spec.fields.length} />
+      <input type="hidden" name="field_count" value={rows.length} />
       {basePath ? <input type="hidden" name="base_path" value={basePath} /> : null}
 
       {state.error ? <p className="error">{state.error}</p> : null}
@@ -641,16 +757,22 @@ export default function MappingStudio({
             <tr>
               <th>Source column</th>
               <th>Canonical target</th>
-              <th>Cast</th>
-              <th>Transform</th>
-              <th>Nulls</th>
-              <th>Value map</th>
+              {/* Left to right is the order `execute_field` actually runs:
+                  on_null, then the value map, then the transform, then the
+                  cast. The table used to read Cast · Transform · Nulls · Value
+                  map, which anyone reads as the pipeline and which is very
+                  nearly its reverse - so an analyst reasoning about why a value
+                  came out wrong reasoned in the wrong direction. */}
+              <th>1 · Nulls</th>
+              <th>2 · Value map</th>
+              <th>3 · Transform</th>
+              <th>4 · Cast</th>
               <th>Mine</th>
               <th>Drop</th>
             </tr>
           </thead>
           <tbody>
-            {spec.fields.map((field, index) => (
+            {rows.map((field, index) => (
               <SpecRow
                 key={`${field.source}-${index}`}
                 field={field}
@@ -659,11 +781,19 @@ export default function MappingStudio({
                 errors={state.errors}
                 rationale={aiContext[field.source]}
                 requiredTargets={requiredTargets}
+                onTargetChange={noteTarget}
               />
             ))}
           </tbody>
         </table>
       </div>
+
+      <UnplacedColumns
+        columns={unplacedColumns}
+        takenTargets={takenTargets}
+        onTake={take}
+        requiredTargets={requiredTargets}
+      />
 
       <div className="card grid" style={{ marginTop: 14 }}>
         <label htmlFor="new_source">Add a mapping the AI left unmapped</label>

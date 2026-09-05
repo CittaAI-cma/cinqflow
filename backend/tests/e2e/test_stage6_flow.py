@@ -119,6 +119,95 @@ def test_g2_refuses_a_touched_entity_missing_its_identifier(client, settings, pr
     assert client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["status"] == "draft"
 
 
+def test_the_gate_reports_every_reason_it_is_closed_before_the_button_is_pressed(
+    client, settings, previewed
+):
+    """The defect this endpoint exists for: `approvable` on the preview is
+    literally `is_current`, so a draft with a current preview and an unmapped
+    required field reported approvable and then 409'd. The gate answers the
+    whole question, from the same list the approve handler refuses from."""
+    open_now = client.get(f"/api/feeds/{FEED}/mapping-versions/1/gate").json()
+    assert open_now["approvable"] is True and open_now["blockers"] == []
+
+    spec = client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["spec"]
+    spec["fields"] = [f for f in spec["fields"] if f["target"] != "members.source_system_id"]
+    assert client.put(f"/api/feeds/{FEED}/mapping-versions/1", json=spec).status_code == 200
+
+    # Dropping a field changes what executes, so this closes the gate twice
+    # over. Both reasons are reported: the analyst fixes them in one pass
+    # instead of finding the second only after fixing the first.
+    closed = client.get(f"/api/feeds/{FEED}/mapping-versions/1/gate").json()
+    assert closed["approvable"] is False
+    codes = [b["code"] for b in closed["blockers"]]
+    assert codes == ["missing_required", "no_current_preview"]
+
+    missing = closed["blockers"][0]
+    assert "members.source_system_id" in missing["missing_required"]
+    assert missing["anchor"] == "unmapped"
+
+    # And the button agrees with the page: the refusal is the first blocker.
+    refused = client.post(f"/api/feeds/{FEED}/mapping-versions/1/approve", json={})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == codes[0]
+
+
+def test_the_roster_survives_a_derived_version_with_no_proposal(client, settings, previewed):
+    """The trap the roster endpoint had to avoid: `ai_context` is empty on any
+    version created with `derive_from_version`, which is the normal path after
+    the first approval. A roster built from the proposal alone would be complete
+    in the demo and silently degrade to the spec-only table from v2 onward -
+    which is the whole defect it exists to remove.
+
+    Lives in Stage 6 because deriving a version requires the previous one to be
+    decided; a feed may only have one open draft.
+    """
+    first = client.get(f"/api/feeds/{FEED}/mapping-versions/1/columns").json()
+    assert first["counts"]["total"] > len(
+        client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["spec"]["fields"]
+    ), "the batch has columns the seeded spec did not place — that is the point"
+
+    client.post(f"/api/feeds/{FEED}/mapping-versions/1/approve", json={})
+    created = client.post(f"/api/feeds/{FEED}/mapping-versions", json={"derive_from_version": 1})
+    assert created.status_code == 201, created.text
+
+    # The AI's rationale really is gone on a derived version...
+    detail = client.get(f"/api/feeds/{FEED}/mapping-versions/2").json()
+    assert detail["ai_context"] == {}
+
+    # ...and the roster is not.
+    second = client.get(f"/api/feeds/{FEED}/mapping-versions/2/columns").json()
+    assert [c["name"] for c in second["columns"]] == [c["name"] for c in first["columns"]]
+    assert all(c["candidate"] is None for c in second["columns"])
+
+
+def test_the_roster_counts_the_issues_the_preview_actually_found(client, settings, previewed):
+    """`issue_count` is a fact about rows that ran, not a prediction: the third
+    roster row has an empty member_id, and the spec rejects on null there."""
+    spec = client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["spec"]
+    identifier = next(f for f in spec["fields"] if f["target"] == "members.source_system_id")
+    identifier["on_null"] = "reject"
+    client.put(f"/api/feeds/{FEED}/mapping-versions/1", json=spec)
+    client.post(f"/api/feeds/{FEED}/mapping-versions/1/preview", json={})
+    _drain(settings)
+
+    roster = client.get(f"/api/feeds/{FEED}/mapping-versions/1/columns").json()
+    by_name = {c["name"]: c for c in roster["columns"]}
+    assert by_name[identifier["source"]]["issue_count"] == 1
+    # A column that ran clean is 0, not absent — "no issues" and "not counted"
+    # are different facts and the screen renders them differently.
+    assert by_name["member_last_name"]["issue_count"] == 0
+
+
+def test_the_gate_names_an_approved_version_as_decided_not_pending(client, settings, previewed):
+    """Terminal states are things to know, not work to do - the strip has to say
+    'already approved', not 'nothing left to do'."""
+    client.post(f"/api/feeds/{FEED}/mapping-versions/1/approve", json={})
+    gate = client.get(f"/api/feeds/{FEED}/mapping-versions/1/gate").json()
+    assert gate["approvable"] is False
+    assert [b["code"] for b in gate["blockers"]] == ["already_approved"]
+    assert gate["blockers"][0]["approver"]
+
+
 def test_g2_is_queued_not_executed_inline(client, settings, previewed):
     _, batch_id = previewed
     response = client.post(
