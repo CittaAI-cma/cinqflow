@@ -5,6 +5,7 @@ import { useFormStatus } from "react-dom";
 import { saveSpec, type StudioState } from "@/app/mapping/actions";
 import Confidence from "@/components/ui/Confidence";
 import { evidenceClass } from "@/lib/evidence";
+import { formatValueMap, parseValueMap } from "@/lib/valueMap";
 import { useToast } from "@/lib/useToast";
 import type {
   MappingFieldSpec,
@@ -197,6 +198,8 @@ function SpecRow({
   const [op, setOp] = useState(field.transform?.op ?? "");
   const [onNull, setOnNull] = useState(field.on_null);
   const [onUnmapped, setOnUnmapped] = useState(field.on_unmapped_value);
+  const [valueMapText, setValueMapText] = useState(formatValueMap(field.value_map));
+  const valueMap = useMemo(() => parseValueMap(valueMapText), [valueMapText]);
   /** Set when changing the target forced the cast to change with it, so the
    *  substitution is stated rather than just happening. */
   const [castFollowed, setCastFollowed] = useState<string | null>(null);
@@ -299,34 +302,98 @@ function SpecRow({
       </td>
       <td>
         <select
-          name={`cast_${index}`}
-          value={cast}
-          onChange={(event) => {
-            setCast(event.target.value);
-            setCastFollowed(null);
-          }}
-          className={castError || castIsIllegal ? "bad" : undefined}
-          aria-invalid={castError || castIsIllegal ? true : undefined}
-          aria-label={`Cast for ${field.source}`}
+          name={`on_null_${index}`}
+          value={onNull}
+          onChange={(event) => setOnNull(event.target.value)}
+          aria-label={`Null handling for ${field.source}`}
         >
-          {castOptions.map((option) => (
-            <option key={option} value={option}>
-              {option}
-              {allowed && !allowed.includes(option) ? " · cannot satisfy the target" : ""}
+          {vocabulary.on_null.map((rule) => (
+            <option key={rule} value={rule}>
+              {rule}
             </option>
           ))}
         </select>
-        {castFollowed ? (
-          <div className="meta small">
-            followed the target to <span className="mono">{castFollowed}</span>
-          </div>
-        ) : declared && allowed ? (
-          <div className="meta small">
-            {declared}
-            {allowed.length === 1 ? " · the only cast that fits" : ""}
+        <input
+          name={`default_${index}`}
+          defaultValue={field.default ?? ""}
+          placeholder="default"
+          required={defaultRequired}
+          aria-label={`Default value for ${field.source}`}
+          title={defaultRequired ? "on_null 'default' cannot be saved without a value" : undefined}
+          aria-invalid={nullError ? true : undefined}
+          className={nullError ? "bad narrow" : "narrow"}
+        />
+        {defaultRequired ? <div className="meta small">needs a value</div> : null}
+        {nullError ? <div className="error small">{nullError}</div> : null}
+      </td>
+      <td>
+        {/* Controlled, unlike the other text boxes, because this one is the
+            only input whose text is not what gets stored: `M=male, F=female`
+            becomes two pairs, and a fragment missing either half becomes
+            nothing at all. The echo below is the parse, so the analyst reads
+            what the spec will carry rather than what they typed. */}
+        <input
+          name={`value_map_${index}`}
+          value={valueMapText}
+          onChange={(event) => setValueMapText(event.target.value)}
+          placeholder="M=male, F=female"
+          required={valueMapRequired}
+          aria-label={`Value map for ${field.source}`}
+          title={
+            valueMapRequired
+              ? `on_unmapped_value '${onUnmapped}' only means something with a value map`
+              : undefined
+          }
+          aria-invalid={mapError || valueMap.dropped.length ? true : undefined}
+          className={mapError || valueMap.dropped.length ? "bad" : undefined}
+        />
+        <select
+          name={`on_unmapped_${index}`}
+          value={onUnmapped}
+          onChange={(event) => setOnUnmapped(event.target.value)}
+          aria-label={`Unmapped value rule for ${field.source}`}
+        >
+          {vocabulary.on_unmapped_value.map((rule) => (
+            <option key={rule} value={rule}>
+              {rule}
+            </option>
+          ))}
+        </select>
+        {valueMap.pairs.length ? (
+          <div className="value-map-echo">
+            {valueMap.pairs.map(([code, value]) => (
+              <span key={code} className="value-map-pair">
+                <span className="mono">{code}</span>
+                <span aria-hidden="true">→</span>
+                <span className="mono">{value}</span>
+              </span>
+            ))}
           </div>
         ) : null}
-        {castError ? <div className="error small">{castError}</div> : null}
+        {/* A fragment with no `=`, or nothing on one side of it, cannot become
+            a mapping and is dropped. It used to be dropped in silence, so a
+            typo meant those codes quietly fell through to `on_unmapped_value`
+            and the analyst found out from a preview. */}
+        {valueMap.dropped.length ? (
+          <div className="error small">
+            not a pair, so not mapped:{" "}
+            {valueMap.dropped.map((fragment) => (
+              <span key={fragment} className="mono">
+                {fragment}{" "}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {valueMap.duplicates.length ? (
+          <div className="meta small">
+            listed twice, last wins:{" "}
+            <span className="mono">{[...new Set(valueMap.duplicates)].join(", ")}</span>
+          </div>
+        ) : null}
+        {valueMapRequired && !valueMap.pairs.length ? (
+          <div className="meta small">needs a map</div>
+        ) : null}
+        {mapError ? <div className="error small">{mapError}</div> : null}
       </td>
       <td>
         <select
@@ -379,61 +446,34 @@ function SpecRow({
       </td>
       <td>
         <select
-          name={`on_null_${index}`}
-          value={onNull}
-          onChange={(event) => setOnNull(event.target.value)}
-          aria-label={`Null handling for ${field.source}`}
+          name={`cast_${index}`}
+          value={cast}
+          onChange={(event) => {
+            setCast(event.target.value);
+            setCastFollowed(null);
+          }}
+          className={castError || castIsIllegal ? "bad" : undefined}
+          aria-invalid={castError || castIsIllegal ? true : undefined}
+          aria-label={`Cast for ${field.source}`}
         >
-          {vocabulary.on_null.map((rule) => (
-            <option key={rule} value={rule}>
-              {rule}
+          {castOptions.map((option) => (
+            <option key={option} value={option}>
+              {option}
+              {allowed && !allowed.includes(option) ? " · cannot satisfy the target" : ""}
             </option>
           ))}
         </select>
-        <input
-          name={`default_${index}`}
-          defaultValue={field.default ?? ""}
-          placeholder="default"
-          required={defaultRequired}
-          aria-label={`Default value for ${field.source}`}
-          title={defaultRequired ? "on_null 'default' cannot be saved without a value" : undefined}
-          aria-invalid={nullError ? true : undefined}
-          className={nullError ? "bad narrow" : "narrow"}
-        />
-        {defaultRequired ? <div className="meta small">needs a value</div> : null}
-        {nullError ? <div className="error small">{nullError}</div> : null}
-      </td>
-      <td>
-        <input
-          name={`value_map_${index}`}
-          defaultValue={Object.entries(field.value_map)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(", ")}
-          placeholder="M=male, F=female"
-          required={valueMapRequired}
-          aria-label={`Value map for ${field.source}`}
-          title={
-            valueMapRequired
-              ? `on_unmapped_value '${onUnmapped}' only means something with a value map`
-              : undefined
-          }
-          aria-invalid={mapError ? true : undefined}
-          className={mapError ? "bad" : undefined}
-        />
-        <select
-          name={`on_unmapped_${index}`}
-          value={onUnmapped}
-          onChange={(event) => setOnUnmapped(event.target.value)}
-          aria-label={`Unmapped value rule for ${field.source}`}
-        >
-          {vocabulary.on_unmapped_value.map((rule) => (
-            <option key={rule} value={rule}>
-              {rule}
-            </option>
-          ))}
-        </select>
-        {valueMapRequired ? <div className="meta small">needs a map</div> : null}
-        {mapError ? <div className="error small">{mapError}</div> : null}
+        {castFollowed ? (
+          <div className="meta small">
+            followed the target to <span className="mono">{castFollowed}</span>
+          </div>
+        ) : declared && allowed ? (
+          <div className="meta small">
+            {declared}
+            {allowed.length === 1 ? " · the only cast that fits" : ""}
+          </div>
+        ) : null}
+        {castError ? <div className="error small">{castError}</div> : null}
       </td>
       <td className="center">
         <input
@@ -641,10 +681,16 @@ export default function MappingStudio({
             <tr>
               <th>Source column</th>
               <th>Canonical target</th>
-              <th>Cast</th>
-              <th>Transform</th>
-              <th>Nulls</th>
-              <th>Value map</th>
+              {/* Left to right is the order `execute_field` actually runs:
+                  on_null, then the value map, then the transform, then the
+                  cast. The table used to read Cast · Transform · Nulls · Value
+                  map, which anyone reads as the pipeline and which is very
+                  nearly its reverse - so an analyst reasoning about why a value
+                  came out wrong reasoned in the wrong direction. */}
+              <th>1 · Nulls</th>
+              <th>2 · Value map</th>
+              <th>3 · Transform</th>
+              <th>4 · Cast</th>
               <th>Mine</th>
               <th>Drop</th>
             </tr>

@@ -1383,6 +1383,33 @@ tr:last-child td { border-bottom: none; }
 
 .unc { color: var(--ink3); text-decoration: underline dotted; text-underline-offset: 2px; }
 
+/* ------------------------------------------------------- value map echo (S4)
+   What the typed text actually parsed to. Quiet by construction: this is a
+   confirmation, not a finding, so it takes the surface's own ink and no colour
+   of its own - the row already has three louder signals (`.bad`, `.error`,
+   `required`) and a fourth competing one would flatten them. The arrow is
+   aria-hidden; the pair reads as "code, value" to a screen reader either way. */
+.value-map-echo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  margin-top: 4px;
+}
+.value-map-pair {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--ink2);
+  background: var(--mat);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.value-map-pair [aria-hidden="true"] { color: var(--ink3); }
+
+
 /* ---------------------------------------------------------------- KPI strip */
 .kpi { display: flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .kpi > div { flex: 1 1 120px; padding: 11px 14px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surf); }
