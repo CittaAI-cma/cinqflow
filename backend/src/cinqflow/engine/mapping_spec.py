@@ -24,7 +24,9 @@ from cinqflow.workflow.models import (
 #: Stage 4 scope minus `value_map`: the field's own `value_map` table is the
 #: mechanism, and a transform of the same name did nothing while validating
 #: cleanly - a rule that silently does nothing is worse than one that is refused.
-ALLOWED_OPS = frozenset({"parse_date", "trim", "upper", "lower", "concat", "substring", "cast"})
+ALLOWED_OPS = frozenset(
+    {"parse_date", "trim", "upper", "lower", "concat", "substring", "cast"}
+)
 
 #: Ops that were once accepted, and what to use instead. Refused with a pointer
 #: rather than an unhelpful list.
@@ -190,7 +192,8 @@ def validate_spec(spec: MappingSpec, canonical: CanonicalModel) -> list[SpecErro
                         index,
                         source,
                         "transform",
-                        f"the '{op}' transform is no longer supported - {RETIRED_OPS[op]}",
+                        f"the '{op}' transform is no longer supported - "
+                        f"{RETIRED_OPS[op]}",
                     )
                 )
             elif op not in ALLOWED_OPS:
@@ -199,7 +202,8 @@ def validate_spec(spec: MappingSpec, canonical: CanonicalModel) -> list[SpecErro
                         index,
                         source,
                         "transform",
-                        f"'{op}' is not a supported transform ({', '.join(sorted(ALLOWED_OPS))})",
+                        f"'{op}' is not a supported transform "
+                        f"({', '.join(sorted(ALLOWED_OPS))})",
                     )
                 )
             else:
@@ -221,7 +225,8 @@ def validate_spec(spec: MappingSpec, canonical: CanonicalModel) -> list[SpecErro
                     index,
                     source,
                     "on_null",
-                    f"'{mapping.on_null}' is not supported ({', '.join(sorted(ALLOWED_ON_NULL))})",
+                    f"'{mapping.on_null}' is not supported "
+                    f"({', '.join(sorted(ALLOWED_ON_NULL))})",
                 )
             )
         if mapping.on_null == "default" and mapping.default is None:

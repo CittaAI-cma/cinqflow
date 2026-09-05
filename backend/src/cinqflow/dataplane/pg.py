@@ -75,7 +75,8 @@ def render_table(table: Table) -> list[str]:
         if column.comment:
             escaped = column.comment.replace("'", "''")
             statements.append(
-                f'COMMENT ON COLUMN {table.schema}."{table.name}"."{column.name}" IS \'{escaped}\''
+                f'COMMENT ON COLUMN {table.schema}."{table.name}"."{column.name}" '
+                f"IS '{escaped}'"
             )
 
     for index in table.indexes:
