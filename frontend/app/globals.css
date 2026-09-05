@@ -822,6 +822,16 @@ select.page-size { width: auto; min-width: 132px; flex: 0 0 auto; }
 .row-menu-item.disabled:hover { background: transparent; }
 
 /* ---------------------------------------------------------------- Group panels */
+/* PR-8: the feed view - schema, lineage, quality - above the config panels. */
+.feed-panels { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.feed-panels-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+.feed-panels .collapsible-body { padding: 0 0 16px; }
+.drift-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.dq-legend { display: grid; gap: 4px; margin-top: 12px; font-size: 12.5px; }
+.dq-legend b { text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; margin-right: 6px; }
+.balance-ok { color: var(--ok); font-weight: 600; }
+.balance-bad { color: var(--danger); font-weight: 600; }
+
 .group-panels { margin-top: auto; padding-top: 28px; }
 .group-panel { padding: 18px 0; border-top: 1px solid var(--line); }
 .group-panel-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }

@@ -1,4 +1,4 @@
-import type { Upload, UploadDetail } from "@/lib/api";
+import type { StepProgress, Upload, UploadDetail } from "@/lib/api";
 
 /** How far the medallion pipeline has actually carried an object.
  *
@@ -81,15 +81,37 @@ export function stageOf(upload: Upload, detail: UploadDetail | null = null): Lif
   }
 }
 
-/** `details` is positional against `objects`; a missing entry just costs the
- *  promoted/dq distinction for that object. */
+/** §18.1: the stage read off the step ledger (`steps[]` from `/progress`) -
+ *  the furthest step with activity, in this vocabulary. `null` when the ledger
+ *  has no rows for the object (uploaded before the migration), so the caller
+ *  falls back to the status-derived `stageOf`. Same semantics, one source. */
+export function stageFromSteps(steps: StepProgress[]): LifecycleStage | null {
+  if (!steps.some((s) => s.state !== "not_reached")) return null;
+  const state = (key: string) => steps.find((s) => s.key === key)?.state;
+  if (state("promote") === "done") return "Dq Applied";
+  if (state("promote") === "running" || state("promote") === "pending") return "Promoting";
+  if (steps.some((s) => !s.gate && s.state === "failed")) return "Failed";
+  if (state("gate_g1") === "failed") return "Rejected";
+  if (state("land") === "done") return "Landed";
+  if (state("land") === "running" || state("land") === "pending" || state("gate_g1") === "done") {
+    return "Landing";
+  }
+  if (state("interpret") === "done") return "Interpreted";
+  if (state("profile") === "done") return "Profiled";
+  return "Received";
+}
+
+/** `details` and `steps` are positional against `objects`; a missing entry
+ *  just costs the promoted/dq distinction for that object. */
 export function groupStage(
   objects: Upload[],
   details: (UploadDetail | null)[] = [],
+  steps: StepProgress[][] = [],
 ): LifecycleStage | null {
   let best: LifecycleStage | null = null;
   objects.forEach((object, index) => {
-    const stage = stageOf(object, details[index] ?? null);
+    const fromLedger = steps[index]?.length ? stageFromSteps(steps[index]) : null;
+    const stage = fromLedger ?? stageOf(object, details[index] ?? null);
     if (!best || LIFECYCLE_ORDER.indexOf(stage) > LIFECYCLE_ORDER.indexOf(best)) best = stage;
   });
   return best;

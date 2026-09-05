@@ -801,7 +801,7 @@ gate / unknown / wrong scope / unknown object; past-G1 re-profile → 409; stewa
 re-run → new proposal, old one still served; re-landing → second batch, first intact) and the
 stage-6 promote re-run from the API with identical `record_hash`es.
 
-### PR-4 — Persona homes (`app/page.tsx`)
+### PR-4 — Persona homes (`app/page.tsx`) — **built** (branch `feat/w0-versioned-migrations`)
 
 *Backend.* `GET /api/worklist` exists (`routers/worklist.py`). Extend its payload with counts
 (`waiting_at_g1`, `approvable_at_g2`) and, for the platform home, reuse `GET /api/steps?state=failed`
@@ -819,7 +819,28 @@ plus `GET /api/queue/depth`.
 *Acceptance.* An `approver` sees exactly the runs the register would flag "Needs Review"; a
 `data_engineer` sees every `failed` step in the ledger and can re-run it from home.
 
-### PR-8 — Platform feed view (`/data/intake/[group]`)
+**As built.** `GET /api/worklist` gains `counts` (`waiting_at_g1`, `approvable_at_g2` - the
+latter still the honest `previewed` proxy the docstring explains), `waiting_since` per item (the
+ledger's gate row: the moment the gate opened, falling back to the artifact's own timestamp for a
+pre-ledger run) and `recent_uploads`. New `GET /api/attention` (same router: the two homes' data):
+`failed_steps` from the ledger with gates excluded (`StepDef.gate` - a rejection is a decision),
+`in_flight_steps`, `dead_messages` (new `Queue.list_dead`), `queue_depth` by topic, and `feeds` -
+each feed's latest upload, adverse first. Every ledger row is returned with where it belongs
+(feed, file, upload/batch id, and the route: `/uploads/{id}` → canonical screen, `/batches/{id}`,
+`/mapping/{feed}?v=`), resolved per scope; a deleted object leaves the fields null rather than
+failing the list. `app/page.tsx` branches on `user.persona`: `components/home/AnalystWorklist.tsx`
+(lede count · G1/G2 table with waiting-since · recent runs) or
+`components/home/PlatformAttention.tsx` (needs attention: failed steps with **Re-run** via
+`RerunStepButton` when `can_rerun_steps`, else the locked reason; dead letters · in flight · feeds
+by health · queue depth). The re-run vocabulary (`RERUNNABLE_STATES`, per-step consequence,
+`rerunSourceFor`) moved to `lib/rerun.ts` so the home and `WorkflowSteps` share it. Both homes
+keep the greeting and `ActionLauncher`. *Tests:* `tests/e2e/test_homes.py` - counts and
+waiting-since equal to the ledger's gate `started_ts`, deciding removes the item; attention shows a
+queued step with its feed/file/route, then the failed step with its error, and the feed sorts first
+as adverse; a rejected gate is not a failure; a message dead after `MAX_ATTEMPTS` is listed with
+its last error and payload.
+
+### PR-8 — Platform feed view (`/data/intake/[group]`) — **built** (branch `feat/w0-versioned-migrations`)
 
 `GroupPanels`/`GroupStageTabs` gain three persona-conditional panels (tabs, not a new route — the
 group *is* the feed, and `structure.md` keeps feed-level surfaces here):
@@ -833,6 +854,21 @@ group *is* the feed, and `structure.md` keeps feed-level surfaces here):
 No new backend endpoints: every figure is already served. *Acceptance:* a `data_engineer` can
 answer "what changed in this feed's schema since last month, and what did the last promotion
 refuse" without opening `/batches/{id}`.
+
+**As built.** `components/ingestion/FeedPanels.tsx` on the group page, between the objects
+table and the configuration panels: three `CollapsibleSection`s, **open by default for Data
+Platform and one click away for everyone else** (§18.2: a persona changes emphasis, never what is
+reachable - not persona-*only* panels). *Schema:* the feed's latest profile with the v2 facts
+(role hint pill, null ratio, distinct, key/constant constraint, range - PHI masked), time coverage,
+and drift against the previous profiled delivery computed client-side (added, removed, re-typed
+columns, as tags on the rows). *Lineage:* `LineageChain` per batch (newest first, budgeted) with
+both approvals. *Quality:* the balance equation per run (`in = out + quarantined + drops`, or the
+run's own error), quarantine `by_outcome`/`by_rule` per promoted batch, and the
+`knowledge/dq/severity.yaml` action vocabulary as the legend (`lib/dqVocabulary.ts`, verbatim),
+with a sentence saying what the platform does today so the legend never overclaims. §18.1 done
+with it: `lifecycleStage.stageFromSteps` reads the group's stage off the ledger (`/progress` per
+object, same budget as the details), falling back to the status-derived `stageOf` for pre-ledger
+runs. No backend change.
 
 ---
 

@@ -1,10 +1,13 @@
 import ApiUnreachable from "@/components/ui/ApiUnreachable";
 import { notFound } from "next/navigation";
+import FeedPanels from "@/components/ingestion/FeedPanels";
 import GroupPanels from "@/components/ingestion/GroupPanels";
 import GroupStageTabs from "@/components/ingestion/GroupStageTabs";
 import ObjectsTable from "@/components/ingestion/ObjectsTable";
 import { getUpload, listUploads, type Upload, type UploadDetail } from "@/lib/api";
+import { requireUser } from "@/lib/auth";
 import { groupStage, isStageAdverse } from "@/lib/lifecycleStage";
+import { loadRunSteps } from "@/lib/runProgress";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +43,15 @@ export default async function IngestGroupPage({
   const objects = uploads.filter((upload) => upload.feed === group);
   if (objects.length === 0) notFound();
 
-  const stage = groupStage(objects, await loadDetails(objects));
+  const user = await requireUser();
+  const details = await loadDetails(objects);
+  // §18.1: the group's stage comes from the ledger where it has rows, from the
+  // upload status otherwise - same budget as the details.
+  const steps =
+    objects.length > DETAIL_BUDGET
+      ? []
+      : await Promise.all(objects.map((object) => loadRunSteps(object.upload_id)));
+  const stage = groupStage(objects, details, steps);
 
   return (
     <div className="group-view">
@@ -59,6 +70,11 @@ export default async function IngestGroupPage({
       </div>
 
       <ObjectsTable group={group} objects={objects} />
+      <FeedPanels
+        objects={objects}
+        details={details}
+        defaultOpen={user.persona === "data_platform"}
+      />
       <GroupPanels />
     </div>
   );
