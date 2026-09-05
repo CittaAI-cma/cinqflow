@@ -19,6 +19,10 @@ from cinqflow.engine.mapping_spec import (
     ALLOWED_ON_NULL,
     ALLOWED_ON_UNMAPPED,
     ALLOWED_OPS,
+    CAST_FOR_TYPE,
+    ON_NULL_NEEDS_DEFAULT,
+    ON_UNMAPPED_NEEDS_VALUE_MAP,
+    REQUIRED_ARGS,
     InvalidSpec,
     assert_valid,
     diff_specs,
@@ -228,6 +232,20 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
                         "evidence": f.evidence,
                         "concept": f.concept,
                         "status": f.status,
+                        # Which target the confidence is *about*. Without it the
+                        # studio renders a model's number beside whatever target
+                        # the analyst has since chosen, so a 0.98 could sit next
+                        # to a mapping the model never proposed. The studio
+                        # compares this with the field's current target and
+                        # withdraws the meter when they differ.
+                        "target": f.target,
+                        # Why this column was left for a person: the target the
+                        # model named that does not exist, and the reason the
+                        # candidate was not carried into the draft. Already on
+                        # the proposal; carried here so the studio can say what
+                        # happened without re-fetching it.
+                        "rejected_target": f.rejected_target,
+                        "reason": f.reason,
                     }
                     for f in origin.content.fields
                 }
@@ -246,6 +264,26 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
                 "on_null": sorted(ALLOWED_ON_NULL),
                 "on_unmapped_value": sorted(ALLOWED_ON_UNMAPPED),
                 "primary_keys": primary_keys,
+                # The *dependencies* between those choices, not just the choices.
+                # A save is all-or-nothing over one artifact, which is right - a
+                # spec is a single thing and half a spec is not a spec. But it
+                # meant four edits an analyst can make with nothing but a
+                # dropdown ("nulls -> default", "unmapped -> quarantine", any
+                # transform taking an argument, a cast the target's declared
+                # type cannot accept) rejected the entire table, discarding
+                # every unrelated edit with it. These four tables let the editor
+                # require the box the rule needs at the moment the dropdown
+                # selects it, so the analyst never reaches the refusal.
+                #
+                # Published rather than reimplemented on the client on purpose:
+                # `validate_spec` reads the same constants, so the editor cannot
+                # drift from the validator that will judge it.
+                "op_args": {op: list(args) for op, args in sorted(REQUIRED_ARGS.items())},
+                "casts_for_type": {
+                    declared: sorted(casts) for declared, casts in sorted(CAST_FOR_TYPE.items())
+                },
+                "on_null_needs_default": sorted(ON_NULL_NEEDS_DEFAULT),
+                "on_unmapped_needs_value_map": sorted(ON_UNMAPPED_NEEDS_VALUE_MAP),
             },
         }
 

@@ -44,6 +44,16 @@ ALLOWED_CASTS = frozenset({"string", "int", "decimal", "date", "timestamp", "boo
 ALLOWED_ON_NULL = frozenset({"reject", "default", "pass"})
 ALLOWED_ON_UNMAPPED = frozenset({"quarantine", "pass", "null"})
 
+#: `on_null` rules that mean nothing without `default`, and `on_unmapped_value`
+#: rules that mean nothing without a `value_map`. Named here rather than written
+#: inline in `validate_spec` below, because the studio publishes them (see the
+#: `vocabulary` payload in `api/routers/mapping_versions.py`) so its editor can
+#: require the box a rule needs at the moment a dropdown selects that rule.
+#: A dependency the UI can only learn about by being refused is a dependency
+#: the analyst discovers as a rejected save.
+ON_NULL_NEEDS_DEFAULT = frozenset({"default"})
+ON_UNMAPPED_NEEDS_VALUE_MAP = ALLOWED_ON_UNMAPPED - {"pass"}
+
 #: Which casts can satisfy a declared canonical type. A spec that would hand a
 #: string to a TIMESTAMP column is a defect the analyst should see now.
 CAST_FOR_TYPE: dict[str, frozenset[str]] = {
@@ -229,7 +239,7 @@ def validate_spec(spec: MappingSpec, canonical: CanonicalModel) -> list[SpecErro
                     f"({', '.join(sorted(ALLOWED_ON_NULL))})",
                 )
             )
-        if mapping.on_null == "default" and mapping.default is None:
+        if mapping.on_null in ON_NULL_NEEDS_DEFAULT and mapping.default is None:
             errors.append(
                 SpecError(index, source, "default", "on_null 'default' needs a default value")
             )
@@ -243,7 +253,7 @@ def validate_spec(spec: MappingSpec, canonical: CanonicalModel) -> list[SpecErro
                     f"({', '.join(sorted(ALLOWED_ON_UNMAPPED))})",
                 )
             )
-        if mapping.on_unmapped_value != "pass" and not mapping.value_map:
+        if mapping.on_unmapped_value in ON_UNMAPPED_NEEDS_VALUE_MAP and not mapping.value_map:
             errors.append(
                 SpecError(
                     index,
