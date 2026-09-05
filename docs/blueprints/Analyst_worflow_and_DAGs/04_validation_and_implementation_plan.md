@@ -838,7 +838,7 @@ refuse" without opening `/batches/{id}`.
 
 ## 17. Analyst lane
 
-### PR-5 — Profiler v2 (deterministic)
+### PR-5 — Profiler v2 (deterministic) — **built** (branch `feat/w0-versioned-migrations`)
 
 `engine/profiler.py`, `PROFILER_VERSION = "2"`. Per column, in addition to today's facts:
 
@@ -860,6 +860,26 @@ Existing rows are untouched. `templates.md §1.2` updated (PR-9 folds it in if p
 *Tests.* Unit on synthetic columns for every rule; golden: the Fidelis upstate CSV and the Molina
 MEDICAID TXT produce an expected hint per column and expected `time_coverage`. PHI: `mask_facts`
 output for a `phi_candidate` column has no `top_values`, `min`, `max`, `sample_values`.
+
+**As built.** `engine/profiler.py`, `PROFILER_VERSION = "2"`; every new fact is defaulted on
+`ColumnFacts`/`ProfileFacts` so a v1 profile row still loads (JSONB, no migration), and
+`bronze_profiler.py` gets the same facts unchanged. Rule refinements from running the corpus,
+each deterministic and named in the module: name tokens are matched whole (`tin` does not fire on
+`destination`); a *label* column (`zip`, `phone`, `mobile`, `number`, `code`, `flag`, `status`,
+`type`, `indicator`) is never an identifier by uniqueness alone nor a measure by being numeric -
+the Fidelis phone column and the Molina mobile number were coming out as identifier and measure; a
+period stored as a number (`Member_Month` = 202402) is a `date` hint but stays out of
+`time_coverage`, which uses real date/timestamp columns only; an all-null column is `unclassified`
+(no evidence for any role - PR-6 raises the anomaly); `technical` takes precedence over `date`
+(`created_at`); timestamps with a one-digit hour (`2025-09-01 0:00:00`, the Fidelis
+`enrollment_date`) are recognised; `death`/`deceased` join the PHI name tokens, so a date of death
+is neither exposed nor part of the data's period. `min`/`max` exclude sentinels (`9999-12-31` is a
+placeholder, not a maximum) and are `None` for PHI; `top_values` is empty for PHI; `mask_facts`
+strips all three defensively. *Golden:* the Fidelis roster (45 columns: ids, NPI, TIN identifiers;
+DOB a PHI date; age a measure 0–97; product a dimension; coverage 2021 → 2027-10-31 excluding DOB)
+and the first 5,000 rows of the Molina MEDICAID TXT (60 pipe-delimited columns; identifiers by name
+on a history grain with no key; coverage exactly the file's period, 2024-02-01 → 2026-01-31,
+excluding birth and death dates). `templates.md §1.2` is updated in PR-9.
 
 ### PR-6 — Prompt v3: column roles and importance
 

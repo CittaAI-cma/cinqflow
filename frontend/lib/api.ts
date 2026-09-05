@@ -49,6 +49,16 @@ export interface Upload {
   created_ts: string;
 }
 
+/** The profiler's deterministic role hint (`engine/profiler.py`, v2). PHI is
+ *  not a role; it stays `phi_candidate`. */
+export type ColumnRoleHint =
+  | "identifier"
+  | "measure"
+  | "dimension"
+  | "date"
+  | "technical"
+  | "unclassified";
+
 export interface ColumnFacts {
   name: string;
   inferred_type: string;
@@ -57,6 +67,24 @@ export interface ColumnFacts {
   sample_values: string[];
   patterns: Record<string, number | boolean>;
   phi_candidate: boolean;
+  // v2 facts (PR-5). Optional: a profile written by v1 has none of them.
+  hint?: ColumnRoleHint;
+  null_ratio?: number;
+  /** Parsed numeric or date bounds as text; null for other types and for PHI. */
+  min?: string | null;
+  max?: string | null;
+  /** value -> count, capped at ten; always empty for a PHI column. */
+  top_values?: { value: string; count: number }[];
+  constant?: boolean;
+  /** Placeholder values (`1900-01-01`, `9999-12-31`, all-zero/all-nine). */
+  sentinel_count?: number;
+}
+
+/** The data's own period: min/max across the non-PHI, non-technical date columns. */
+export interface TimeCoverage {
+  columns: string[];
+  min: string;
+  max: string;
 }
 
 export interface Profile {
@@ -71,6 +99,8 @@ export interface Profile {
     phi_candidates: string[];
     sheets: { name: string; rows: number }[];
     sample_rows: Record<string, string>[];
+    /** v2 (PR-5); absent on a v1 profile. */
+    time_coverage?: TimeCoverage | null;
   };
 }
 

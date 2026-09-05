@@ -30,6 +30,26 @@ class Upload(BaseModel):
     created_ts: datetime
 
 
+#: The profiler's deterministic role hint (§7.1). PHI is not a role - it stays
+#: `phi_candidate`. `technical` is the platform's own bookkeeping columns.
+ColumnRoleHint = Literal["identifier", "measure", "dimension", "date", "technical", "unclassified"]
+
+
+class TopValue(BaseModel):
+    value: str
+    count: int
+
+
+class TimeCoverage(BaseModel):
+    """The data's own period: min/max (ISO dates) across the date columns named
+    in `columns` - never a PHI date (a birth date is not a delivery period) and
+    never a technical one (a load timestamp is the platform's)."""
+
+    columns: list[str]
+    min: str
+    max: str
+
+
 class ColumnFacts(BaseModel):
     name: str
     inferred_type: Literal["string", "int", "decimal", "date", "timestamp", "bool", "code"]
@@ -38,6 +58,17 @@ class ColumnFacts(BaseModel):
     sample_values: list[str]
     patterns: dict[str, float | bool]
     phi_candidate: bool
+    # -- v2 facts (PR-5). Defaulted so a v1 profile row still loads unchanged.
+    hint: ColumnRoleHint = "unclassified"
+    null_ratio: float = 0.0
+    #: Parsed numeric or date bounds as text; None for other types and for PHI.
+    min: str | None = None
+    max: str | None = None
+    #: value -> count, capped (`profiler.TOP_VALUES_CAP`); always empty for PHI.
+    top_values: list[TopValue] = Field(default_factory=list)
+    constant: bool = False
+    #: RR-23 placeholder values (`1900-01-01`, `9999-12-31`, all-zero/all-nine).
+    sentinel_count: int = 0
 
 
 class SheetFacts(BaseModel):
@@ -55,6 +86,8 @@ class ProfileFacts(BaseModel):
     phi_candidates: list[str]
     sheets: list[SheetFacts] = Field(default_factory=list)
     sample_rows: list[dict[str, str]] = Field(default_factory=list)
+    #: v2 (PR-5): the data's period, over non-PHI, non-technical date columns.
+    time_coverage: TimeCoverage | None = None
 
 
 class Profile(BaseModel):
@@ -561,13 +594,19 @@ def mask_row(row: dict[str, Any], phi_columns: set[str]) -> dict[str, Any]:
 
 
 def mask_facts(facts: ProfileFacts) -> ProfileFacts:
-    """PHI never leaves the API unmasked: example values are dropped for PHI
-    candidate columns, and sample rows are masked field by field."""
+    """PHI never leaves the API unmasked: example values, value frequencies and
+    bounds are dropped for PHI candidate columns (the profiler already omits
+    them; this is the defensive layer), and sample rows are masked field by
+    field."""
     phi = set(facts.phi_candidates)
     return facts.model_copy(
         update={
             "columns": [
-                column.model_copy(update={"sample_values": []}) if column.phi_candidate else column
+                column.model_copy(
+                    update={"sample_values": [], "top_values": [], "min": None, "max": None}
+                )
+                if column.phi_candidate
+                else column
                 for column in facts.columns
             ],
             "sample_rows": [mask_row(row, phi) for row in facts.sample_rows],
