@@ -2,11 +2,18 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { submitRerun, type RerunSource } from "@/app/actions";
+import { submitRerun } from "@/app/actions";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import WaitNotice from "@/components/ui/WaitNotice";
 import { getFeedVersionProgress, getUploadProgress, type StepProgress } from "@/lib/api";
 import { RERUN_LOCKED_REASON } from "@/lib/persona";
+import {
+  RERUN_CONSEQUENCE,
+  RERUN_FALLBACK_CONSEQUENCE,
+  RERUNNABLE_STATES,
+  rerunSourceFor as rerunSourceForScope,
+  type RerunSource,
+} from "@/lib/rerun";
 import { usePoll } from "@/lib/usePoll";
 import { useToast } from "@/lib/useToast";
 
@@ -29,28 +36,6 @@ export function stepsInFlight(steps: StepProgress[], only?: readonly string[]): 
       (s.state === "pending" || s.state === "running"),
   );
 }
-
-/** The states a step may be re-run from - mirrors `RERUNNABLE` in
- *  `workflow/dag.py`. The API is the boundary; this only decides whether to
- *  offer the button. */
-const RERUNNABLE_STATES = new Set(["failed", "done", "skipped"]);
-
-/** The consequence of running each step again, stated before the click - the
- *  `ConfirmDialog` rule: a real, outward-facing effect deserves a beat between
- *  intent and effect. Composed here, never generated. */
-const RERUN_CONSEQUENCE: Record<string, string> = {
-  profile:
-    "Re-profiling re-reads the preserved original and replaces the profile; the AI interpretation then runs again on the new profile.",
-  interpret:
-    "The model interprets the same profile again. The new interpretation replaces the current one; an undecided G1 restarts from it.",
-  land: "Re-landing writes a new Bronze batch from the preserved original. Bronze is append-only: the earlier batch stays, and Bronze analysis runs again for the new one.",
-  analyze:
-    "Bronze analysis runs again: a new mapping proposal is produced, and the earlier one stays on record for lineage.",
-  preview:
-    "The preview is recomputed over the same sample of the same batch. G2 stays closed until the result is current for the spec.",
-  promote:
-    "Re-running promotion rebuilds this batch's Silver rows and quarantine; Bronze is untouched.",
-};
 
 function stateWord(s: StepProgress): string {
   switch (s.state) {
@@ -90,21 +75,9 @@ function duration(from: string, to: string | null): string {
   return total >= 60 ? `${Math.floor(total / 60)}m ${total % 60}s` : `${total}s`;
 }
 
-/** The ledger row carries its own scope, so the re-run route is derived from
- *  the row - a batch-scoped step shown under an upload still re-runs against
- *  its batch. */
+/** The re-run route comes from the ledger row's own scope (`lib/rerun.ts`). */
 function rerunSourceFor(step: StepProgress): RerunSource | null {
-  const run = step.run;
-  if (!run) return null;
-  if (run.scope_kind === "upload") return { kind: "upload", uploadId: run.scope_id };
-  if (run.scope_kind === "batch") return { kind: "batch", batchId: run.scope_id };
-  const at = run.scope_id.lastIndexOf(":v");
-  if (at < 0) return null;
-  return {
-    kind: "feed_version",
-    feed: run.scope_id.slice(0, at),
-    version: Number(run.scope_id.slice(at + 2)),
-  };
+  return step.run ? rerunSourceForScope(step.run.scope_kind, step.run.scope_id) : null;
 }
 
 /** The step ledger, live. One component, one poll over `/progress`, in place
@@ -287,8 +260,7 @@ export default function WorkflowSteps({
         onConfirm={confirmRerun}
         consequence={
           asking
-            ? (RERUN_CONSEQUENCE[asking.key] ??
-              "This step runs again as a new generation; the earlier run stays on record.")
+            ? (RERUN_CONSEQUENCE[asking.key] ?? RERUN_FALLBACK_CONSEQUENCE)
             : ""
         }
         audit={

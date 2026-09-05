@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { authMutate, requireUser } from "@/lib/auth";
 import { uploadFile } from "@/lib/api";
+import type { RerunSource } from "@/lib/rerun";
 
 export interface UploadState {
   error?: string;
@@ -81,13 +82,6 @@ export async function submitRetry(uploadId: string): Promise<{ error?: string }>
   revalidatePath(`/runs/${uploadId}/review`);
   return {};
 }
-
-/** Which object a re-run is about - the ledger row's own scope, so the caller
- *  never has to know which of the three routes a step belongs to. */
-export type RerunSource =
-  | { kind: "upload"; uploadId: string }
-  | { kind: "batch"; batchId: string }
-  | { kind: "feed_version"; feed: string; version: number };
 
 /** PR-3: queue a new generation of one step. Capability-gated at the API
  *  (`can_rerun_steps`) and refused with a reason when the step is already

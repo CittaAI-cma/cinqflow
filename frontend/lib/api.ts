@@ -499,14 +499,62 @@ export interface WorklistMappingVersion {
   editable: boolean;
 }
 
-/** Every upload waiting at G1 and every mapping version waiting at G2, across
- *  all feeds. Not yet wired to a screen in this phase — the register still
- *  computes its stage client-side; this is the O(1) replacement for that,
- *  ready for the "waiting for you" filter in a later phase. */
+/** The Data Analyst home's data (PR-4): every upload waiting at G1 and every
+ *  mapping version waiting at G2, across all feeds, each with the moment its
+ *  gate opened in the step ledger; the counts; the recent uploads. */
+export interface Worklist {
+  counts: { waiting_at_g1: number; approvable_at_g2: number };
+  uploads_at_g1: (Upload & { waiting_since: string })[];
+  mapping_versions_at_g2: (WorklistMappingVersion & { waiting_since: string })[];
+  recent_uploads: Upload[];
+}
+
 export function getWorklist() {
-  return get<{ uploads_at_g1: Upload[]; mapping_versions_at_g2: WorklistMappingVersion[] }>(
-    "/api/worklist",
-  );
+  return get<Worklist>("/api/worklist");
+}
+
+/** A ledger row with where it belongs, in the words a person navigates by. */
+export interface AttentionStep extends StepRun {
+  label: string;
+  feed: string | null;
+  filename: string | null;
+  upload_id: string | null;
+  batch_id: string | null;
+  href: string | null;
+}
+
+export interface DeadMessage {
+  message_id: string;
+  topic: string;
+  dedupe_key: string;
+  payload: Record<string, unknown>;
+  attempts: number;
+  last_error: string | null;
+  enqueued_ts: string;
+  claimed_ts: string | null;
+}
+
+/** The Data Platform home's data (PR-4): failed worker steps (a rejected gate
+ *  is a decision, not here), steps in flight, dead-letter messages, queue depth
+ *  by topic, and each feed's latest upload, adverse first. */
+export interface Attention {
+  failed_steps: AttentionStep[];
+  in_flight_steps: AttentionStep[];
+  dead_messages: DeadMessage[];
+  queue_depth: Record<string, number> & { pending_total: number };
+  feeds: {
+    feed: string;
+    upload_id: string;
+    filename: string;
+    status: UploadStatus;
+    error: string | null;
+    created_ts: string;
+    adverse: boolean;
+  }[];
+}
+
+export function getAttention() {
+  return get<Attention>("/api/attention");
 }
 
 /** Returns null when the batch has not been analysed yet, rather than throwing. */

@@ -15,7 +15,7 @@ from typing import Any
 
 import psycopg
 
-from cinqflow.db import fetch_one
+from cinqflow.db import fetch_all, fetch_one
 from cinqflow.settings import Settings, get_settings
 
 MAX_ATTEMPTS = 3
@@ -155,6 +155,27 @@ class Queue:
                 WHERE message_id = %s""",
             (message_id,),
         )
+
+    def list_dead(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Messages the queue gave up on (`MAX_ATTEMPTS` reached), newest first -
+        the platform home's dead-letter list. The payload names the object."""
+        rows = fetch_all(
+            self.conn,
+            f"""SELECT message_id, topic, dedupe_key, payload, attempts, last_error,
+                       enqueued_ts, claimed_ts
+                FROM {self.s.queue_schema}.message
+                WHERE state = 'dead' ORDER BY enqueued_ts DESC LIMIT %s""",
+            (limit,),
+        )
+        return [
+            {
+                **row,
+                "message_id": str(row["message_id"]),
+                "enqueued_ts": row["enqueued_ts"].isoformat(),
+                "claimed_ts": row["claimed_ts"].isoformat() if row["claimed_ts"] else None,
+            }
+            for row in rows
+        ]
 
     def depth(self, topic: str | None = None) -> int:
         sql = f"SELECT count(*) AS n FROM {self.s.queue_schema}.message WHERE state = 'pending'"
