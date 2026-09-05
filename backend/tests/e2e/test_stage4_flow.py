@@ -128,6 +128,65 @@ def test_the_studio_receives_the_legal_vocabulary(client, proposal_id):
     assert "members_enrollment_segments" not in vocabulary["primary_keys"]
 
 
+def test_the_roster_lists_every_column_in_the_batch_not_only_the_mapped_ones(
+    client, proposal_id
+):
+    """The defect: the studio could only ever show the columns that made it
+    into the spec, so the ones the model declined to place - exactly the ones
+    needing a person - were computed and then dropped at the render boundary.
+
+    The roster is the whole batch. Columns carry whether they are in the spec,
+    what the AI thought, and the profiler's own facts about them.
+    """
+    client.post(f"/api/feeds/{FEED}/mapping-versions", json={"from_proposal_id": proposal_id})
+    roster = client.get(f"/api/feeds/{FEED}/mapping-versions/1/columns").json()
+
+    names = [c["name"] for c in roster["columns"]]
+    assert set(names) == {
+        "member_id",
+        "member_first_name",
+        "member_dob",
+        "member_sex",
+        "product",
+        "harp_eligible",
+    }
+    assert roster["counts"]["total"] == len(names)
+    assert roster["counts"]["in_spec"] + roster["counts"]["unplaced"] == roster["counts"]["total"]
+
+    # It says what it enumerated against — the roster's authority rests on it.
+    assert roster["resolved_from"]["batch_id"] == roster["batch_id"]
+    assert roster["resolved_from"]["row_count"] == 2
+    assert roster["unresolved_reason"] is None
+
+    by_name = {c["name"]: c for c in roster["columns"]}
+    mapped = [c for c in roster["columns"] if c["in_spec"]]
+    assert mapped, "the seeded draft placed at least one column"
+    assert all(c["mapped_target"] for c in mapped)
+    assert all(c["mapped_target"] is None for c in roster["columns"] if not c["in_spec"])
+
+    # The profiler's facts travel with the column, so the screen can answer
+    # "what is actually in here" without a second request per row.
+    assert by_name["member_id"]["inferred_type"]
+    assert by_name["member_id"]["distinct_count"] == 2
+
+    # No preview has run, so an issue count would be a guess. It is null, not 0.
+    assert all(c["issue_count"] is None for c in roster["columns"])
+
+
+def test_the_roster_masks_phi_columns_but_still_names_them(client, proposal_id):
+    """A mapping screen must answer "what is in this column" without showing
+    anyone a patient. PHI columns keep their name, type and shape and lose their
+    example values."""
+    client.post(f"/api/feeds/{FEED}/mapping-versions", json={"from_proposal_id": proposal_id})
+    roster = client.get(f"/api/feeds/{FEED}/mapping-versions/1/columns").json()
+
+    masked = [c for c in roster["columns"] if c["phi_masked"]]
+    assert masked, "the roster carries at least one PHI-flagged column"
+    for column in masked:
+        assert column["sample_values"] == []
+        assert column["name"] and column["inferred_type"]
+
+
 def test_the_studio_receives_the_dependencies_between_those_choices(client, proposal_id):
     """The vocabulary carries the *rules*, not only the option lists.
 

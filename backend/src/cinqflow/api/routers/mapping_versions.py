@@ -35,7 +35,12 @@ from cinqflow.settings import Settings
 from cinqflow.workers import promote_silver, run_preview
 from cinqflow.workflow.dag import feed_version_scope
 from cinqflow.workflow.g2_gate import g2_blockers
-from cinqflow.workflow.models import MappingSpec, build_step_progress, mask_preview_rows
+from cinqflow.workflow.models import (
+    MappingSpec,
+    build_step_progress,
+    mask_facts,
+    mask_preview_rows,
+)
 from cinqflow.workflow.store import (
     DraftAlreadyOpen,
     NotEditable,
@@ -286,6 +291,135 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
                 "on_null_needs_default": sorted(ON_NULL_NEEDS_DEFAULT),
                 "on_unmapped_needs_value_map": sorted(ON_UNMAPPED_NEEDS_VALUE_MAP),
             },
+        }
+
+    @router.get("/api/feeds/{feed}/mapping-versions/{version}/columns")
+    def mapping_version_columns(feed: str, version: int, conn=Depends(get_conn)) -> dict:
+        """Every source column in the batch, mapped or not.
+
+        The studio has only ever been able to show the columns that made it into
+        the spec. The ones the model was not confident enough to place - exactly
+        the ones needing a person - were computed, dropped at the render
+        boundary, and never seen again. An analyst could finish the table, see
+        no unfinished work, and be refused at G2 for a required target sitting
+        in a column the screen never showed.
+
+        The roster resolves its batch server-side, the same feed -> batch join
+        `mapping_version_progress` already does. Deliberately *not* built from
+        `ai_context` alone: that is `{}` on any version created with
+        `derive_from_version`, which is the normal path after the first
+        approval, so an `ai_context`-only roster would silently degrade to
+        today's table from v2 onward - correct in the demo, wrong in use.
+
+        Facts come from the batch's own Bronze profile, through `mask_facts`:
+        PHI columns keep their name, type and null ratio and lose their example
+        values, because "what is in this column" is the one question a mapping
+        screen must answer without showing anyone a patient.
+        """
+        store = WorkflowStore(conn, s)
+        mapping = store.get_mapping_version(feed, version)
+        if mapping is None:
+            raise HTTPException(404, detail=f"unknown mapping version: {feed} v{version}")
+
+        preview = store.get_preview(feed, version)
+        batch_id = preview.sample.batch_id if preview else None
+        if batch_id is None:
+            latest = store.latest_batch_for_feed(feed)
+            batch_id = latest.batch_id if latest else None
+
+        profile = store.get_bronze_profile(batch_id) if batch_id else None
+        if profile is None:
+            # No landing to enumerate against. An empty roster with its reason
+            # beats a roster silently narrowed to the spec, which is the failure
+            # this endpoint exists to remove.
+            return {
+                "feed": feed,
+                "version": version,
+                "batch_id": batch_id,
+                "resolved_from": None,
+                "unresolved_reason": (
+                    "no bronze profile for this feed yet, so the full column list is unknown"
+                ),
+                "columns": [],
+            }
+
+        facts = mask_facts(profile.facts)
+
+        # The AI's own read of each column, from the proposal this draft was
+        # seeded from. Absent on a derived version - which is why it decorates
+        # the roster rather than defining it.
+        candidates: dict[str, dict] = {}
+        origin = (
+            store.get_proposal_by_id(mapping.origin_proposal_id)
+            if mapping.origin_proposal_id
+            else None
+        )
+        if origin is not None:
+            candidates = {
+                f.source: {
+                    "target": f.target,
+                    "rejected_target": f.rejected_target,
+                    "concept": f.concept,
+                    "confidence": f.confidence,
+                    "evidence": f.evidence,
+                    "status": f.status,
+                    "reason": f.reason,
+                }
+                for f in origin.content.fields
+            }
+
+        in_spec = {field.source: field.target for field in mapping.spec.fields}
+
+        # What the last preview actually did to each column. Counted over the
+        # persisted run, so "4 issues" is a fact about rows that ran, not a
+        # prediction - and it is 0, not absent, when a preview exists and the
+        # column was clean.
+        issue_counts: dict[str, int] = {}
+        if preview is not None:
+            for row in preview.row_results:
+                for outcome in row.fields:
+                    if outcome.outcome in ("failure", "quarantined", "rejected"):
+                        issue_counts[outcome.source] = issue_counts.get(outcome.source, 0) + 1
+
+        columns = [
+            {
+                "name": column.name,
+                "inferred_type": column.inferred_type,
+                "role": column.hint,
+                "null_ratio": column.null_ratio,
+                "distinct_count": column.distinct_count,
+                "sentinel_count": column.sentinel_count,
+                "constant": column.constant,
+                "sample_values": column.sample_values,
+                "phi_masked": column.phi_candidate,
+                "in_spec": column.name in in_spec,
+                "mapped_target": in_spec.get(column.name),
+                "candidate": candidates.get(column.name),
+                "issue_count": issue_counts.get(column.name, 0) if preview else None,
+            }
+            for column in facts.columns
+        ]
+
+        return {
+            "feed": feed,
+            "version": version,
+            "batch_id": batch_id,
+            # Said out loud because the roster's authority depends on it: these
+            # are the columns of *this* batch, profiled over however many rows
+            # the profiler actually read.
+            "resolved_from": {
+                "batch_id": batch_id,
+                "row_count": facts.row_count,
+                "is_sample": profile.is_sample,
+                "profiled_ts": profile.profiled_ts.isoformat(),
+            },
+            "unresolved_reason": None,
+            "counts": {
+                "total": len(columns),
+                "in_spec": sum(1 for c in columns if c["in_spec"]),
+                "unplaced": sum(1 for c in columns if not c["in_spec"]),
+            },
+            "columns": columns,
         }
 
     @router.get("/api/feeds/{feed}/mapping-versions/{version}/diff")
