@@ -84,6 +84,7 @@ export default async function ReviewPage({
           profile={profile}
           interpretation={interpretation}
           initialMode={defaults.readingMode}
+          collapseTechnical={defaults.technicalCollapsed}
         />
 
         {decision ? (

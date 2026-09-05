@@ -930,7 +930,7 @@ says; null-rate risk once, not twice; golden Fidelis roles with no sample or top
 reason); the four `interpret_file@2` assertions moved to `@3`. `templates.md §1.3` is updated in
 PR-9.
 
-### PR-7 — Analyst UI
+### PR-7 — Analyst UI — **built** (branch `feat/w0-versioned-migrations`)
 
 - **`components/run/RecommendedFields.tsx`** — S2, Evidence and Verdict modes: `importance = high`
   columns grouped by role, each with its `reason` and the glossary/canonical citation as text (the
@@ -946,6 +946,23 @@ PR-9.
 *Acceptance.* On the 60-column Molina file in Evidence mode, the analyst sees ≤ 12 recommended
 fields and seven role groups before any 60-row table. Facts are never hidden: every column is
 reachable in Forensic.
+
+**As built.** `lib/columnRoles.ts` holds the vocabulary, the group order (identifiers → measures
+→ dimensions → dates → business attributes → derived → unclassified → technical) and the one rule
+for a column's role: the interpretation's judged role where the model saw it, the profiler's
+`hint` otherwise (a pre-v3 interpretation, a v1 profile) - the frontend never classifies.
+`components/run/RecommendedFields.tsx`: the `importance = high` columns by role with their
+`reason` (the citation is in the text), capped at 12 with "N more in Forensic". `ReviewEvidence`:
+Evidence and Verdict show it between the signals (which stay above, in every mode) and the claims;
+Forensic groups every column by role in `CollapsibleSection`s, `technical` closed by default for
+the Data Analyst (`personaDefaults.technicalCollapsed`, passed from the review page), each row
+with null ratio, range, top values (PHI rows read `•••• masked` for all three), constant and
+sentinel tags, and importance + reason. `VerdictCard` gains one composed line from the v2 facts
+(time coverage · constant columns · dates with placeholder values), absent for a v1 profile.
+`ProposalTable` takes an optional `roles` map (source column → role, built on the Bronze review
+page from the upload's interpretation): a role pill column and stable ordering by role; without
+the map it renders exactly as before, so the batch page and the studio's seed view are unchanged.
+`SignalCard` unchanged. `tsc`, `next build`.
 
 ---
 

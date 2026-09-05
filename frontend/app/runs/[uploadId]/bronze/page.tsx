@@ -37,7 +37,7 @@ export default async function BronzePage({
   } catch {
     notFound();
   }
-  const { upload, profile, runs } = detail;
+  const { upload, profile, interpretation, runs } = detail;
   const user = await requireUser();
   const defaults = personaDefaults(user.persona);
 
@@ -77,6 +77,11 @@ export default async function BronzePage({
     : 0;
   const statuses = !showAll && decisionCount > 0 ? NEEDS_DECISION : undefined;
   const totalFields = proposal?.content.fields.length ?? 0;
+  // Source column → role, from the upload's interpretation (PR-7). Absent for an
+  // interpretation written before prompt v3; the table then renders as before.
+  const columnRoles = interpretation?.content.column_roles?.length
+    ? Object.fromEntries(interpretation.content.column_roles.map((r) => [r.name, r.role]))
+    : undefined;
 
   return (
     <>
@@ -155,7 +160,7 @@ export default async function BronzePage({
               </span>
             )}
           </h2>
-          <ProposalTable proposal={proposal} statuses={statuses} />
+          <ProposalTable proposal={proposal} statuses={statuses} roles={columnRoles} />
         </>
       ) : (
         <WorkflowSteps
