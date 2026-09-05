@@ -413,7 +413,7 @@ surface over Silver ODS: after W3, not before.
 
 | Item | Why | When |
 |---|---|---|
-| **Versioned migrations** (`workflow.schema_version` + numbered SQL under `backend/migrations/`, applied by `cinqflow install`; no Alembic — consistent with "no ORM, visible SQL") | W0's top item. Nothing in P1–P3 *needs* it (P1 is a new table; P2/P3 are JSONB) — but every later epic ALTERs, and it should exist before the first one does | P0 |
+| **Versioned migrations** (`workflow.schema_version` + numbered SQL in `src/cinqflow/migrations/`, applied by `cinqflow install`; no Alembic — consistent with "no ORM, visible SQL") | W0's top item. Nothing in P1–P3 *needs* it (P1 is a new table; P2/P3 are JSONB) — but every later epic ALTERs, and it should exist before the first one does. **Built in PR-0.** | P0 |
 | No orchestrator, no broker | `checklist.md §0`; Railway topology; doc 03's own guidance | — |
 | Split api / worker into two Railway services | Only after W0 moves landing to object storage (the volume is why they are fused). The ledger makes the split observable | W0 |
 | Object storage decision: Azure Blob vs S3 | Coupled to the host decision (client docs target Azure + Entra ID); must precede real PHI. Persona work does not change it | before W2 |
@@ -461,6 +461,393 @@ surface over Silver ODS: after W3, not before.
 
 ---
 
-*Cites `backend/src/cinqflow/{queue,workers,workflow,engine,intelligence}`, `frontend/lib`,
+*Part I cites `backend/src/cinqflow/{queue,workers,workflow,engine,intelligence}`, `frontend/lib`,
 `frontend/components/run`, `docs/blueprints/{features,structure,checklist,forward-flow-adoption,
 knowledge-base-screen}.md` and the measured corpus as of 2026-09-05.*
+
+---
+---
+
+# Part II — Persona implementation plan: Data Analyst and Data Platform
+
+> Decided 2026-09-05 with the product owner. Part I is the validation; this is the build. Every
+> package below names the files it touches, the tests it needs, and what "done" means, so each
+> can be handed to an implementation session as one PR. Nothing here is started yet.
+
+## 13. Decisions recorded
+
+| # | Decision | Chosen |
+|---|---|---|
+| D1 | Role → persona | **Data Analyst** ← `business_analyst`, `approver`, `data_steward`, `read_only`. **Data Platform** ← `data_engineer`, `operations`, `administrator`. |
+| D2 | Switcher | **None.** Persona is strictly derived from roles. Administrators land in Data Platform (they keep the Admin nav). |
+| D3 | Data Platform scope | Run observability + selective re-run; schema / lineage / DQ view per feed. **Not** queue/worker health dashboards; **not** feed registry/scheduling (W2). |
+| D4 | Data Analyst depth | Statistical profile (v2) + column roles + recommended fields + anomaly signals over the uploaded file. **Not** analytics over Silver. |
+| D5 | Sequencing | Migrations mechanism (P0) first; the step ledger ships as migration 001. |
+| D6 | Column importance | Model-assigned, bounded by deterministic rules, deterministic fallback. |
+| D7 | Home | Persona-specific home pages, both keeping the greeting and `ActionLauncher`. |
+| D8 | HL7 segment awareness for the 142-column ADT file | Deferred to W2. Role classification only. |
+| D9 | Question-aware view / analytics | Out of scope until Silver ODS exists (W3). |
+
+Two things the decisions settle that the plan must hold to:
+
+- **Persona is emphasis; capability is authority.** Persona chooses defaults (reading mode,
+  filters, grouping, home page). Whether a user may *decide a gate* or *re-run a step* is a role
+  predicate enforced by the API, independent of persona. An administrator who also holds
+  `approver` can approve; a `data_steward` sees the gate but cannot press it — and the screen says
+  why. This is `forward-flow-adoption.md §7.2` properties 1–3, made concrete.
+- **Multi-role precedence.** Any platform role → Data Platform. Otherwise any analyst role → Data
+  Analyst. `read_only` alone → Data Analyst with no capabilities.
+
+---
+
+## 14. The persona model
+
+### 14.1 Backend — the single source of truth
+
+`backend/src/cinqflow/auth/persona.py` (new):
+
+```python
+Persona = Literal["data_analyst", "data_platform"]
+
+PLATFORM_ROLES = frozenset({"data_engineer", "operations", "administrator"})
+ANALYST_ROLES  = frozenset({"business_analyst", "approver", "data_steward", "read_only"})
+GATE_ROLES     = frozenset({"business_analyst", "approver"})   # may decide G1/G2
+
+class Capabilities(BaseModel):
+    can_decide_gates: bool   # roles ∩ GATE_ROLES
+    can_rerun_steps: bool    # roles ∩ PLATFORM_ROLES
+    can_manage_users: bool   # "administrator" (already enforced by users.py)
+
+def persona_for(roles: list[str]) -> Persona: ...
+def capabilities_for(roles: list[str]) -> Capabilities: ...
+```
+
+`CurrentUser` (`auth/models.py`) gains `persona: Persona` and `capabilities: Capabilities`,
+populated in `AuthStore.current_user` — so `/api/auth/login`, `/api/auth/refresh` and
+`/api/auth/me` all carry them and the frontend never re-derives the mapping.
+
+**Enforcement, using the `require_role` infrastructure that exists** (`api/deps.py`):
+
+| Endpoint | Guard |
+|---|---|
+| `POST /api/uploads/{id}/approve` · `/reject` | `require_capability("can_decide_gates")` |
+| `POST /api/feeds/{feed}/mapping-versions/{v}/approve` | same |
+| `POST …/steps/{step}/rerun` (§16) · existing `POST /api/uploads/{id}/retry` | `require_capability("can_rerun_steps")` |
+| Everything else | unchanged this plan (the Phase-2 "gate every router" item stays W1's) |
+
+`require_capability` is a one-line sibling of `require_role`. This is the first time the API
+refuses a decision by *who* is asking; today `submitDecision` records the approver but any signed-in
+user can call it.
+
+Tests: unit for `persona_for`/`capabilities_for` across all role combinations; integration —
+`approver` approves (202), `data_steward` gets 403, `data_engineer` re-runs (202),
+`business_analyst` re-run gets 403.
+
+### 14.2 Frontend — defaults, never a second mapping
+
+`frontend/lib/persona.ts` (new) reads `user.persona` and `user.capabilities` and exposes the
+defaults table:
+
+| Default | Data Analyst | Data Platform |
+|---|---|---|
+| Home | Worklist home (§17.1) | Attention home (§17.2) |
+| `ReadingMode` initial | `evidence` | `forensic` |
+| S4 proposal filter | needs-decision | all |
+| Forensic column grouping | by role, `technical` collapsed | by role, all expanded |
+| Register (`/data/intake`) columns | object, stage, status, business date, decision-needed | + fingerprint, landing key, batch id, attempts |
+| Register default filter | "waiting for me" | all, adverse first |
+| Group view (`/data/intake/[group]`) | Configuration · Map to domain | + Schema · Lineage · Quality (§18) |
+| Gate controls (G1/G2) | rendered iff `can_decide_gates`; otherwise the decision block reads *"Your role can review this run but not decide it — an approver or business analyst signs the gate."* | same rule (an admin with `approver` can decide) |
+| Re-run controls | hidden | rendered iff `can_rerun_steps` |
+| `WorkflowSteps` panel (§16) | collapsed | expanded |
+
+The analyst's own `localStorage` reading-mode override (spec §S2) still wins over the default.
+`CurrentUser` (`lib/auth.ts`) gains the two fields; `AppShell` passes `persona` where it already
+passes `isAdmin`.
+
+---
+
+## 15. Work package map
+
+```
+PR-0  Migrations mechanism ─────────────────────────────┐
+PR-1  Persona + capabilities (backend + frontend) ──────┤
+PR-2  Step ledger + WORKFLOW + progress steps[] ─────────┼─► PR-3 Re-run ─► PR-4 Persona homes
+PR-5  Profiler v2 (hints + statistics + PHI mask) ──────┼─► PR-6 Prompt v3 column roles ─► PR-7 Analyst UI
+PR-8  Platform feed view (schema · lineage · quality) ◄──┘  (needs PR-2 for step state, PR-5 for stats)
+PR-9  Docs: templates.md §1.2/1.3, ADR for doc 03, analyst-forward-flow §0
+```
+
+Two independent lanes after PR-1: the **platform lane** (PR-2 → PR-3 → PR-4 → PR-8) and the
+**analyst lane** (PR-5 → PR-6 → PR-7). They touch different layers and can be built in parallel;
+PR-8 is the join. Recommended single-track order: 0, 1, 2, 3, 5, 6, 7, 4, 8, 9 — platform value
+lands at PR-3, analyst value at PR-7, both homes at PR-4.
+
+---
+
+## 16. Platform lane
+
+### PR-0 — Migrations mechanism — **built** (branch `feat/w0-versioned-migrations`)
+
+*Backend.* `backend/src/cinqflow/migrations/` — inside the package, next to the code, the way
+`intelligence/prompts/*.md` ship, so Docker, Railway and `poetry run` see the same files with
+no packaging step (the plan first said `backend/migrations/`; that would have needed its own
+`COPY` in two Dockerfiles). `NNN_snake_case_name.sql`, contiguous from `001`; schema names as
+`{{workflow}}` / `{{queue}}` / `{{auth}}` (no data-plane token on purpose — Bronze/Silver DDL
+stays contract-rendered, `structure.md` boundary 6). `workflow.schema_version (version INT PK,
+name TEXT, applied_ts TIMESTAMPTZ)`. Each file runs in its own transaction under a
+`pg_advisory_xact_lock`, re-checks the version row after acquiring it (two concurrent
+`install`s apply each file once), and a failure rolls that file back and stops. The runner
+refuses a gap, a duplicate, a misnamed `.sql`, an unknown token, and any applied version
+whose file was renamed or deleted — all before the first statement runs.
+
+`cinqflow install` applies pending migrations after the frozen baseline DDL and before the
+bootstrap admin, and prints `migrations: applied …` / `migrations: none pending (N applied)`;
+`cinqflow reset --yes` re-applies them so a reset lands on the same shape. New
+`cinqflow migrate [--status]` for an operator looking at one database. **From this PR on,
+`workflow/ddl.py` and `auth/ddl.py` are frozen; every schema change is a migration.** No
+migration ships in PR-0 (no no-op baseline file — an empty, validated set is the honest state);
+`001_step_run.sql` is PR-2's.
+
+*Tests.* Unit (`tests/unit/test_migrations.py`): discovery, ordering, gap/duplicate/misnamed
+refusal, token rendering. Integration (`tests/integration/test_migrations.py`): applies in
+order and records `applied_ts`; idempotent re-run; a later file applies only itself; a gap
+refuses everything; a failing file rolls back completely and leaves the connection usable;
+renamed/deleted applied files refused; `$$` blocks and multi-statement files apply as one;
+`{{queue}}`/`{{auth}}` resolve; the shipped directory applies cleanly on a fresh install. CLI
+(`tests/unit/test_cli_migrate.py`): `install` applies and reports, `migrate --status` never
+applies, `migrate` applies, `reset --yes` re-applies, a bad set fails install loudly.
+
+*Frontend.* None — PR-0 has no user-visible surface. *Infra.* No change to compose or
+Railway: both already run `cinqflow install`. *Docs:* `structure.md` layout tree + "Data
+stores" paragraph.
+
+### PR-2 — Step ledger
+
+*Backend.*
+- `workflow/dag.py`: `StepDef` + `WORKFLOW` (§6.1). Add `scope`: `upload` for
+  profile/interpret/gate_g1/land, `batch` for analyze, `feed_version` for preview/gate_g2/promote.
+- `migrations/001_step_run.sql` (§6.1 DDL).
+- `workflow/store.py`: `StepLedger.start/finish/fail/list(scope)`; `StepRun` model in
+  `workflow/models.py` (templates.md §1 gets a §1.10).
+- Each worker: `start` on entry, `finish(artifact)` on success, `fail(error)` in the exception
+  path *before* re-raising (so `queue.claim`'s rollback cannot lose it — write it on a fresh
+  cursor after `conn.rollback()`, the same way `interpret_upload.py` records `INTERPRET_FAILED`).
+  `analyze_bronze.py` already swallows the proposal failure into its return dict; it now also
+  writes `fail`.
+- Gates: `gate_g1`/`gate_g2` step rows are written by the approve/reject handlers (`done`, with
+  `artifact = approval_id`), so a gate is a step like any other.
+- `build_upload_progress` and `GET /api/batches/{id}/progress` add `steps: list[StepRun]`; the
+  existing `stages[]` shape stays until the frontend has migrated (PR-4), then goes.
+- `GET /api/steps?state=failed&limit=` and `GET /api/steps?scope_kind=&scope_id=` (new
+  `routers/steps.py`, read-only, mounted in `app.py`) for the platform home and the feed view.
+
+*Frontend.*
+- `lib/runStep.ts`: `RUN_STEPS` derived from `WORKFLOW` (exported once as JSON via
+  `GET /api/workflow` or embedded in `/progress`); `canonicalStep(steps)` = furthest `done`, else
+  first `running`/`failed`. This makes S5 derivable and retires the hand-copied list.
+- `components/run/WorkflowSteps.tsx`: one `usePoll` over `/progress`; renders every step's state,
+  attempts, duration, error. Replaces `LandingWait`, `BronzeAnalysisWait` and `PreviewPanel`'s
+  poll (all three deleted). `RunRail` reads the same payload.
+- Persona: expanded for Data Platform, collapsed for Data Analyst (§14.2).
+
+*Tests.* Unit: `WORKFLOW` is acyclic, every `topic` has a handler in `worker.handlers()`.
+Integration: after each existing stage e2e, `step_run` shows the expected `done` rows; a forced
+handler exception leaves a `failed` row with the error. *Acceptance:* no screen in
+`app/runs/**` polls anything but `/progress`.
+
+### PR-3 — Selective re-run
+
+*Backend.* `POST /api/uploads/{id}/steps/{step}/rerun`, `POST /api/batches/{id}/steps/{step}/rerun`,
+`POST /api/feeds/{feed}/mapping-versions/{v}/steps/{step}/rerun`, all `require_capability
+("can_rerun_steps")`. Legality table `RERUNNABLE: dict[step_key, frozenset[StepState]]` in
+`workflow/dag.py` (`failed`, `done` → yes; `pending`, `running` → 409; gates → never). Re-run
+mints `generation + 1` and enqueues with `dedupe_key = f"{scope_id}:{step}:{generation}"` — the
+change that closes `forward-flow-adoption.md §6.5` (promote could never be re-queued because the
+dedupe key swallowed it). `promote` re-run reuses `promote_silver`'s replay semantics (rebuild this
+batch only); `analyze` re-run supersedes the prior proposal (new `proposal_id`, prior stays for
+lineage). The existing `/retry` becomes a thin alias.
+
+*Frontend.* **Re-run** button per `failed`/`done` step in `WorkflowSteps`, shown iff
+`can_rerun_steps`, with the consequence stated before the click (`ConfirmDialog`, as G1 does):
+*"Re-running promotion rebuilds this batch's Silver rows and quarantine; Bronze is untouched."*
+
+*Tests.* Integration: rerun of `failed` → 202 + new generation + message enqueued; rerun of
+`running` → 409; rerun of a gate → 409; `data_steward` → 403; promote rerun yields identical
+`record_hash`es (features.md Stage 6 acceptance 3, now reachable on demand).
+
+### PR-4 — Persona homes (`app/page.tsx`)
+
+*Backend.* `GET /api/worklist` exists (`routers/worklist.py`). Extend its payload with counts
+(`waiting_at_g1`, `approvable_at_g2`) and, for the platform home, reuse `GET /api/steps?state=failed`
+plus `GET /api/queue/depth`.
+
+*Frontend.*
+- **Data Analyst home** — greeting · *"3 runs are waiting for you at a gate"* · worklist table
+  (file, feed, gate, waiting since → links to `/runs/{id}/review` or `/runs/{id}/mapping`) ·
+  recent runs · `ActionLauncher`. `components/home/AnalystWorklist.tsx`.
+- **Data Platform home** — greeting · **Needs attention**: failed steps (feed, step, error,
+  attempts, **Re-run**) and dead-letter messages · in-flight steps · feeds by health (last step
+  state per feed, adverse first) · `ActionLauncher`. `components/home/PlatformAttention.tsx`.
+- `app/page.tsx` branches on `user.persona`; nothing else about the page changes.
+
+*Acceptance.* An `approver` sees exactly the runs the register would flag "Needs Review"; a
+`data_engineer` sees every `failed` step in the ledger and can re-run it from home.
+
+### PR-8 — Platform feed view (`/data/intake/[group]`)
+
+`GroupPanels`/`GroupStageTabs` gain three persona-conditional panels (tabs, not a new route — the
+group *is* the feed, and `structure.md` keeps feed-level surfaces here):
+
+| Panel | Source | Content |
+|---|---|---|
+| **Schema** | latest `Profile` for the group (+ v2 statistics from PR-5) | columns · type · null ratio · distinct · candidate keys as constraints · PHI · role · drift vs previous upload of the same feed (columns added/removed/type changed — computed client-side from the two most recent profiles) |
+| **Lineage** | `GET /api/lineage/{batch_id}` per batch (`LineageChain` reused) | upload → file → batch → Bronze table → mapping vN → Silver tables, with both approvals and approvers |
+| **Quality** | `GET /api/batches/{id}/quarantine`, `Run.counts`, `Run.balanced` | balance equation per run · quarantine `by_outcome` / `by_rule` · rows refused, with the `dq/severity.yaml` action vocabulary (block · quarantine · warn · observe) as the legend |
+
+No new backend endpoints: every figure is already served. *Acceptance:* a `data_engineer` can
+answer "what changed in this feed's schema since last month, and what did the last promotion
+refuse" without opening `/batches/{id}`.
+
+---
+
+## 17. Analyst lane
+
+### PR-5 — Profiler v2 (deterministic)
+
+`engine/profiler.py`, `PROFILER_VERSION = "2"`. Per column, in addition to today's facts:
+
+| Fact | Rule | PHI handling |
+|---|---|---|
+| `hint: ColumnRoleHint` | §7.1 table (`date` · `identifier` · `measure` · `dimension` · `technical` · `unclassified`; `phi` stays a flag) | n/a |
+| `null_ratio` | `null_count / row_count` | n/a |
+| `min`, `max` | parsed numeric / date only | omitted for PHI columns |
+| `top_values` | value → count, cap 10 | **omitted for PHI columns; `mask_facts` strips it defensively** |
+| `constant` | `distinct_count == 1` | n/a |
+| `sentinel_count` | `1900-01-01`, `9999-12-31`, `0000-00-00`, all-zero / all-nine strings (RR-23) | n/a |
+
+At facts level: `time_coverage: {column, min, max}` over date columns. `bronze_profiler.py`
+consumes the same function, so S4 reconciliation gets the same facts for free.
+
+`profile_id` changes for every future upload (identity is the hash of facts — by contract).
+Existing rows are untouched. `templates.md §1.2` updated (PR-9 folds it in if preferred).
+
+*Tests.* Unit on synthetic columns for every rule; golden: the Fidelis upstate CSV and the Molina
+MEDICAID TXT produce an expected hint per column and expected `time_coverage`. PHI: `mask_facts`
+output for a `phi_candidate` column has no `top_values`, `min`, `max`, `sample_values`.
+
+### PR-6 — Prompt v3: column roles and importance
+
+`intelligence/schemas.py`: `LlmColumnRole { name, role, importance, reason }`;
+`InterpretationResponse.column_roles`. `prompts/interpret_file_v3.md` + `REGISTRY["interpret_file"] = 3`.
+The prompt receives hints as observations and is told the bounds (D6): glossary match or domain
+`what_it_answers` → `high`; `technical` never above `low`; a role that contradicts a hint must say
+why in `reason`. `ContextBuilder.for_interpretation` adds the domain's `what_it_answers`
+(already loaded for mapping).
+
+`_assemble`: only observed columns survive; invalid role → `unclassified`; missing column → hint
+with `importance = "medium"`, `reason = "from profile hint"`; malformed → `info` signal (the
+claims/signals discipline). Persist `InterpretationContent.column_roles: list[ColumnRole]`
+(JSONB, no migration). `StubClient` emits from hints. Deterministic anomaly signals from PR-5's
+facts (100%-null, constant, sentinel-heavy, duplicate rate) are added to the stub and to
+`_assemble` as `Signal(kind="risk")` so they exist regardless of provider.
+
+**Token budget.** `settings.llm_max_tokens` defaults to 2048; a 142-column ADT interpretation with
+roles will not fit. Raise the default to 8000 (production already runs 16000) and cap
+`column_roles` to observed columns. Interpretation is versioned against `profile_id`, so
+re-profiling identical bytes costs nothing new.
+
+*Tests.* `test_intelligence*.py` extended: roles validated, fallback applied, importance bounds
+enforced by `_assemble` (a `technical` column marked `high` is demoted with an `info` signal),
+stub determinism, OpenAI-strict schema compatibility (`test_llm_schema_openai_compat.py` already
+guards this). Golden set on the two corpus files.
+
+### PR-7 — Analyst UI
+
+- **`components/run/RecommendedFields.tsx`** — S2, Evidence and Verdict modes: `importance = high`
+  columns grouped by role, each with its `reason` and the glossary/canonical citation as text (the
+  knowledge layer has no HTTP surface — `knowledge-base-screen.md §5` — so no link yet).
+- **`VerdictCard`** adds one line from v2 facts: *"time coverage 2024-02-01 → 2026-01-31 · 3
+  constant columns · 2 sentinel-heavy dates"*. Composed, never generated.
+- **Forensic table** (`ReviewEvidence`) grouped by role via `CollapsibleSection`, `technical`
+  collapsed by default for Data Analyst; columns gain null ratio, min/max, top values (non-PHI).
+- **`ProposalTable`** gains a role column and default ordering identifiers → measures →
+  dimensions → dates → business → technical (the status filter is unchanged).
+- **`SignalCard`** already renders the new anomaly signals — no change.
+
+*Acceptance.* On the 60-column Molina file in Evidence mode, the analyst sees ≤ 12 recommended
+fields and seven role groups before any 60-row table. Facts are never hidden: every column is
+reachable in Forensic.
+
+---
+
+## 18. Cross-cutting
+
+### 18.1 Register and group view (both personas)
+
+`IngestionTable` (`/data/intake`) reads `persona` for its default column set and filter (§14.2).
+`lifecycleStage.ts`'s `stageOf` moves to the ledger once PR-2 lands (a group's stage becomes the
+furthest `done` step across its objects — same semantics, one source).
+
+### 18.2 What a persona may never do
+
+- Hide a fact. Personas change defaults, ordering, grouping and home. Forensic is always reachable.
+- Present a disabled control without its reason on screen (the console's existing pattern).
+- Stand in for authorisation. Every capability is enforced by the API (§14.1); the UI only
+  mirrors it.
+
+### 18.3 Infra
+
+| Item | Plan |
+|---|---|
+| Schema changes | `001_step_run.sql` via PR-0's mechanism. Everything else is JSONB. |
+| LLM | `llm_max_tokens` default → 8000; document in `compose/.env.example`. |
+| PHI | `mask_facts` covers v2 facts (PR-5). `RR-08` governs the prompt; `column_roles.reason` must not quote values — say so in the prompt and assert it in the golden tests (no sample value string appears in any `reason`). |
+| Railway | No topology change. Ledger + `/api/steps` give failed-step visibility without a metrics stack. |
+| Hosting/PHI gate | Unchanged from memory: no real PHI until the Azure/Entra + BAA decision. All of this plan runs on de-identified data. |
+
+### 18.4 Testing and review discipline
+
+- Backend: pytest for every PR (`checklist.md §0`: "Tests exist for every behavioral change and
+  were actually run"); the full suite must stay green (384 today).
+- Frontend: `tsc --noEmit` + `next build`, then the manual smoke script below (the owner's
+  decision: no frontend test infra yet).
+- **Review checklist item, added after today:** no function-typed prop may cross from a Server
+  Component into a `"use client"` component (`tsc` and `next build` cannot catch it; the
+  `PreviewPanel.limitHref` incident is the precedent).
+- Each PR ends with a stage completion report (`templates.md §7`).
+
+### 18.5 Manual smoke script (per PR, per persona)
+
+Sign in as an `approver`, then as a `data_engineer` (create both via `/admin/users`), and for
+each: home renders the right variant → upload the Fidelis CSV → S1 → S2 (recommended fields,
+reading mode default, gate visible only for the approver) → approve → Bronze review (grouped
+proposal) → mapping → preview → G2 → `/data/intake/[group]` (Schema/Lineage/Quality only for the
+engineer) → force a failure (`CINQFLOW_LLM_API_KEY` bad) → the step shows `failed` with its error
+→ engineer re-runs it from home; approver cannot.
+
+---
+
+## 19. Hand-off to implementation
+
+Each PR above is one implementation session. When starting one, the prompt should name:
+
+1. **The PR number** (e.g. "implement PR-2") — the package, its files, tests and acceptance are
+   defined here; the session should re-read only that section and the files it names.
+2. **Branch discipline** — one branch per PR off latest `main`, merged via PR (the convention used
+   throughout this work).
+3. **Verification expected** — `poetry run pytest` green, `tsc --noEmit`, `next build`, and the
+   §18.5 smoke steps relevant to that PR; docker stack rebuilt (`docker compose up --build -d`) so
+   the owner can click through.
+4. **Anything decided differently** since this document — D1–D9 are the assumptions; changing one
+   changes §14 and the affected PR.
+
+Recommended first session: **PR-0 + PR-1 together** (both small, both unblock everything, and
+PR-1 is the first time the API refuses a decision by role — worth seeing on its own).
+
+---
+
+*Part II decided and written 2026-09-05. Cites, additionally, `backend/src/cinqflow/api/app.py`,
+`routers/worklist.py`, `workers/analyze_bronze.py`, `frontend/app/layout.tsx`,
+`components/shell/AppShell.tsx`, `components/home/ActionLauncher.tsx`, `lib/lifecycleStage.ts`
+and `docs/blueprints/templates.md`.*
