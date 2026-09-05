@@ -7,6 +7,7 @@ import PreviewPanel from "@/components/PreviewPanel";
 import StatusWord from "@/components/StatusWord";
 import {
   getFeedVersionProgress,
+  getGate,
   getMappingDiff,
   getMappingVersion,
   getPreview,
@@ -59,6 +60,11 @@ export default async function MappingPageBody({
   const mapping = selected ? await getMappingVersion(feed, selected) : null;
   const diff = selected ? await getMappingDiff(feed, selected) : null;
   const preview = selected ? await getPreview(feed, selected, previewLimit) : null;
+  // Every reason G2 is closed, from the server's own list. Fetched alongside
+  // the preview rather than derived from it: `preview.approvable` answers only
+  // whether the preview is current, so a draft missing a required target read
+  // as approvable right up until the 409.
+  const gate = selected ? await getGate(feed, selected) : null;
   // The ledger's view of this version, for `PreviewPanel`'s `WorkflowSteps`.
   const progress = selected ? await getFeedVersionProgress(feed, selected).catch(() => null) : null;
   const analystEdited = new Set(diff?.diff.analyst_edited ?? []);
@@ -198,7 +204,10 @@ export default async function MappingPageBody({
             </span>
           </div>
 
-          <h2>{mapping.editable ? "Edit the draft" : "Frozen version"}</h2>
+          {/* Named so a G2 blocker can point at it: `GateBlockers` turns
+              "3 required field(s) are not mapped" into a link to the table
+              where that gets fixed. */}
+          <h2 id="studio">{mapping.editable ? "Edit the draft" : "Frozen version"}</h2>
 
           {mapping.editable ? (
             <MappingStudio mapping={mapping} basePath={baseHref} />
@@ -245,17 +254,20 @@ export default async function MappingPageBody({
             </>
           )}
 
-          <PreviewPanel
-            feed={feed}
-            version={mapping.version}
-            preview={preview}
-            limit={previewLimit}
-            baseHref={baseHref}
-            initialSteps={progress?.steps ?? []}
-            canRerun={canRerun}
-          />
+          <div id="preview">
+            <PreviewPanel
+              feed={feed}
+              version={mapping.version}
+              preview={preview}
+              limit={previewLimit}
+              baseHref={baseHref}
+              initialSteps={progress?.steps ?? []}
+              canRerun={canRerun}
+            />
+          </div>
 
           <ApproveMapping
+            gate={gate}
             feed={feed}
             version={mapping.version}
             status={mapping.status}

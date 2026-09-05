@@ -863,6 +863,41 @@ export interface PreviewResult {
   created_ts: string;
 }
 
+/** One reason G2 is closed. `anchor` names the thing on the page that has to
+ *  change, so the reason can be a link rather than prose to translate. */
+export interface GateBlocker {
+  code: string;
+  message: string;
+  hint?: string;
+  anchor?: string;
+  missing_required?: string[];
+  approver?: string;
+  decided_ts?: string;
+  approval_id?: string;
+}
+
+export interface GateStatus {
+  feed: string;
+  version: number;
+  approvable: boolean;
+  blockers: GateBlocker[];
+}
+
+/** Whether G2 will open, and every reason it will not — from the same list the
+ *  approve handler refuses from. Preferred over `PreviewResult.approvable`,
+ *  which only answers whether a preview is current and therefore rendered an
+ *  enabled button for a draft the server would refuse. Null on an API too old
+ *  to serve it; callers fall back to the preview's narrower answer. */
+export async function getGate(feed: string, version: number): Promise<GateStatus | null> {
+  try {
+    return await get<GateStatus>(
+      `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/gate`,
+    );
+  } catch {
+    return null;
+  }
+}
+
 export async function getPreview(
   feed: string,
   version: number,

@@ -1466,6 +1466,50 @@ tr:last-child td { border-bottom: none; }
 .gate-note { font-size: 13px; color: var(--ink2); margin-bottom: 12px; }
 .gate-actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
 
+/* ------------------------------------------------- G2 blockers (the closed gate)
+   Work, not a verdict. Each row is a reason plus somewhere to go, so the list
+   reads as a to-do; the strip is deliberately the same `.gate-box` frame the
+   open gate uses, because it is the same object in a different state and
+   swapping the frame would read as a different part of the page.
+
+   The severity mark is a shape, not only a colour: a filled square in the
+   danger hue, which survives greyscale and deuteranopia the way the status
+   lexicon and the confidence bands do. */
+.gate-blockers { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.gate-blocker {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surf);
+  font-size: 13px;
+}
+.gate-blocker-mark {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  background: var(--danger);
+  border-radius: 1px;
+}
+.gate-blocker-body { display: grid; gap: 3px; min-width: 0; flex: 1 1 auto; }
+.gate-blocker-message { color: var(--ink); }
+.gate-blocker-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.gate-blocker-list .mono {
+  font-size: 11px;
+  color: var(--danger);
+  background: var(--danger-weak);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+  border-radius: 2px;
+  padding: 0 4px;
+}
+.gate-blocker-go {
+  flex: 0 0 auto;
+  font-size: 12px;
+  white-space: nowrap;
+  align-self: center;
+}
+
 /* ---------------------------------------------------------------- Alerts */
 .alert { border-radius: 6px; padding: 11px 14px; font-size: 13px; margin-top: 12px; }
 .alert.error { background: var(--danger-weak); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); color: var(--danger); }

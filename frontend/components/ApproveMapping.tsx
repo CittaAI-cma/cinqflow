@@ -4,9 +4,10 @@ import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { approveVersion, type StudioState } from "@/app/mapping/actions";
 import AnnounceOnMount, { announceOnSubmit } from "@/components/ui/AnnounceOnMount";
+import GateBlockers from "@/components/run/GateBlockers";
 import GateChecklist, { type ChecklistItem } from "@/components/run/GateChecklist";
 import GateLocked from "@/components/run/GateLocked";
-import type { PreviewResult } from "@/lib/api";
+import type { GateStatus, PreviewResult } from "@/lib/api";
 
 function ApproveButton() {
   const { pending } = useFormStatus();
@@ -26,6 +27,7 @@ export default function ApproveMapping({
   preview,
   editedCount = 0,
   canDecide,
+  gate,
   basePath,
 }: {
   feed: string;
@@ -40,6 +42,10 @@ export default function ApproveMapping({
    *  but not decide sees the gate's frame with the reason, not the form -
    *  the API refuses them too (403); this mirrors it. */
   canDecide: boolean;
+  /** Every reason the server will refuse, from `GET .../gate`. Null when the
+   *  API is too old to answer; the gate then falls back to the preview's
+   *  narrower `approvable`, which is what it used before this existed. */
+  gate: GateStatus | null;
   /** The route this gate is on, so approving revalidates the surface the
    *  analyst is looking at and not only the durable `/mapping/{feed}` one. */
   basePath?: string;
@@ -86,7 +92,12 @@ export default function ApproveMapping({
 
   if (!canDecide) return <GateLocked gate="G2" />;
 
-  const approvable = Boolean(preview?.approvable);
+  // The server's whole answer where it is available. `preview.approvable` is
+  // only "is this preview current", which is one of four rules — trusting it
+  // alone is what rendered an enabled button for a draft with an unmapped
+  // required field, and then 409'd on the press.
+  const approvable = gate ? gate.approvable : Boolean(preview?.approvable);
+  const blockers = gate?.blockers ?? [];
   const failureCount =
     (preview?.aggregates.rows_with_failures ?? 0) +
     (preview?.aggregates.rows_quarantined ?? 0) +
@@ -106,11 +117,20 @@ export default function ApproveMapping({
       </h2>
 
       {!approvable ? (
-        <p className="alert warn">
-          {preview
-            ? `v${version} changed after this preview ran — preview again. G2 stays closed until the preview reflects the current draft.`
-            : "No preview of this spec yet. G2 stays closed until the mapping has been seen running."}
-        </p>
+        blockers.length ? (
+          <div className="card gate-box">
+            <span className="panel-label">
+              G2 is closed · {blockers.length} {blockers.length === 1 ? "reason" : "reasons"}
+            </span>
+            <GateBlockers blockers={blockers} />
+          </div>
+        ) : (
+          <p className="alert warn">
+            {preview
+              ? `v${version} changed after this preview ran — preview again. G2 stays closed until the preview reflects the current draft.`
+              : "No preview of this spec yet. G2 stays closed until the mapping has been seen running."}
+          </p>
+        )
       ) : (
         <form
           action={action}
