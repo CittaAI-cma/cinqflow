@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from cinqflow.workflow.dag import WORKFLOW, StepScope, StepState
 from cinqflow.workflow.states import RunState, UploadStatus
 
 ClaimKind = Literal["observed_fact", "governed_knowledge", "inference", "recommendation"]
@@ -29,6 +30,26 @@ class Upload(BaseModel):
     created_ts: datetime
 
 
+#: The profiler's deterministic role hint (§7.1). PHI is not a role - it stays
+#: `phi_candidate`. `technical` is the platform's own bookkeeping columns.
+ColumnRoleHint = Literal["identifier", "measure", "dimension", "date", "technical", "unclassified"]
+
+
+class TopValue(BaseModel):
+    value: str
+    count: int
+
+
+class TimeCoverage(BaseModel):
+    """The data's own period: min/max (ISO dates) across the date columns named
+    in `columns` - never a PHI date (a birth date is not a delivery period) and
+    never a technical one (a load timestamp is the platform's)."""
+
+    columns: list[str]
+    min: str
+    max: str
+
+
 class ColumnFacts(BaseModel):
     name: str
     inferred_type: Literal["string", "int", "decimal", "date", "timestamp", "bool", "code"]
@@ -37,6 +58,17 @@ class ColumnFacts(BaseModel):
     sample_values: list[str]
     patterns: dict[str, float | bool]
     phi_candidate: bool
+    # -- v2 facts (PR-5). Defaulted so a v1 profile row still loads unchanged.
+    hint: ColumnRoleHint = "unclassified"
+    null_ratio: float = 0.0
+    #: Parsed numeric or date bounds as text; None for other types and for PHI.
+    min: str | None = None
+    max: str | None = None
+    #: value -> count, capped (`profiler.TOP_VALUES_CAP`); always empty for PHI.
+    top_values: list[TopValue] = Field(default_factory=list)
+    constant: bool = False
+    #: RR-23 placeholder values (`1900-01-01`, `9999-12-31`, all-zero/all-nine).
+    sentinel_count: int = 0
 
 
 class SheetFacts(BaseModel):
@@ -54,6 +86,8 @@ class ProfileFacts(BaseModel):
     phi_candidates: list[str]
     sheets: list[SheetFacts] = Field(default_factory=list)
     sample_rows: list[dict[str, str]] = Field(default_factory=list)
+    #: v2 (PR-5): the data's period, over non-PHI, non-technical date columns.
+    time_coverage: TimeCoverage | None = None
 
 
 class Profile(BaseModel):
@@ -113,11 +147,40 @@ class Provenance(BaseModel):
 RecommendedAction = Literal["approve", "review_first"]
 
 
+#: What the model may say a column is (intelligence/schemas.py); the profiler's
+#: `ColumnRoleHint` is the subset code can tell on its own.
+ColumnRole = Literal[
+    "identifier",
+    "measure",
+    "dimension",
+    "date",
+    "business_attribute",
+    "technical",
+    "derived",
+    "unclassified",
+]
+
+
+class ColumnRoleOut(BaseModel):
+    """One observed column's role and importance as persisted (PR-6). `hint` is
+    what the profiler said; `source` says whether the model classified it or
+    the hint stood in. `reason` is structure and knowledge, never a value."""
+
+    name: str
+    role: ColumnRole
+    importance: Literal["high", "medium", "low"]
+    reason: str
+    hint: ColumnRoleHint
+    source: Literal["model", "hint"]
+
+
 class InterpretationContent(BaseModel):
     """The structured AI output. No free-form text is authoritative."""
 
     claims: list[Claim]
     signals: list[Signal] = Field(default_factory=list)
+    #: One per observed column (PR-6). Empty on interpretations written before v3.
+    column_roles: list[ColumnRoleOut] = Field(default_factory=list)
     #: One sentence, computed - see `RecommendedAction`.
     headline: str = ""
     recommended_action: RecommendedAction = "approve"
@@ -480,6 +543,43 @@ class BatchDetail(BaseModel):
     proposal: Proposal | None = None
 
 
+class StepRun(BaseModel):
+    """One generation of one step of one scope, as the ledger recorded it
+    (`workflow.step_run`, templates.md §1.10). `generation` is intent - a
+    finished step run again gets a new one; `attempts` is the queue retrying
+    this generation. `error` carries a failure, a refusal's reason, or the
+    text of a rejection at a gate."""
+
+    step_run_id: str
+    scope_kind: StepScope
+    scope_id: str
+    step_key: str
+    generation: int
+    state: StepState
+    attempts: int
+    message_id: str | None = None
+    artifact_type: str | None = None
+    artifact_id: str | None = None
+    error: str | None = None
+    queued_ts: datetime
+    started_ts: datetime | None = None
+    finished_ts: datetime | None = None
+
+
+class StepProgress(BaseModel):
+    """One declared step (`workflow/dag.py`) with the latest thing the ledger
+    knows about it. `not_reached` is the honest word for "no row": distinct
+    from `pending`, which means a message exists and no worker has taken it."""
+
+    key: str
+    label: str
+    scope_kind: StepScope
+    gate: bool
+    topic: str | None
+    state: StepState | Literal["not_reached"]
+    run: StepRun | None = None
+
+
 StageState = Literal["pending", "running", "done", "failed"]
 
 
@@ -511,6 +611,10 @@ class UploadProgress(BaseModel):
     #: straight to `/api/batches/{batch_id}` the moment this is non-null.
     batch_id: str | None = None
     stages: list[Stage]
+    #: The ledger's view (PR-2): every declared step, across the scopes this
+    #: upload's journey crosses. `stages` stays until the last screen has
+    #: migrated to this (PR-4), then goes.
+    steps: list[StepProgress] = Field(default_factory=list)
 
 
 def mask_row(row: dict[str, Any], phi_columns: set[str]) -> dict[str, Any]:
@@ -519,13 +623,19 @@ def mask_row(row: dict[str, Any], phi_columns: set[str]) -> dict[str, Any]:
 
 
 def mask_facts(facts: ProfileFacts) -> ProfileFacts:
-    """PHI never leaves the API unmasked: example values are dropped for PHI
-    candidate columns, and sample rows are masked field by field."""
+    """PHI never leaves the API unmasked: example values, value frequencies and
+    bounds are dropped for PHI candidate columns (the profiler already omits
+    them; this is the defensive layer), and sample rows are masked field by
+    field."""
     phi = set(facts.phi_candidates)
     return facts.model_copy(
         update={
             "columns": [
-                column.model_copy(update={"sample_values": []}) if column.phi_candidate else column
+                column.model_copy(
+                    update={"sample_values": [], "top_values": [], "min": None, "max": None}
+                )
+                if column.phi_candidate
+                else column
                 for column in facts.columns
             ],
             "sample_rows": [mask_row(row, phi) for row in facts.sample_rows],
@@ -674,6 +784,7 @@ def build_upload_progress(
     upload: Upload,
     run: InterpretationRun | None,
     land_run: Run | None = None,
+    step_runs: list[StepRun] | None = None,
 ) -> UploadProgress:
     """The upload's journey stage by stage, with LangGraph node detail for the
     AI interpretation stage - the one step whose duration is an LLM call, and
@@ -683,6 +794,7 @@ def build_upload_progress(
         status=upload.status,
         error=upload.error,
         batch_id=land_run.batch_id if land_run else None,
+        steps=build_step_progress(step_runs),
         stages=[
             Stage(
                 key="profile",
@@ -707,3 +819,32 @@ def build_upload_progress(
             ),
         ],
     )
+
+
+def build_step_progress(step_runs: list[StepRun] | None) -> list[StepProgress]:
+    """Every declared step, with the newest generation the ledger has for it.
+
+    Rows may span scopes (an upload's own, its batch's, its feed version's) -
+    the caller chooses which scopes belong to the object being described; this
+    only picks, per step, the newest generation among what it was given.
+    """
+    latest: dict[str, StepRun] = {}
+    for step_run in step_runs or []:
+        current = latest.get(step_run.step_key)
+        if current is None or (step_run.generation, step_run.queued_ts) > (
+            current.generation,
+            current.queued_ts,
+        ):
+            latest[step_run.step_key] = step_run
+    return [
+        StepProgress(
+            key=step.key,
+            label=step.label,
+            scope_kind=step.scope,
+            gate=step.gate,
+            topic=step.topic,
+            state=latest[step.key].state if step.key in latest else "not_reached",
+            run=latest.get(step.key),
+        )
+        for step in WORKFLOW
+    ]

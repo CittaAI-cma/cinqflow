@@ -11,7 +11,11 @@ const KIND_LABEL: Record<string, string> = {
  *  computed straight from `ProfileFacts` and the claim counts, never
  *  requiring the analyst to read a claim to know how many there are. Sticky
  *  on wide viewports (`.verdict-card`, ≥1100px) so it stays visible while the
- *  evidence column, which can run long, scrolls past it. */
+ *  evidence column, which can run long, scrolls past it.
+ *
+ *  PR-7 adds one line from the v2 facts — time coverage, constant columns,
+ *  dates carrying placeholder values — composed from what the profiler
+ *  recorded, never generated, and absent for a profile written by v1. */
 export default function VerdictCard({
   profile,
   interpretation,
@@ -31,6 +35,21 @@ export default function VerdictCard({
   // counts as a blocker - only a real unknown the model declined to guess.
   const blockers = signals.filter((s) => s.severity === "blocker").length;
 
+  const constant = facts.columns.filter((c) => c.constant).length;
+  const sentinelDates = facts.columns.filter(
+    (c) => c.hint === "date" && (c.sentinel_count ?? 0) > 0,
+  ).length;
+  const v2Parts: string[] = [];
+  if (facts.time_coverage) {
+    v2Parts.push(`time coverage ${facts.time_coverage.min} → ${facts.time_coverage.max}`);
+  }
+  if (constant) v2Parts.push(`${constant} constant column${constant === 1 ? "" : "s"}`);
+  if (sentinelDates) {
+    v2Parts.push(
+      `${sentinelDates} date${sentinelDates === 1 ? "" : "s"} with placeholder values`,
+    );
+  }
+
   return (
     <div className="card verdict-card">
       <span className="panel-label">Verdict</span>
@@ -46,6 +65,12 @@ export default function VerdictCard({
           ? facts.candidate_keys.map((k) => k.join(" + ")).join(", ")
           : "none found"}{" "}
         · {facts.duplicate_rows} duplicate rows
+        {v2Parts.length ? (
+          <>
+            <br />
+            {v2Parts.join(" · ")}
+          </>
+        ) : null}
       </p>
       <p className="verdict-claim-counts">
         {(["observed_fact", "governed_knowledge", "inference", "recommendation"] as const).map(

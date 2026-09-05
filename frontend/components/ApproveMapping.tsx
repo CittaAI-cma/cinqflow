@@ -5,6 +5,7 @@ import { useFormStatus } from "react-dom";
 import { approveVersion, type StudioState } from "@/app/mapping/actions";
 import AnnounceOnMount, { announceOnSubmit } from "@/components/ui/AnnounceOnMount";
 import GateChecklist, { type ChecklistItem } from "@/components/run/GateChecklist";
+import GateLocked from "@/components/run/GateLocked";
 import type { PreviewResult } from "@/lib/api";
 
 function ApproveButton() {
@@ -24,6 +25,8 @@ export default function ApproveMapping({
   status,
   preview,
   editedCount = 0,
+  canDecide,
+  basePath,
 }: {
   feed: string;
   version: number;
@@ -33,6 +36,13 @@ export default function ApproveMapping({
    *  this is mine?" is the analyst's own question, so a version with edits
    *  gets an extra checklist item asking her to stand behind them. */
   editedCount?: number;
+  /** `capabilities.can_decide_gates` from the server. Someone who may review
+   *  but not decide sees the gate's frame with the reason, not the form -
+   *  the API refuses them too (403); this mirrors it. */
+  canDecide: boolean;
+  /** The route this gate is on, so approving revalidates the surface the
+   *  analyst is looking at and not only the durable `/mapping/{feed}` one. */
+  basePath?: string;
 }) {
   const [state, action] = useActionState<StudioState, FormData>(approveVersion, {});
   const [note, setNote] = useState("");
@@ -74,6 +84,8 @@ export default function ApproveMapping({
     );
   }
 
+  if (!canDecide) return <GateLocked gate="G2" />;
+
   const approvable = Boolean(preview?.approvable);
   const failureCount =
     (preview?.aggregates.rows_with_failures ?? 0) +
@@ -107,6 +119,7 @@ export default function ApproveMapping({
         >
           <input type="hidden" name="feed" value={feed} />
           <input type="hidden" name="version" value={version} />
+          {basePath ? <input type="hidden" name="base_path" value={basePath} /> : null}
           <input type="hidden" name="note" value={note} />
           <p className="gate-note">
             Approving freezes v{version} and queues the promotion of batch{" "}

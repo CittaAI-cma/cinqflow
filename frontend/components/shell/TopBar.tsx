@@ -17,6 +17,7 @@ import {
 import { signOut } from "@/app/logout/actions";
 import { BRAND_NAME } from "@/lib/appConfig";
 import type { CurrentUser } from "@/lib/auth";
+import { PERSONA_LABEL } from "@/lib/persona";
 import { TOP_NAV, breadcrumbsFor, type TopNavIcon } from "@/lib/navigation";
 
 function initialsOf(user: CurrentUser): string {
@@ -115,6 +116,9 @@ export default function TopBar({
               {initialsOf(user)}
             </span>
             <span className="account-name">{user.display_name}</span>
+            <span className="tag persona" title="Your persona - derived from your roles">
+              {PERSONA_LABEL[user.persona]}
+            </span>
             <form action={signOut}>
               <button type="submit" className="account-signout" title="Sign out">
                 <LogoutIcon size={16} />

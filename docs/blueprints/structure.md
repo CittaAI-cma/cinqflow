@@ -20,20 +20,37 @@ cinqflow/
 │   │   ├── settings.py            # pydantic-settings; ALL env difference lives here
 │   │   ├── api/                   # CONTROL PLANE (thin)
 │   │   │   ├── app.py             # create_app() — composition root
-│   │   │   ├── deps.py            # request-scoped wiring (db, stores, queue)
+│   │   │   ├── deps.py            # request-scoped wiring (db, current user,
+│   │   │   │                      #   require_role / require_capability)
 │   │   │   └── routers/
 │   │   │       ├── uploads.py     # POST/GET uploads, profile, interpretation, G1
 │   │   │       ├── mappings.py    # proposals, mapping versions, preview, G2
-│   │   │       ├── batches.py     # batch/run status
+│   │   │       ├── batches.py     # batch/run status (+ ledger steps on /progress)
+│   │   │       ├── steps.py       # GET /api/workflow (the declaration), GET /api/steps (ledger),
+│   │   │       │                  #   POST .../steps/{step}/rerun per scope (can_rerun_steps)
 │   │   │       └── lineage.py     # lineage chain queries
 │   │   ├── workflow/              # FIRST-CLASS ARTIFACTS
 │   │   │   ├── models.py          # pydantic models: Upload, Profile, Interpretation,
 │   │   │   │                      #   Proposal, MappingVersion, Preview, Approval, Run, Lineage
 │   │   │   ├── states.py          # allowed states + legal transitions (enforced here)
-│   │   │   └── store.py           # SQL persistence for the artifacts (schema: workflow)
+│   │   │   ├── dag.py             # THE WORKFLOW, DECLARED ONCE: StepDef + WORKFLOW (8 steps,
+│   │   │   │                      #   3 scopes, 2 gates); no imports, anything may read it
+│   │   │   ├── rerun.py           # selective re-run: legality (RERUNNABLE), replay of the last
+│   │   │   │                      #   message payload, new ledger generation; no HTTP here
+│   │   │   └── store.py           # SQL persistence for the artifacts (schema: workflow),
+│   │   │                          #   incl. StepLedger over workflow.step_run
+│   │   ├── auth/                  # WHO: users, roles, sessions (schema: auth)
+│   │   │   ├── store.py           # AuthStore: users, memberships, login → CurrentUser
+│   │   │   └── persona.py         # roles → persona (emphasis) + capabilities (authority);
+│   │   │                          #   routers enforce capabilities, the UI only mirrors them
+│   │   ├── migrations/            # CONTROL-PLANE SCHEMA CHANGES: NNN_name.sql, applied in
+│   │   │   │                      #   order by `cinqflow install` / `cinqflow migrate`;
+│   │   │   │                      #   recorded in workflow.schema_version (see module docstring)
+│   │   │   └── 001_step_run.sql   # the step ledger table
 │   │   ├── queue/                 # DURABLE QUEUE (Postgres, no Celery)
 │   │   │   ├── queue.py           # enqueue/claim; FOR UPDATE SKIP LOCKED; dedupe_key UNIQUE
-│   │   │   └── worker.py          # consumer loop; topic → handler registry; CLI entrypoint
+│   │   │   └── worker.py          # consumer loop; topic → handler registry; CLI entrypoint;
+│   │   │                          #   the one place a worker step is opened/closed in the ledger
 │   │   ├── workers/               # JOB HANDLERS (one file per topic)
 │   │   │   ├── profile_upload.py  # topic upload.profile      (Stage 1, deterministic)
 │   │   │   ├── interpret_upload.py# topic upload.interpret    (Stage 1, AI)
@@ -117,6 +134,18 @@ by an idempotent installer command (`python -m cinqflow.dataplane install`). No 
 migrations for the plane; the contract file is the source of truth. Audit columns on every
 data row: `source_system, ingestion_ts, batch_id, record_hash, created_ts, updated_ts`.
 
+The **control-plane** schemas (`workflow`, `queue`, `auth`) are different: their baseline
+DDL (`workflow/ddl.py`, `auth/ddl.py`) is idempotent `CREATE … IF NOT EXISTS` and is now
+**frozen**. Every change since — a new table, a widened column — is a numbered SQL file in
+`src/cinqflow/migrations/` (`NNN_snake_case_name.sql`, contiguous from `001`, schema names
+written as `{{workflow}}` / `{{queue}}` / `{{auth}}`), applied one transaction each and
+recorded in `workflow.schema_version (version, name, applied_ts)`. `cinqflow install` applies
+pending migrations after the baseline, so compose's `migrate` service and Railway's
+`bootstrap.sh` need nothing new; `cinqflow migrate --status` shows one database's position.
+Applied migrations are never edited, renamed or deleted — the runner refuses to start if one
+is missing. No Alembic: one table and a directory listing, in visible SQL, is the whole
+mechanism (`migrations/__init__.py`).
+
 ---
 
 ## Boundaries (enforced in review; optionally by import-linter later)
@@ -128,10 +157,18 @@ data row: `source_system, ingestion_ts, batch_id, record_hash, created_ts, updat
 4. `intelligence/` never reads YAML directly — only through `knowledge/provider.py`.
 5. `workers/` are thin: claim job → call engine or intelligence → persist artifact →
    transition state. Business logic lives in `engine/`, `intelligence/`, `workflow/`.
+   No handler carries step-ledger code: `queue/worker.py: run_once` opens the step before
+   the handler and closes it from the handler's return dict (or its exception) after.
 6. Only `dataplane/pg.py` contains data-plane SQL. Only `workflow/store.py` contains
    workflow SQL. Parameterised statements everywhere; no ORM on the data plane.
 7. Nothing executes LLM-generated code, ever. Mappings are data (`engine/mapping_spec.py`),
    validated then executed by `engine/mapping_exec.py`.
+8. Authority is a capability, never a persona. `auth/persona.py` derives both from roles;
+   a router that changes state on someone's behalf takes `Depends(require_capability(...))`
+   and records the session's user, never a body-supplied name. The frontend
+   (`lib/persona.ts`) holds *defaults* and mirrors the same flags to hide or explain a
+   control — it never decides permission, and capability-gated calls go through Server
+   Actions (`authMutate`), not `lib/api.ts`.
 
 ## Runtime processes (dev)
 

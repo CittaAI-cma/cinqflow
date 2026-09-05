@@ -10,6 +10,7 @@ import psycopg
 
 from cinqflow.db import execute, fetch_all, fetch_one
 from cinqflow.settings import Settings, get_settings
+from cinqflow.workflow.dag import STEP_ORDER, TERMINAL_STATES, feed_version_scope
 from cinqflow.workflow.models import (
     Approval,
     BronzeProfile,
@@ -32,6 +33,7 @@ from cinqflow.workflow.models import (
     Provenance,
     Run,
     RunCounts,
+    StepRun,
     Upload,
 )
 from cinqflow.workflow.states import RunState, UploadStatus, assert_transition
@@ -262,6 +264,18 @@ class WorkflowStore:
             )
             return int(row["n"]) if row else 0
 
+        # The ledger rows for every scope this upload's journey crossed. The feed
+        # version scopes are resolved *before* the mapping versions are deleted.
+        ledger = StepLedger(self.conn, self.s)
+        feed_scopes = (
+            [
+                feed_version_scope(upload.feed, v.version)
+                for v in self.list_mapping_versions(upload.feed)
+            ]
+            if purge_feed
+            else []
+        )
+
         wf = self.s.workflow_schema
         deleted = {
             "interpretation_run": _delete(wf, "interpretation_run", "upload_id = %s", (upload_id,)),
@@ -275,6 +289,11 @@ class WorkflowStore:
             "lineage": _delete(wf, "lineage", "upload_id = %s", (upload_id,)),
             "run": _delete(wf, "run", "upload_id = %s", (upload_id,)),
         }
+        deleted["step_run"] = (
+            ledger.purge("upload", [upload_id])
+            + ledger.purge("batch", batch_ids)
+            + ledger.purge("feed_version", feed_scopes)
+        )
         if purge_feed:
             deleted["preview"] = _delete(wf, "preview", "feed = %s", (upload.feed,))
             deleted["mapping_version"] = _delete(wf, "mapping_version", "feed = %s", (upload.feed,))
@@ -558,8 +577,10 @@ class WorkflowStore:
         kind: str = "land_bronze",
     ) -> Run:
         """A run that does not balance is failed, not 'mostly fine'."""
-        state = RunState.FAILED if error or counts is None or not counts.balanced else (
-            RunState.COMPLETED
+        state = (
+            RunState.FAILED
+            if error or counts is None or not counts.balanced
+            else (RunState.COMPLETED)
         )
         row = fetch_one(
             self.conn,
@@ -913,9 +934,7 @@ class WorkflowStore:
         )
         return self._to_preview(row) if row else None
 
-    def get_current_preview(
-        self, feed: str, version: int, spec_fingerprint: str
-    ) -> Preview | None:
+    def get_current_preview(self, feed: str, version: int, spec_fingerprint: str) -> Preview | None:
         """A preview that describes THIS spec. Stage 6's G2 gate depends on this
         returning something: a stale preview must not authorise a Silver write."""
         row = fetch_one(
@@ -1288,6 +1307,325 @@ class WorkflowStore:
                 InterpretationStepRecord.model_validate(step) for step in row["completed_steps"]
             ],
             error=row["error"],
+            started_ts=row["started_ts"],
+            finished_ts=row["finished_ts"],
+        )
+
+
+# ------------------------------------------------------------- step ledger
+
+
+class StepLedger:
+    """`workflow.step_run` (migrations/001_step_run.sql): one row per generation
+    of one step of one scope. `workflow/dag.py` is the vocabulary; this is the
+    only place its SQL lives (structure.md boundary 6).
+
+    Two counters, two meanings. `generation` is intent: a finished step that is
+    run again (a replay, a PR-3 re-run) gets a new row. `attempts` is the queue
+    retrying one generation: `start` on a `pending`/`running`/`failed` row
+    re-enters it. Gates carry neither - a person decides once.
+
+    Who writes what: `queued` at every enqueue site (a pending row exists from
+    the moment the message does); `start`/`finish`/`fail`/`skip` from the worker
+    loop only (`queue/worker.py`); `open_gate` when the step before a gate
+    finishes; `decide` and `skip_step` from the G1/G2 handlers.
+    """
+
+    def __init__(self, conn: psycopg.Connection, settings: Settings | None = None) -> None:
+        self.conn = conn
+        self.s = settings or get_settings()
+
+    @property
+    def _table(self) -> str:
+        return f"{self.s.workflow_schema}.step_run"
+
+    def latest(self, scope_kind: str, scope_id: str, step_key: str) -> StepRun | None:
+        row = fetch_one(
+            self.conn,
+            f"""SELECT * FROM {self._table}
+                WHERE scope_kind = %s AND scope_id = %s AND step_key = %s
+                ORDER BY generation DESC LIMIT 1""",
+            (scope_kind, scope_id, step_key),
+        )
+        return self._to_step_run(row) if row else None
+
+    def queued(
+        self, scope_kind: str, scope_id: str, step_key: str, *, message_id: str | None = None
+    ) -> StepRun:
+        """A message for this step now exists. A new generation if the step had
+        finished; otherwise the current one goes (back) to `pending`."""
+        latest = self.latest(scope_kind, scope_id, step_key)
+        if latest is None or latest.state in ("done", "skipped"):
+            return self._insert(
+                scope_kind,
+                scope_id,
+                step_key,
+                generation=latest.generation + 1 if latest else 1,
+                state="pending",
+                attempts=0,
+                message_id=message_id,
+            )
+        row = fetch_one(
+            self.conn,
+            f"""UPDATE {self._table}
+                SET state = 'pending', message_id = COALESCE(%s, message_id), queued_ts = now()
+                WHERE step_run_id = %s RETURNING *""",
+            (message_id, latest.step_run_id),
+        )
+        return self._to_step_run(row)
+
+    def rerun(
+        self, scope_kind: str, scope_id: str, step_key: str, *, message_id: str | None = None
+    ) -> StepRun:
+        """An explicit re-run (PR-3, workflow/rerun.py): always a new generation,
+        whatever the last one ended as - this is intent, not the queue retrying.
+        `start` then re-enters this pending row when a worker takes the message."""
+        latest = self.latest(scope_kind, scope_id, step_key)
+        return self._insert(
+            scope_kind,
+            scope_id,
+            step_key,
+            generation=latest.generation + 1 if latest else 1,
+            state="pending",
+            attempts=0,
+            message_id=message_id,
+        )
+
+    def start(
+        self, scope_kind: str, scope_id: str, step_key: str, *, message_id: str | None = None
+    ) -> StepRun:
+        """A worker has the message. Re-enters the current generation (one more
+        attempt) unless the step had finished, in which case this is a new one."""
+        latest = self.latest(scope_kind, scope_id, step_key)
+        if latest is None or latest.state in ("done", "skipped"):
+            return self._insert(
+                scope_kind,
+                scope_id,
+                step_key,
+                generation=latest.generation + 1 if latest else 1,
+                state="running",
+                attempts=1,
+                message_id=message_id,
+                started=True,
+            )
+        row = fetch_one(
+            self.conn,
+            f"""UPDATE {self._table}
+                SET state = 'running', attempts = attempts + 1,
+                    message_id = COALESCE(%s, message_id),
+                    started_ts = now(), finished_ts = NULL, error = NULL
+                WHERE step_run_id = %s RETURNING *""",
+            (message_id, latest.step_run_id),
+        )
+        return self._to_step_run(row)
+
+    def finish(
+        self,
+        step_run_id: str,
+        *,
+        artifact_type: str | None = None,
+        artifact_id: str | None = None,
+    ) -> StepRun:
+        row = fetch_one(
+            self.conn,
+            f"""UPDATE {self._table}
+                SET state = 'done', artifact_type = %s, artifact_id = %s,
+                    error = NULL, finished_ts = now()
+                WHERE step_run_id = %s RETURNING *""",
+            (artifact_type, artifact_id, step_run_id),
+        )
+        return self._to_step_run(row)
+
+    def fail(self, step_run_id: str, error: str) -> StepRun:
+        row = fetch_one(
+            self.conn,
+            f"""UPDATE {self._table} SET state = 'failed', error = %s, finished_ts = now()
+                WHERE step_run_id = %s RETURNING *""",
+            (error[:2000], step_run_id),
+        )
+        return self._to_step_run(row)
+
+    def skip(self, step_run_id: str, reason: str) -> StepRun:
+        """The handler looked and declined (the scope was not in a runnable
+        state). Not a failure: nothing went wrong, nothing will happen."""
+        row = fetch_one(
+            self.conn,
+            f"""UPDATE {self._table} SET state = 'skipped', error = %s, finished_ts = now()
+                WHERE step_run_id = %s RETURNING *""",
+            (reason[:2000], step_run_id),
+        )
+        return self._to_step_run(row)
+
+    def skip_step(self, scope_kind: str, scope_id: str, step_key: str, reason: str) -> StepRun:
+        """Mark a step that will now never run (landing, after a G1 rejection).
+        A step that already finished is left as it is."""
+        latest = self.latest(scope_kind, scope_id, step_key)
+        if latest is None:
+            return self._insert(
+                scope_kind,
+                scope_id,
+                step_key,
+                generation=1,
+                state="skipped",
+                attempts=0,
+                error=reason,
+                finished=True,
+            )
+        if latest.state == "done":
+            return latest
+        return self.skip(latest.step_run_id, reason)
+
+    def open_gate(self, scope_kind: str, scope_id: str, step_key: str) -> StepRun | None:
+        """The step before a gate finished: the gate is now awaiting a person.
+        Only ever opens once - a gate already open or decided returns None."""
+        if self.latest(scope_kind, scope_id, step_key) is not None:
+            return None
+        return self._insert(
+            scope_kind, scope_id, step_key, generation=1, state="running", attempts=0, started=True
+        )
+
+    def decide(
+        self,
+        scope_kind: str,
+        scope_id: str,
+        step_key: str,
+        *,
+        approved: bool,
+        approval_id: str,
+        approver: str,
+        note: str | None = None,
+    ) -> StepRun:
+        """The person decided. An approval finishes the gate; a rejection ends it
+        adversely (`failed`, with the decision as the text) - the run stops
+        there, and the platform home must not read it as something to re-run
+        (`StepDef.gate` says which failures are decisions)."""
+        state = "done" if approved else "failed"
+        error = None if approved else f"rejected by {approver}" + (f": {note}" if note else "")
+        latest = self.latest(scope_kind, scope_id, step_key)
+        if latest is None or latest.state in TERMINAL_STATES:
+            return self._insert(
+                scope_kind,
+                scope_id,
+                step_key,
+                generation=latest.generation + 1 if latest else 1,
+                state=state,
+                attempts=0,
+                artifact_type="approval",
+                artifact_id=approval_id,
+                error=error,
+                started=True,
+                finished=True,
+            )
+        row = fetch_one(
+            self.conn,
+            f"""UPDATE {self._table}
+                SET state = %s, artifact_type = 'approval', artifact_id = %s, error = %s,
+                    started_ts = COALESCE(started_ts, now()), finished_ts = now()
+                WHERE step_run_id = %s RETURNING *""",
+            (state, approval_id, error, latest.step_run_id),
+        )
+        return self._to_step_run(row)
+
+    def list_for(self, scope_kind: str, scope_id: str) -> list[StepRun]:
+        """One scope's whole history, in workflow order then by generation."""
+        rows = fetch_all(
+            self.conn,
+            f"SELECT * FROM {self._table} WHERE scope_kind = %s AND scope_id = %s",
+            (scope_kind, scope_id),
+        )
+        runs = [self._to_step_run(r) for r in rows]
+        return sorted(
+            runs,
+            key=lambda r: (STEP_ORDER.get(r.step_key, len(STEP_ORDER)), r.generation, r.queued_ts),
+        )
+
+    def list_by_state(self, state: str, *, limit: int = 50) -> list[StepRun]:
+        rows = fetch_all(
+            self.conn,
+            f"SELECT * FROM {self._table} WHERE state = %s ORDER BY queued_ts DESC LIMIT %s",
+            (state, limit),
+        )
+        return [self._to_step_run(r) for r in rows]
+
+    def list_recent(self, *, limit: int = 50) -> list[StepRun]:
+        rows = fetch_all(
+            self.conn, f"SELECT * FROM {self._table} ORDER BY queued_ts DESC LIMIT %s", (limit,)
+        )
+        return [self._to_step_run(r) for r in rows]
+
+    def purge(self, scope_kind: str, scope_ids: list[str]) -> int:
+        if not scope_ids:
+            return 0
+        row = fetch_one(
+            self.conn,
+            f"""WITH d AS (
+                    DELETE FROM {self._table} WHERE scope_kind = %s AND scope_id = ANY(%s)
+                    RETURNING 1
+                )
+                SELECT count(*) AS n FROM d""",
+            (scope_kind, scope_ids),
+        )
+        return int(row["n"]) if row else 0
+
+    def _insert(
+        self,
+        scope_kind: str,
+        scope_id: str,
+        step_key: str,
+        *,
+        generation: int,
+        state: str,
+        attempts: int,
+        message_id: str | None = None,
+        artifact_type: str | None = None,
+        artifact_id: str | None = None,
+        error: str | None = None,
+        started: bool = False,
+        finished: bool = False,
+    ) -> StepRun:
+        row = fetch_one(
+            self.conn,
+            f"""
+            INSERT INTO {self._table}
+                (step_run_id, scope_kind, scope_id, step_key, generation, state, attempts,
+                 message_id, artifact_type, artifact_id, error, started_ts, finished_ts)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                    CASE WHEN %s THEN now() END, CASE WHEN %s THEN now() END)
+            RETURNING *
+            """,
+            (
+                str(uuid.uuid4()),
+                scope_kind,
+                scope_id,
+                step_key,
+                generation,
+                state,
+                attempts,
+                message_id,
+                artifact_type,
+                artifact_id,
+                error[:2000] if error else None,
+                started,
+                finished,
+            ),
+        )
+        return self._to_step_run(row)
+
+    @staticmethod
+    def _to_step_run(row: dict) -> StepRun:
+        return StepRun(
+            step_run_id=str(row["step_run_id"]),
+            scope_kind=row["scope_kind"],
+            scope_id=row["scope_id"],
+            step_key=row["step_key"],
+            generation=row["generation"],
+            state=row["state"],
+            attempts=row["attempts"],
+            message_id=str(row["message_id"]) if row["message_id"] else None,
+            artifact_type=row["artifact_type"],
+            artifact_id=row["artifact_id"],
+            error=row["error"],
+            queued_ts=row["queued_ts"],
             started_ts=row["started_ts"],
             finished_ts=row["finished_ts"],
         )

@@ -14,6 +14,7 @@ from cinqflow.api.routers import (
     health,
     mapping_versions,
     queue,
+    steps,
     uploads,
     users,
     worklist,
@@ -41,6 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(mapping_versions.build_router(s, get_conn))
     app.include_router(canonical_proposals.build_router(s, get_conn))
     app.include_router(queue.build_router(s, get_conn))
+    app.include_router(steps.build_router(s, get_conn))
     app.include_router(worklist.build_router(s, get_conn))
 
     return app

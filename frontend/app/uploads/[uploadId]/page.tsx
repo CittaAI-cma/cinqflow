@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { getUpload } from "@/lib/api";
-import { canonicalStep, runHref } from "@/lib/runStep";
+import { loadRunSteps, resolveCanonical } from "@/lib/runProgress";
+import { runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
 
@@ -22,5 +23,6 @@ export default async function UploadRedirectPage({
     notFound();
   }
 
-  redirect(runHref(uploadId, canonicalStep(detail.upload.status)));
+  const steps = await loadRunSteps(uploadId);
+  redirect(runHref(uploadId, resolveCanonical(steps, detail.upload.status)));
 }

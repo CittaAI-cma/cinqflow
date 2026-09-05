@@ -6,6 +6,7 @@ from __future__ import annotations
 import uuid
 
 from cinqflow.auth.models import CurrentUser, Role, UserOut
+from cinqflow.auth.persona import capabilities_for, persona_for
 from cinqflow.db import execute, fetch_all, fetch_one
 from cinqflow.settings import Settings
 
@@ -142,6 +143,31 @@ class AuthStore:
         )
         return self.get_user(user_id)
 
+    def set_roles(self, user_id: str, role_names: list[str]) -> UserOut:
+        """Replaces the membership set. Every name is validated first
+        (`UnknownRole`) so a typo never half-applies; an empty list is allowed and
+        leaves a view-only analyst with no capabilities (`auth/persona.py`)."""
+        self.get_user(user_id)  # raises UnknownUser
+        role_ids = self._role_ids(role_names)  # raises UnknownRole before any write
+        execute(
+            self.conn,
+            f"DELETE FROM {self.s.auth_schema}.user_role WHERE user_id = %s",
+            (user_id,),
+        )
+        for role_id in role_ids.values():
+            execute(
+                self.conn,
+                f"""INSERT INTO {self.s.auth_schema}.user_role (user_id, role_id)
+                    VALUES (%s, %s)""",
+                (user_id, role_id),
+            )
+        execute(
+            self.conn,
+            f'UPDATE {self.s.auth_schema}."user" SET updated_ts = now() WHERE id = %s',
+            (user_id,),
+        )
+        return self.get_user(user_id)
+
     def roles_for_user(self, user_id: str) -> list[str]:
         rows = fetch_all(
             self.conn,
@@ -156,11 +182,14 @@ class AuthStore:
         row = self.get_user_row(user_id)
         if row is None or not row["is_active"]:
             return None
+        roles = self.roles_for_user(user_id)
         return CurrentUser(
             id=row["id"],
             email=row["email"],
             display_name=row["display_name"],
-            roles=self.roles_for_user(user_id),
+            roles=roles,
+            persona=persona_for(roles),
+            capabilities=capabilities_for(roles),
         )
 
     def _to_user_out(self, row: dict) -> UserOut:

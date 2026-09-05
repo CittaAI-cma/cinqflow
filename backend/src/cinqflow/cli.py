@@ -1,4 +1,4 @@
-"""cinqflow CLI: install, work, status, reset."""
+"""cinqflow CLI: install, migrate, work, status, reset."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import logging
 import shutil
 import sys
 
+from cinqflow import migrations
 from cinqflow.auth import ddl as auth_ddl
 from cinqflow.auth.store import bootstrap_admin
 from cinqflow.dataplane.contract import Layer
@@ -17,11 +18,22 @@ from cinqflow.settings import get_settings
 from cinqflow.workflow import ddl
 
 
+def _migrations_line(applied: list[migrations.Migration], total_applied: int) -> str:
+    if applied:
+        return "migrations: applied " + ", ".join(m.label for m in applied)
+    return f"migrations: none pending ({total_applied} applied)"
+
+
 def cmd_install(_: argparse.Namespace) -> int:
-    """Idempotent: workflow + queue + auth schemas, and the Bronze layer namespace.
+    """Idempotent: workflow + queue + auth schemas, the Bronze layer namespace, then
+    every pending schema migration.
 
     Bronze *tables* are provisioned per feed at landing time from the contract,
-    so nothing here assumes which feeds exist. Auth also seeds the MVP role
+    so nothing here assumes which feeds exist. The baseline DDL (`workflow/ddl.py`,
+    `auth/ddl.py`) is frozen; every schema change since ships as a numbered file in
+    `cinqflow/migrations/` and is applied here, in order, after the baseline - so the
+    compose `migrate` service and Railway's pre-deploy `bootstrap.sh`, which both run
+    this command, pick migrations up with no change. Auth also seeds the MVP role
     list and, if CINQFLOW_BOOTSTRAP_ADMIN_EMAIL is set, one administrator -
     see docs/blueprints/auth-and-user-management.md.
     """
@@ -30,6 +42,8 @@ def cmd_install(_: argparse.Namespace) -> int:
         ddl.install(conn, s)
         auth_ddl.install(conn, s)
         PostgresDataPlane(conn).install_layer(Layer.BRONZE.value)
+        applied = migrations.apply_pending(conn, s)
+        total_applied = len(migrations.applied(conn, s))
         admin = bootstrap_admin(conn, s)
         conn.commit()
     s.landing_root.mkdir(parents=True, exist_ok=True)
@@ -37,9 +51,36 @@ def cmd_install(_: argparse.Namespace) -> int:
         f"installed: schemas {s.workflow_schema}, {s.queue_schema}, "
         f"{s.auth_schema}, {Layer.BRONZE.value}"
     )
+    print(_migrations_line(applied, total_applied))
     print(f"landing root: {s.landing_root}")
     if admin is not None:
         print(f"bootstrapped administrator: {admin.email}")
+    return 0
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    """Apply pending schema migrations on their own, or with --status just list what
+    this database has applied and what is still pending. `install` already applies
+    them; this exists for an operator looking at one database."""
+    s = get_settings()
+    with connect(s) as conn:
+        migrations.ensure_version_table(conn, s)
+        if args.status:
+            done = migrations.applied(conn, s)
+            todo = migrations.pending(conn, s)
+            print(f"applied: {len(done)}")
+            for row in done:
+                print(
+                    f"  {row['version']:03d}_{row['name']}  {row['applied_ts']:%Y-%m-%dT%H:%M:%SZ}"
+                )
+            print(f"pending: {len(todo)}")
+            for m in todo:
+                print(f"  {m.label}")
+            return 0
+        applied = migrations.apply_pending(conn, s)
+        total_applied = len(migrations.applied(conn, s))
+        conn.commit()
+    print(_migrations_line(applied, total_applied))
     return 0
 
 
@@ -95,6 +136,9 @@ def cmd_reset(args: argparse.Namespace) -> int:
         ddl.install(conn, s)
         auth_ddl.install(conn, s)
         PostgresDataPlane(conn).install_layer(Layer.BRONZE.value)
+        # A reset must land on the same shape `install` produces - baseline DDL alone
+        # is the frozen starting point, not the current schema.
+        migrations.apply_pending(conn, s)
         bootstrap_admin(conn, s)
         conn.commit()
     s.landing_root.mkdir(parents=True, exist_ok=True)
@@ -134,9 +178,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cinqflow")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("install", help="create/upgrade workflow + queue schemas").set_defaults(
-        func=cmd_install
+    sub.add_parser(
+        "install", help="create the baseline schemas, then apply pending migrations"
+    ).set_defaults(func=cmd_install)
+    migrate = sub.add_parser(
+        "migrate", help="apply pending schema migrations (install does this too)"
     )
+    migrate.add_argument(
+        "--status", action="store_true", help="list applied and pending migrations; apply nothing"
+    )
+    migrate.set_defaults(func=cmd_migrate)
     work = sub.add_parser("work", help="run the queue worker")
     work.add_argument("--once", action="store_true", help="drain the queue and exit")
     work.set_defaults(func=cmd_work)

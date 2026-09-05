@@ -27,15 +27,29 @@ class JobContext:
     semantic_hints: dict[str, Any] = field(default_factory=dict)
 
 
+def singular_domain(domain: str) -> str:
+    """Uploads are registered under a plural landing domain (`enrollments`); the
+    knowledge documents are named in the singular (`enrollment`)."""
+    return domain[:-1] if domain.endswith("s") else domain
+
+
 class ContextBuilder:
     def __init__(self, knowledge: KnowledgeProvider) -> None:
         self.knowledge = knowledge
 
     def for_interpretation(
-        self, *, facts: ProfileFacts, source_system: str, feed: str
+        self,
+        *,
+        facts: ProfileFacts,
+        source_system: str,
+        feed: str,
+        domain: str | None = None,
     ) -> JobContext:
         """Observations are the deterministic profile. Context is the source
-        definition plus only the glossary terms matching observed columns."""
+        definition, only the glossary terms matching observed columns, and - when
+        the caller knows the domain - what that domain answers (PR-6: the bound
+        on column importance). The landing domain is plural (`enrollments`);
+        knowledge is named in the singular."""
         observations = facts.model_dump()
         # Samples stay out of the prompt: column facts carry bounded example values
         # already, and full rows are PHI-bearing.
@@ -66,6 +80,15 @@ class ContextBuilder:
         if precedents:
             selected["precedents"] = precedents["context"]
             citations.append(precedents["citation"])
+
+        if domain:
+            domain_knowledge = self.knowledge.get_domain_knowledge(singular_domain(domain))
+            if domain_knowledge:
+                selected["domain_knowledge"] = {
+                    "citation": domain_knowledge.citation,
+                    "what_it_answers": domain_knowledge.content.get("what_it_answers"),
+                }
+                citations.append(domain_knowledge.citation)
 
         return JobContext(observations=observations, context=selected, citations=citations)
 

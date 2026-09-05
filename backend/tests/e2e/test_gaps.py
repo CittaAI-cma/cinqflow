@@ -14,7 +14,7 @@ from cinqflow.api.app import create_app
 from cinqflow.dataplane.contract import bronze_table
 from cinqflow.queue.worker import drain
 from cinqflow.workflow.states import RunState, UploadStatus
-from tests.conftest import requires_db
+from tests.conftest import authed_client, requires_db
 
 pytestmark = requires_db
 
@@ -23,7 +23,7 @@ FEED = "test_e2e_gaps"
 
 @pytest.fixture
 def client(conn, settings):
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 @pytest.fixture(autouse=True)
@@ -115,6 +115,8 @@ def test_progress_reports_land_stage_and_batch_id(client, settings, small_csv_by
     land_stage = next(s for s in queued_progress["stages"] if s["key"] == "land")
     assert land_stage["state"] == "running"
     assert queued_progress["batch_id"] is None
+    # The ledger is more precise: queued, no worker has taken it yet.
+    assert next(s for s in queued_progress["steps"] if s["key"] == "land")["state"] == "pending"
 
     _drain(settings)
 
@@ -122,6 +124,7 @@ def test_progress_reports_land_stage_and_batch_id(client, settings, small_csv_by
     land_stage = next(s for s in landed_progress["stages"] if s["key"] == "land")
     assert land_stage["state"] == "done"
     assert landed_progress["batch_id"]
+    assert next(s for s in landed_progress["steps"] if s["key"] == "land")["state"] == "done"
 
     detail = client.get(f"/api/uploads/{upload_id}").json()
     assert landed_progress["batch_id"] == detail["runs"][0]["batch_id"]
@@ -169,3 +172,22 @@ def test_worklist_lists_uploads_waiting_at_g1(client, settings, small_csv_bytes)
 
     worklist = client.get("/api/worklist").json()
     assert upload_id not in [u["upload_id"] for u in worklist["uploads_at_g1"]]
+
+
+# ------------------------------------------------------------------ PHI on the wire
+
+
+def test_upload_detail_never_carries_phi_sample_values(client, settings, small_csv_bytes):
+    """Found by the 2026-09-05 end-to-end run: `GET /api/uploads/{id}` masked the
+    sample rows but returned PHI columns' `sample_values` verbatim. The whole
+    profile goes through `mask_facts` now."""
+    upload_id = _upload(client, "phi.csv", small_csv_bytes, "text/csv")
+    _drain(settings)
+    facts = client.get(f"/api/uploads/{upload_id}").json()["profile"]["facts"]
+    by_name = {c["name"]: c for c in facts["columns"]}
+    for name in facts["phi_candidates"]:
+        column = by_name[name]
+        assert column["sample_values"] == [], name
+        assert column["top_values"] == [] and column["min"] is None and column["max"] is None, name
+    assert by_name["product"]["sample_values"]  # non-PHI keeps its examples
+    assert all(row["member_first_name"] == "•••" for row in facts["sample_rows"])

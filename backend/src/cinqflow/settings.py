@@ -48,7 +48,13 @@ class Settings(BaseSettings):
     llm_provider: str = "stub"  # stub | anthropic | openai
     llm_model: str = "claude-sonnet-5"
     llm_api_key: str | None = None
-    llm_max_tokens: int = 2048
+    #: A 142-column interpretation with column roles does not fit in 2048 (PR-6).
+    llm_max_tokens: int = 8000
+    #: Our own retries on transport-level failures (connection dropped, timeout,
+    #: 429, 5xx) on top of the SDKs' two sub-second ones, spaced 2s/6s/15s/30s
+    #: (intelligence/llm.py). 0 disables them. Added 2026-09-05 after a ~25s
+    #: network blip failed an interpretation the analyst had to retry by hand.
+    llm_transient_retries: int = 4
 
     # Bounded evidence: how many sample values per column the profiler keeps.
     profile_sample_values: int = 5

@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import BronzeAnalysisWait from "@/components/run/BronzeAnalysisWait";
 import ProposalTable from "@/components/ProposalTable";
+import WorkflowSteps from "@/components/run/WorkflowSteps";
 import { getBronzeProfile, getProposal, getUpload, type FieldStatus } from "@/lib/api";
-import { canonicalStep, isStepViewable, runHref } from "@/lib/runStep";
+import { requireUser } from "@/lib/auth";
+import { personaDefaults } from "@/lib/persona";
+import { loadRunSteps, resolveCanonical } from "@/lib/runProgress";
+import { isStepViewable, runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
 
@@ -34,10 +37,14 @@ export default async function BronzePage({
   } catch {
     notFound();
   }
-  const { upload, profile, runs } = detail;
+  const { upload, profile, interpretation, runs } = detail;
+  const user = await requireUser();
+  const defaults = personaDefaults(user.persona);
 
-  if (!isStepViewable("bronze", canonicalStep(upload.status))) {
-    redirect(runHref(uploadId, canonicalStep(upload.status)));
+  const steps = await loadRunSteps(uploadId);
+  const canonical = resolveCanonical(steps, upload.status);
+  if (!isStepViewable("bronze", canonical)) {
+    redirect(runHref(uploadId, canonical));
   }
 
   const landRun = runs.find((r) => r.kind === "land_bronze");
@@ -52,17 +59,29 @@ export default async function BronzePage({
     );
   }
 
+  // A failed analysis is a fact the ledger holds; the analyst is not stuck
+  // behind a proposal that will not come (a proposal is advisory anyway).
+  const analyzeFailed = steps.find((s) => s.key === "analyze")?.state === "failed";
+
   const [bronzeProfile, proposal] = await Promise.all([
     getBronzeProfile(landRun.batch_id),
     getProposal(landRun.batch_id),
   ]);
 
-  const showAll = filter === "all";
+  // Persona default (analyst: what needs a decision; platform: everything),
+  // overridable either way from the URL.
+  const showAll =
+    filter === "all" || (filter !== "decisions" && defaults.proposalFilter === "all");
   const decisionCount = proposal
     ? NEEDS_DECISION.reduce((n, status) => n + (proposal.counts?.[status] ?? 0), 0)
     : 0;
   const statuses = !showAll && decisionCount > 0 ? NEEDS_DECISION : undefined;
   const totalFields = proposal?.content.fields.length ?? 0;
+  // Source column → role, from the upload's interpretation (PR-7). Absent for an
+  // interpretation written before prompt v3; the table then renders as before.
+  const columnRoles = interpretation?.content.column_roles?.length
+    ? Object.fromEntries(interpretation.content.column_roles.map((r) => [r.name, r.role]))
+    : undefined;
 
   return (
     <>
@@ -128,13 +147,32 @@ export default async function BronzePage({
                 </Link>
               </span>
             ) : (
-              <span className="meta">· showing all {totalFields} fields</span>
+              <span className="meta">
+                · showing all {totalFields} fields
+                {decisionCount > 0 ? (
+                  <>
+                    {" — "}
+                    <Link href={`${runHref(uploadId, "bronze")}?filter=decisions`}>
+                      only the {decisionCount} needing a decision
+                    </Link>
+                  </>
+                ) : null}
+              </span>
             )}
           </h2>
-          <ProposalTable proposal={proposal} statuses={statuses} />
+          <ProposalTable proposal={proposal} statuses={statuses} roles={columnRoles} />
         </>
       ) : (
-        <BronzeAnalysisWait batchId={landRun.batch_id} />
+        <WorkflowSteps
+          source={{ kind: "upload", uploadId }}
+          initial={steps}
+          only={["analyze"]}
+          expanded={defaults.workflowStepsExpanded}
+          canRerun={user.capabilities.can_rerun_steps}
+          stallAfterMs={120_000}
+          what="the AI mapping proposal"
+          stalledCopy="Bronze itself landed and is safe. The bronze.analyze job either has no worker or its model call is failing — a failure shows here with its error. A proposal is advisory anyway: the mapping can be built by hand without it."
+        />
       )}
 
       <div
@@ -150,6 +188,10 @@ export default async function BronzePage({
             className="btn-dark"
           >
             Build the mapping
+          </Link>
+        ) : analyzeFailed ? (
+          <Link href={runHref(uploadId, "mapping")} className="btn-dark">
+            Build the mapping without a proposal
           </Link>
         ) : null}
       </div>

@@ -1,8 +1,10 @@
 /** The only module that talks to the backend.
  *
  *  Imported from both server code (pages, actions) and client components
- *  (`RunProcessing`, `RetryButton` poll/retry directly) - so it needs two
- *  possible base URLs, not one. Inside Docker Compose, `CINQFLOW_API` is the
+ *  (`RunProcessing`, `BatchProcessing` poll directly) - so it needs two
+ *  possible base URLs, not one. Anything capability-gated (G1/G2 decisions,
+ *  retry) is NOT here: only the Next.js server holds the bearer token, so
+ *  those go through Server Actions and `lib/auth.ts`'s `authMutate`. Inside Docker Compose, `CINQFLOW_API` is the
  *  in-network hostname (`http://api:8000`), reachable from the Next.js server
  *  process but not from a browser on the host; `NEXT_PUBLIC_CINQFLOW_API` is
  *  the host-published URL the browser actually needs. `typeof window`
@@ -47,6 +49,16 @@ export interface Upload {
   created_ts: string;
 }
 
+/** The profiler's deterministic role hint (`engine/profiler.py`, v2). PHI is
+ *  not a role; it stays `phi_candidate`. */
+export type ColumnRoleHint =
+  | "identifier"
+  | "measure"
+  | "dimension"
+  | "date"
+  | "technical"
+  | "unclassified";
+
 export interface ColumnFacts {
   name: string;
   inferred_type: string;
@@ -55,6 +67,24 @@ export interface ColumnFacts {
   sample_values: string[];
   patterns: Record<string, number | boolean>;
   phi_candidate: boolean;
+  // v2 facts (PR-5). Optional: a profile written by v1 has none of them.
+  hint?: ColumnRoleHint;
+  null_ratio?: number;
+  /** Parsed numeric or date bounds as text; null for other types and for PHI. */
+  min?: string | null;
+  max?: string | null;
+  /** value -> count, capped at ten; always empty for a PHI column. */
+  top_values?: { value: string; count: number }[];
+  constant?: boolean;
+  /** Placeholder values (`1900-01-01`, `9999-12-31`, all-zero/all-nine). */
+  sentinel_count?: number;
+}
+
+/** The data's own period: min/max across the non-PHI, non-technical date columns. */
+export interface TimeCoverage {
+  columns: string[];
+  min: string;
+  max: string;
 }
 
 export interface Profile {
@@ -69,6 +99,8 @@ export interface Profile {
     phi_candidates: string[];
     sheets: { name: string; rows: number }[];
     sample_rows: Record<string, string>[];
+    /** v2 (PR-5); absent on a v1 profile. */
+    time_coverage?: TimeCoverage | null;
   };
 }
 
@@ -83,6 +115,26 @@ export interface Claim {
 /** A risk or an unknown, in the reasoning-contract shape (claim/basis/check/
  * consequence) instead of a bare sentence - `severity` is assigned by the
  * backend from `kind`, never by the model. */
+/** One observed column's role and importance (PR-6), classified by the model
+ *  against the profiler's `hint`; `source` says which one stood. `reason` is
+ *  structure and knowledge, never a value from the file. */
+export interface ColumnRole {
+  name: string;
+  role:
+    | "identifier"
+    | "measure"
+    | "dimension"
+    | "date"
+    | "business_attribute"
+    | "technical"
+    | "derived"
+    | "unclassified";
+  importance: "high" | "medium" | "low";
+  reason: string;
+  hint: ColumnRoleHint;
+  source: "model" | "hint";
+}
+
 export interface Signal {
   kind: "risk" | "unknown";
   claim: string;
@@ -106,6 +158,8 @@ export interface Interpretation {
   content: {
     claims: Claim[];
     signals: Signal[];
+    /** Empty on interpretations written before prompt v3. */
+    column_roles?: ColumnRole[];
     headline: string;
     recommended_action: RecommendedAction;
   };
@@ -171,6 +225,43 @@ export interface ProgressStage {
   steps: ProgressStep[] | null;
 }
 
+/** The step ledger (`workflow/dag.py`, `workflow.step_run`), as every
+ *  `/progress` endpoint serves it. `not_reached` is "no row": distinct from
+ *  `pending`, which is a queued message no worker has taken yet. */
+export type StepState = "pending" | "running" | "done" | "failed" | "skipped";
+export type LedgerScope = "upload" | "batch" | "feed_version";
+
+export interface StepRun {
+  step_run_id: string;
+  scope_kind: LedgerScope;
+  scope_id: string;
+  step_key: string;
+  /** Increments when a finished step runs again (replay, re-run). */
+  generation: number;
+  state: StepState;
+  /** The queue's retries of this generation. */
+  attempts: number;
+  message_id: string | null;
+  artifact_type: string | null;
+  artifact_id: string | null;
+  /** Failure text, a refusal's reason, or the text of a rejection at a gate. */
+  error: string | null;
+  queued_ts: string;
+  started_ts: string | null;
+  finished_ts: string | null;
+}
+
+/** One declared step with the newest thing the ledger knows about it. */
+export interface StepProgress {
+  key: string;
+  label: string;
+  scope_kind: LedgerScope;
+  gate: boolean;
+  topic: string | null;
+  state: StepState | "not_reached";
+  run: StepRun | null;
+}
+
 export interface UploadProgress {
   upload_id: string;
   status: UploadStatus;
@@ -179,6 +270,19 @@ export interface UploadProgress {
    *  only once it finishes. Null before approval and while still queued. */
   batch_id: string | null;
   stages: ProgressStage[];
+  /** The ledger's view: every declared step across the scopes this upload's
+   *  journey crosses. `stages` stays until the last screen migrates (PR-4). */
+  steps: StepProgress[];
+}
+
+/** `GET /api/feeds/{feed}/mapping-versions/{v}/progress`: the version's
+ *  preview and G2 steps plus the promotion of the batch it was previewed on. */
+export interface FeedVersionProgress {
+  feed: string;
+  version: number;
+  status: string;
+  batch_id: string | null;
+  steps: StepProgress[];
 }
 
 export interface BronzeRows {
@@ -295,18 +399,6 @@ export const getUpload = cache(function getUpload(uploadId: string) {
   return get<UploadDetail>(`/api/uploads/${uploadId}`);
 });
 
-/** Re-enqueues the work a `*_failed` upload failed at. Returns an error
- *  message rather than throwing, matching `decideUpload`. */
-export async function retryUpload(uploadId: string): Promise<{ error?: string }> {
-  const response = await fetch(`${BASE}/api/uploads/${uploadId}/retry`, { method: "POST" });
-  if (response.ok) return {};
-  const payload = await response.json().catch(() => ({}));
-  const detail = payload?.detail;
-  if (typeof detail === "string") return { error: detail };
-  if (detail?.message) return { error: detail.message };
-  return { error: `retry failed with status ${response.status}` };
-}
-
 export interface DeleteUploadResult {
   upload_id: string;
   feed: string;
@@ -339,6 +431,13 @@ export async function deleteUpload(
  *  whichever stage is the AI interpretation. */
 export function getUploadProgress(uploadId: string) {
   return get<UploadProgress>(`/api/uploads/${uploadId}/progress`);
+}
+
+/** The studio's poll target: what the ledger knows about one mapping version. */
+export function getFeedVersionProgress(feed: string, version: number) {
+  return get<FeedVersionProgress>(
+    `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/progress`,
+  );
 }
 
 export function queueDepth() {
@@ -400,14 +499,62 @@ export interface WorklistMappingVersion {
   editable: boolean;
 }
 
-/** Every upload waiting at G1 and every mapping version waiting at G2, across
- *  all feeds. Not yet wired to a screen in this phase — the register still
- *  computes its stage client-side; this is the O(1) replacement for that,
- *  ready for the "waiting for you" filter in a later phase. */
+/** The Data Analyst home's data (PR-4): every upload waiting at G1 and every
+ *  mapping version waiting at G2, across all feeds, each with the moment its
+ *  gate opened in the step ledger; the counts; the recent uploads. */
+export interface Worklist {
+  counts: { waiting_at_g1: number; approvable_at_g2: number };
+  uploads_at_g1: (Upload & { waiting_since: string })[];
+  mapping_versions_at_g2: (WorklistMappingVersion & { waiting_since: string })[];
+  recent_uploads: Upload[];
+}
+
 export function getWorklist() {
-  return get<{ uploads_at_g1: Upload[]; mapping_versions_at_g2: WorklistMappingVersion[] }>(
-    "/api/worklist",
-  );
+  return get<Worklist>("/api/worklist");
+}
+
+/** A ledger row with where it belongs, in the words a person navigates by. */
+export interface AttentionStep extends StepRun {
+  label: string;
+  feed: string | null;
+  filename: string | null;
+  upload_id: string | null;
+  batch_id: string | null;
+  href: string | null;
+}
+
+export interface DeadMessage {
+  message_id: string;
+  topic: string;
+  dedupe_key: string;
+  payload: Record<string, unknown>;
+  attempts: number;
+  last_error: string | null;
+  enqueued_ts: string;
+  claimed_ts: string | null;
+}
+
+/** The Data Platform home's data (PR-4): failed worker steps (a rejected gate
+ *  is a decision, not here), steps in flight, dead-letter messages, queue depth
+ *  by topic, and each feed's latest upload, adverse first. */
+export interface Attention {
+  failed_steps: AttentionStep[];
+  in_flight_steps: AttentionStep[];
+  dead_messages: DeadMessage[];
+  queue_depth: Record<string, number> & { pending_total: number };
+  feeds: {
+    feed: string;
+    upload_id: string;
+    filename: string;
+    status: UploadStatus;
+    error: string | null;
+    created_ts: string;
+    adverse: boolean;
+  }[];
+}
+
+export function getAttention() {
+  return get<Attention>("/api/attention");
 }
 
 /** Returns null when the batch has not been analysed yet, rather than throwing. */
@@ -436,29 +583,6 @@ export async function getProposalById(proposalId: string): Promise<MappingPropos
   } catch {
     return null;
   }
-}
-
-/** G1. Returns an error message rather than throwing, so the gate can show it. */
-export async function decideUpload(
-  uploadId: string,
-  decision: "approved" | "rejected",
-  body: { approver: string; note?: string },
-): Promise<{ error?: string }> {
-  const path = decision === "approved" ? "approve" : "reject";
-  const response = await fetch(`${BASE}/api/uploads/${uploadId}/${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ approver: body.approver, note: body.note ?? null }),
-  });
-  if (response.ok) return {};
-
-  const payload = await response.json().catch(() => ({}));
-  const detail = payload?.detail;
-  if (typeof detail === "string") return { error: detail };
-  if (detail?.message) {
-    return { error: detail.status ? `${detail.message} (status: ${detail.status})` : detail.message };
-  }
-  return { error: `decision failed with status ${response.status}` };
 }
 
 /** Forwards the analyst's file to the control plane. Returns an error message
@@ -509,6 +633,27 @@ export interface MappingVocabulary {
    *  mapping its column; the studio uses this to warn before the analyst ever
    *  reaches that wall. */
   primary_keys: Record<string, string[]>;
+
+  // ---- the dependencies *between* those choices ----------------------------
+  // The four tables below are the server's own validation rules, published so
+  // the editor can require a box the moment a dropdown makes it mandatory,
+  // instead of letting the whole-spec save be refused. `validate_spec` reads
+  // the same constants (`engine/mapping_spec.py`), so the editor cannot drift
+  // from the validator. All four are optional: an older API omits them and the
+  // editor falls back to letting the server judge, exactly as it did before.
+
+  /** transform op -> the arguments it cannot run without (`parse_date` needs
+   *  `format`, `concat` needs `with`, `substring` needs `start`, `cast` needs
+   *  `to`). Ops absent from this map take no arguments. */
+  op_args?: Record<string, string[]>;
+  /** declared canonical type -> the casts that can satisfy it. A target
+   *  declared `string` cannot be fed by cast `int`, and the editor offers only
+   *  what fits rather than letting the save discover it. */
+  casts_for_type?: Record<string, string[]>;
+  /** `on_null` values that require `default` to be set. */
+  on_null_needs_default?: string[];
+  /** `on_unmapped_value` values that mean nothing without a `value_map`. */
+  on_unmapped_needs_value_map?: string[];
 }
 
 /** The AI's own rationale for one field, carried forward from the proposal a
@@ -519,6 +664,17 @@ export interface FieldAiContext {
   evidence: string[];
   concept: string | null;
   status: FieldStatus;
+  /** The target this rationale is *about*. The studio compares it with the
+   *  field's current target and withdraws the confidence meter when they
+   *  differ — otherwise a model's 0.98 renders beside a mapping the model never
+   *  proposed, which is worse than showing nothing. Absent on an older API. */
+  target?: string | null;
+  /** A target the model named that the canonical model does not have. Kept
+   *  visible rather than quietly dropped: a fabrication is a fact about the
+   *  proposal. */
+  rejected_target?: string | null;
+  /** Why this column carries no defensible target, in the graph's own words. */
+  reason?: string | null;
 }
 
 export interface MappingVersionDetail {
@@ -612,12 +768,35 @@ export async function saveMappingSpec(
   const detail = payload?.detail;
   if (detail?.errors) return { errors: detail.errors as SpecFieldError[] };
   if (detail?.message) return { error: detail.hint ? `${detail.message} — ${detail.hint}` : detail.message };
+  // The same status code carries two different shapes. `InvalidSpec` raises the
+  // object handled above; FastAPI's own request validation raises an ARRAY of
+  // `{loc, msg, type}` — a spec the API could not even parse into a MappingSpec.
+  // That fell through to "save failed with status 422", which tells an analyst
+  // nothing. Name the field that could not be read instead.
+  if (Array.isArray(detail) && detail.length) {
+    const first = detail[0] as { loc?: unknown[]; msg?: string };
+    const where = Array.isArray(first.loc) ? first.loc.filter((p) => p !== "body").join(".") : "";
+    return {
+      error: where
+        ? `The draft could not be read: ${where} — ${first.msg ?? "invalid value"}.`
+        : `The draft could not be read: ${first.msg ?? "invalid value"}.`,
+    };
+  }
   return { error: `save failed with status ${response.status}` };
 }
 
 export async function createMappingVersion(
   feed: string,
-  body: { from_proposal_id?: string; derive_from_version?: number; domain?: string },
+  body: {
+    from_proposal_id?: string;
+    derive_from_version?: number;
+    domain?: string;
+    /** Who is starting this draft. Omitted, the API records its own placeholder
+     *  (`analyst@cinqcare.com`) as the author of every version — so the caller
+     *  passes the signed-in user, the same correction made for the uploader in
+     *  3a1b0ff. */
+    created_by?: string;
+  },
 ): Promise<{ version?: number; error?: string }> {
   const response = await fetch(`${BASE}/api/feeds/${encodeURIComponent(feed)}/mapping-versions`, {
     method: "POST",
@@ -696,29 +875,6 @@ export async function getPreview(
   } catch {
     return null;
   }
-}
-
-/** G2. The promotion itself is queued: this returns as soon as the decision is
- *  recorded, and 409 carries why the gate stayed shut. */
-export async function approveMappingVersion(
-  feed: string,
-  version: number,
-  note?: string,
-): Promise<{ error?: string; batchId?: string }> {
-  const response = await fetch(
-    `${BASE}/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/approve`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ note: note || null }),
-    },
-  );
-  const payload = await response.json().catch(() => ({}));
-  if (response.ok) return { batchId: payload?.batch_id };
-  const detail = payload?.detail;
-  if (typeof detail === "string") return { error: detail };
-  if (detail?.message) return { error: detail.hint ? `${detail.message} — ${detail.hint}` : detail.message };
-  return { error: `could not approve v${version} (status ${response.status})` };
 }
 
 export async function requestPreview(

@@ -13,7 +13,7 @@ from cinqflow.api.app import create_app
 from cinqflow.dataplane.contract import bronze_table
 from cinqflow.queue.worker import drain
 from cinqflow.workflow.store import WorkflowStore
-from tests.conftest import requires_db
+from tests.conftest import authed_client, requires_db
 
 pytestmark = requires_db
 
@@ -27,7 +27,7 @@ ROSTER = (
 
 @pytest.fixture
 def client(conn, settings):
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 @pytest.fixture(autouse=True)
@@ -103,8 +103,7 @@ def test_proposal_is_fetchable_by_its_own_id_before_any_draft_exists(client, pro
 
 def test_unknown_proposal_id_is_404(client):
     assert (
-        client.get("/api/mapping-proposals/00000000-0000-0000-0000-000000000000").status_code
-        == 404
+        client.get("/api/mapping-proposals/00000000-0000-0000-0000-000000000000").status_code == 404
     )
 
 
@@ -127,6 +126,37 @@ def test_the_studio_receives_the_legal_vocabulary(client, proposal_id):
     # not a blanket rule.
     assert vocabulary["primary_keys"]["members"] == ["members.source_system_id"]
     assert "members_enrollment_segments" not in vocabulary["primary_keys"]
+
+
+def test_the_studio_receives_the_dependencies_between_those_choices(client, proposal_id):
+    """The vocabulary carries the *rules*, not only the option lists.
+
+    Four edits are reachable with nothing but a dropdown and each makes the spec
+    invalid on its own: `on_null` -> default with no default, `on_unmapped_value`
+    -> quarantine/null with no value_map, any transform that takes an argument
+    with no argument, and a cast the target's declared type cannot accept. A
+    save is all-or-nothing over one artifact, so any one of them discarded every
+    unrelated edit in the table - and the editor could only learn the rule by
+    being refused. These four tables let it require the box the rule needs at
+    the moment the dropdown selects it. They are the validator's own constants,
+    so the editor cannot drift from what will judge it.
+    """
+    client.post(f"/api/feeds/{FEED}/mapping-versions", json={"from_proposal_id": proposal_id})
+    vocabulary = client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["vocabulary"]
+
+    assert vocabulary["op_args"]["parse_date"] == ["format"]
+    assert vocabulary["op_args"]["substring"] == ["start"]
+    # An op that takes no arguments is absent, not present-and-empty.
+    assert "trim" not in vocabulary["op_args"]
+
+    # `members.date_of_birth` is declared timestamp, which `date` also satisfies.
+    assert vocabulary["casts_for_type"]["timestamp"] == ["date", "timestamp"]
+    assert vocabulary["casts_for_type"]["string"] == ["string"]
+
+    assert vocabulary["on_null_needs_default"] == ["default"]
+    assert vocabulary["on_unmapped_needs_value_map"] == ["null", "quarantine"]
+    # `pass` is the one rule that means something without a value_map.
+    assert "pass" not in vocabulary["on_unmapped_needs_value_map"]
 
 
 def test_studio_carries_forward_the_proposal_s_rationale(client, proposal_id):
@@ -230,22 +260,18 @@ def test_editing_an_approved_version_is_refused_and_creates_nothing(
     assert "derive_from_version" in refused.json()["detail"]["hint"]
 
     # no implicit version was created
-    assert [v["version"] for v in client.get(f"/api/feeds/{FEED}/mapping-versions").json()[
-        "versions"
-    ]] == [1]
+    assert [
+        v["version"] for v in client.get(f"/api/feeds/{FEED}/mapping-versions").json()["versions"]
+    ] == [1]
 
 
-def test_editing_after_approval_derives_the_next_version(
-    client, conn, settings, proposal_id
-):
+def test_editing_after_approval_derives_the_next_version(client, conn, settings, proposal_id):
     """Acceptance 2: v(N+1) copies the spec and records derived_from."""
     client.post(f"/api/feeds/{FEED}/mapping-versions", json={"from_proposal_id": proposal_id})
     WorkflowStore(conn, settings).set_mapping_status(feed=FEED, version=1, status="approved")
     conn.commit()
 
-    created = client.post(
-        f"/api/feeds/{FEED}/mapping-versions", json={"derive_from_version": 1}
-    )
+    created = client.post(f"/api/feeds/{FEED}/mapping-versions", json={"derive_from_version": 1})
     assert created.status_code == 201
     v2 = created.json()
     assert v2["version"] == 2

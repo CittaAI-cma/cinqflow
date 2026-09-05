@@ -2,7 +2,9 @@ import { notFound, redirect } from "next/navigation";
 import Kpi from "@/components/Kpi";
 import RunProcessing from "@/components/run/RunProcessing";
 import { getUpload } from "@/lib/api";
-import { canonicalStep, runHref } from "@/lib/runStep";
+import { requireUser } from "@/lib/auth";
+import { loadRunSteps, resolveCanonical } from "@/lib/runProgress";
+import { runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
 
@@ -29,11 +31,13 @@ export default async function ProcessingPage({
   }
 
   const { upload, profile } = detail;
+  const user = await requireUser();
 
   // No URL may show a step ahead of the control plane. Once interpretation
   // has settled (one way or another) this run belongs on the review screen.
-  if (canonicalStep(upload.status) !== "processing") {
-    redirect(runHref(uploadId, canonicalStep(upload.status)));
+  const canonical = resolveCanonical(await loadRunSteps(uploadId), upload.status);
+  if (canonical !== "processing") {
+    redirect(runHref(uploadId, canonical));
   }
 
   return (
@@ -70,6 +74,7 @@ export default async function ProcessingPage({
         uploadId={uploadId}
         initialStatus={upload.status}
         initialError={upload.error}
+        canRerun={user.capabilities.can_rerun_steps}
       />
     </>
   );

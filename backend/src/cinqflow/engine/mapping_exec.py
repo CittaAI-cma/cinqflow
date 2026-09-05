@@ -366,16 +366,40 @@ def row_reasons(row: RowOutcome) -> list[dict[str, object]]:
     ]
 
 
+#: Field attributes a preview does not depend on, because `execute_field` never
+#: reads them: `edited` records who owns the decision, `note` records why it was
+#: made. Both are provenance about the mapping, not part of it.
+_NON_EXECUTING = ("edited", "note")
+
+
 def spec_fingerprint(spec: MappingSpec) -> str:
     """Identifies the exact spec a preview describes.
 
     A preview stops being current the moment the draft changes, and comparing this
     fingerprint is how that is known - no preview row is ever deleted or rewritten.
+
+    Hashed over the spec's *execution projection*: everything `execute_field`
+    actually reads, and nothing else. Hashing the whole document instead made the
+    two most governance-valuable acts on the mapping screen cost a worker round
+    trip and close G2 - ticking "Mine" to claim a field, or writing down why a
+    value_map is correct, changed the fingerprint while the mapped output stayed
+    byte-identical. A preview is evidence of what this spec *does*, so what it
+    does is what identifies it.
+
+    Changing what is hashed makes previews taken before this change read as
+    stale, which is the safe direction: they are re-run, never wrongly accepted.
     """
     import hashlib
     import json
 
-    payload = json.dumps(spec.model_dump(), sort_keys=True, separators=(",", ":"))
+    projection = {
+        "target_table": spec.target_table,
+        "fields": [
+            {k: v for k, v in field.model_dump().items() if k not in _NON_EXECUTING}
+            for field in spec.fields
+        ],
+    }
+    payload = json.dumps(projection, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()[:32]
 
 

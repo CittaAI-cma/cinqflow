@@ -2,14 +2,16 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import RunRail from "@/components/run/RunRail";
 import { getUpload } from "@/lib/api";
-import { canonicalStep } from "@/lib/runStep";
+import { loadRunSteps, resolveCanonical } from "@/lib/runProgress";
 
 export const dynamic = "force-dynamic";
 
 /** The run shell: the chrome every one of the seven step pages shares (the
- *  file's identity line and the seven-dot rail). `getUpload` is `cache()`-
- *  wrapped, so this fetch and each page's own `getUpload` call collapse into
- *  one request per render, not two. */
+ *  file's identity line and the seven-dot rail). `getUpload` and
+ *  `loadRunSteps` are both `cache()`-wrapped, so this layout and the step
+ *  page it wraps cost one request each per render, not two. The rail's dots
+ *  and the canonical step both come from the step ledger; the upload's
+ *  status is the fallback for a run the ledger has nothing about. */
 export default async function RunLayout({
   children,
   params,
@@ -27,7 +29,8 @@ export default async function RunLayout({
   }
 
   const { upload } = detail;
-  const step = canonicalStep(upload.status);
+  const steps = await loadRunSteps(uploadId);
+  const step = resolveCanonical(steps, upload.status);
   const adverse = upload.status === "rejected" || upload.status.endsWith("_failed");
 
   return (
@@ -41,7 +44,7 @@ export default async function RunLayout({
           {upload.source_system}/{upload.domain} · business date {upload.business_date}
         </p>
       </div>
-      <RunRail uploadId={uploadId} step={step} adverse={adverse} />
+      <RunRail uploadId={uploadId} step={step} adverse={adverse} steps={steps} />
       {children}
     </div>
   );

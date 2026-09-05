@@ -621,6 +621,17 @@ a { color: var(--acc); }
   color: var(--ink);
 }
 
+/* PR-4: the persona's own section between the greeting and the launcher. */
+.home-section { margin: 0 0 24px; }
+.home-lede { margin: 0 0 12px; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.home-lede-meta { font-weight: 500; font-size: 13.5px; }
+.home-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 16px 0; flex-wrap: wrap; }
+.home-grid { display: grid; gap: 14px; margin-top: 14px; }
+@media (min-width: 900px) { .home-grid { grid-template-columns: 1fr 1fr; } }
+.home-recent { margin: 8px 0 0; display: grid; gap: 6px; font-size: 13.5px; }
+.home-recent li.adverse { color: var(--danger); }
+.home-recent .run-step-dot { display: inline-block; position: relative; top: 1px; }
+
 .action-chips { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
 .action-chip {
   display: inline-flex;
@@ -723,7 +734,7 @@ a { color: var(--acc); }
 /* The lifecycle stage is a position, not a health word, so it carries no
    status glyph — only a failed or rejected group earns colour. */
 .stage-meta-stage { color: var(--ink); font-weight: 700; }
-.stage-meta-stage.adverse { color: var(--bad); }
+.stage-meta-stage.adverse { color: var(--danger); }
 
 .selection-count { font-size: 12.5px; color: var(--ink2); font-weight: 600; }
 
@@ -811,6 +822,16 @@ select.page-size { width: auto; min-width: 132px; flex: 0 0 auto; }
 .row-menu-item.disabled:hover { background: transparent; }
 
 /* ---------------------------------------------------------------- Group panels */
+/* PR-8: the feed view - schema, lineage, quality - above the config panels. */
+.feed-panels { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.feed-panels-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+.feed-panels .collapsible-body { padding: 0 0 16px; }
+.drift-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.dq-legend { display: grid; gap: 4px; margin-top: 12px; font-size: 12.5px; }
+.dq-legend b { text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; margin-right: 6px; }
+.balance-ok { color: var(--ok); font-weight: 600; }
+.balance-bad { color: var(--danger); font-weight: 600; }
+
 .group-panels { margin-top: auto; padding-top: 28px; }
 .group-panel { padding: 18px 0; border-top: 1px solid var(--line); }
 .group-panel-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
@@ -1316,6 +1337,9 @@ tr:last-child td { border-bottom: none; }
   padding: 0.5px 5px;
 }
 .tag.cite { background: var(--cite-weak); color: var(--cite); }
+/* The signed-in user's persona (lib/persona.ts) beside their name. Neutral on
+   purpose: violet is the gates', teal is citations' - this is identity metadata. */
+.tag.persona { background: var(--mat); color: var(--ink2); margin-left: 6px; }
 
 .chip-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .chip {
@@ -1531,6 +1555,52 @@ a.run-step:hover { background: var(--mat); }
 .run-step-dot.current.gate { background: var(--gate); }
 .run-step-dot.adverse { background: var(--danger); }
 .run-step-dot.pending { background: var(--line2); }
+.run-step-dot.queued { background: var(--acc); opacity: 0.45; }
+
+/* ------------------------------------------------------- Workflow steps */
+/* components/run/WorkflowSteps.tsx - the step ledger, live. Reuses the rail's
+   dot vocabulary so a step reads the same here and in the rail above. */
+.workflow-steps-panel { display: grid; gap: 8px; }
+.workflow-steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.workflow-step { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.workflow-step .run-step-dot { position: relative; top: 1px; }
+.workflow-step-label { font-weight: 600; color: var(--ink); }
+.workflow-step.not_reached .workflow-step-label,
+.workflow-step.skipped .workflow-step-label { color: var(--ink3); font-weight: 500; }
+.workflow-step-state { color: var(--ink2); }
+.workflow-step.running .workflow-step-state { color: var(--acc); font-weight: 600; }
+.workflow-step.failed .workflow-step-state { color: var(--danger); font-weight: 600; }
+.workflow-step-error { flex: 1 1 100%; margin-left: 17px; color: var(--danger); white-space: pre-wrap; }
+.workflow-steps-toggle { justify-self: start; }
+.workflow-step-rerun { padding: 2px 10px; font-size: 12px; }
+
+/* ----------------------------------------------------------- Column roles */
+/* lib/columnRoles.ts vocabulary. One pill style, the role names as modifiers;
+   the accent/cite/warn tones are the trust ladder's, reused for the three roles
+   an analyst reads first. */
+.role-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--mat);
+  color: var(--ink2);
+  white-space: nowrap;
+}
+.role-pill.identifier { background: var(--acc-weak); color: var(--acc); }
+.role-pill.measure { background: var(--cite-weak); color: var(--cite); }
+.role-pill.dimension { background: var(--warn-weak); color: var(--proc); }
+.role-pill.date { background: var(--mat); color: var(--ink); }
+.role-pill.technical,
+.role-pill.unclassified { background: transparent; color: var(--ink3); border: 1px solid var(--line2); }
+.recommended-fields .recommended-group { margin-top: 10px; }
+.recommended-fields ul.plain { margin: 6px 0 0; display: grid; gap: 4px; }
+.recommended-more { margin-top: 8px; }
+.importance { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink3); }
+.importance.high { color: var(--acc); font-weight: 700; }
+.importance.medium { color: var(--ink2); }
 
 /* ------------------------------------------------------------- S1 timeline */
 .run-timeline-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }

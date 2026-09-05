@@ -1,6 +1,8 @@
 import Confidence from "@/components/ui/Confidence";
 import StatusWord from "@/components/StatusWord";
 import type { FieldStatus, MappingProposal } from "@/lib/api";
+import { ROLE_WORD, roleIndex, type RoleKey } from "@/lib/columnRoles";
+import { evidenceClass } from "@/lib/evidence";
 import { proposalStatusWord } from "@/lib/statusWords";
 
 const STATUS_ORDER: FieldStatus[] = ["invalid", "candidate", "ambiguous", "unknown"];
@@ -12,33 +14,38 @@ const FIELD_KIND: Record<FieldStatus, string> = {
   invalid: "recommendation",
 };
 
-/** Evidence strings are free text, but two prefixes carry real meaning worth a
- * viewer noticing at a glance: `precedent:` is a human-approved governance
- * decision applied deterministically (strong); `semantic:` is an unverified
- * lexical-similarity lead surfaced only where nothing structured could place
- * the column (weak, never itself a decision). Everything else renders plain. */
-function evidenceClass(item: string): string {
-  if (item.startsWith("precedent:")) return "evidence-chip--precedent";
-  if (item.startsWith("semantic:")) return "evidence-chip--semantic";
-  return "";
-}
-
 /** The AI mapping proposal, rendered identically wherever an analyst needs to
  *  see it: the batch detail page (after the fact), the Mapping Studio's
  *  empty state (before "Start draft" commits to it), and S4's Bronze review
  *  — one component so those moments never drift into showing different
  *  information. `statuses` restricts which rows render; omit it to show
- *  every field (the batch page's original, unfiltered behaviour). */
+ *  every field (the batch page's original, unfiltered behaviour). `roles`
+ *  (PR-7) - source column → role from the upload's interpretation - adds a role
+ *  column and orders the rows identifiers → measures → dimensions → dates →
+ *  business → technical; without it the table is exactly as before. */
 export default function ProposalTable({
   proposal,
   statuses,
+  roles,
 }: {
   proposal: MappingProposal;
   statuses?: FieldStatus[];
+  roles?: Record<string, RoleKey>;
 }) {
-  const fields = statuses
+  const filtered = statuses
     ? proposal.content.fields.filter((field) => statuses.includes(field.status))
     : proposal.content.fields;
+  // Stable: within a role the proposal's own order (the file's column order) holds.
+  const fields = roles
+    ? filtered
+        .map((field, index) => ({ field, index }))
+        .sort(
+          (a, b) =>
+            roleIndex(roles[a.field.source] ?? "unclassified") -
+              roleIndex(roles[b.field.source] ?? "unclassified") || a.index - b.index,
+        )
+        .map((entry) => entry.field)
+    : filtered;
 
   return (
     <>
@@ -69,6 +76,7 @@ export default function ProposalTable({
           <thead>
             <tr>
               <th>Source column</th>
+              {roles ? <th>Role</th> : null}
               <th>Concept</th>
               <th>Proposed target</th>
               <th>Transform</th>
@@ -81,6 +89,13 @@ export default function ProposalTable({
             {fields.map((field) => (
               <tr key={field.source}>
                 <td className="mono">{field.source}</td>
+                {roles ? (
+                  <td>
+                    <span className={`role-pill ${roles[field.source] ?? "unclassified"}`}>
+                      {ROLE_WORD[roles[field.source] ?? "unclassified"]}
+                    </span>
+                  </td>
+                ) : null}
                 <td className="meta">{field.concept ?? "—"}</td>
                 <td className="mono">
                   {field.target ?? <span className="unc">—</span>}

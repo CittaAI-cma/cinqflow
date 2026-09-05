@@ -267,7 +267,9 @@ def test_set_password_rejects_short_passwords(client, conn, settings):
     tokens = _login(client, "admin7@cinqcare.com", "correct-horse-1")
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
 
-    resp = client.patch(f"/api/users/{target.id}/password", headers=headers, json={"password": "short"})
+    resp = client.patch(
+        f"/api/users/{target.id}/password", headers=headers, json={"password": "short"}
+    )
     assert resp.status_code == 422
 
 

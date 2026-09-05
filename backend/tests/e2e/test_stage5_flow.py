@@ -12,7 +12,7 @@ from psycopg.rows import dict_row
 from cinqflow.api.app import create_app
 from cinqflow.dataplane.contract import bronze_table
 from cinqflow.queue.worker import drain
-from tests.conftest import requires_db
+from tests.conftest import authed_client, requires_db
 
 pytestmark = requires_db
 
@@ -27,7 +27,7 @@ ROSTER = (
 
 @pytest.fixture
 def client(conn, settings):
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 @pytest.fixture(autouse=True)
@@ -97,9 +97,19 @@ def test_preview_is_queued_not_executed_inline(client, settings, draft):
     # nothing computed yet
     assert client.get(f"/api/feeds/{FEED}/mapping-versions/1/preview").status_code == 404
     assert client.get("/api/queue/depth").json()["mapping_preview"] == 1
+    # Queued is a ledger state, not a guess: the preview step is `pending`.
+    progress = client.get(f"/api/feeds/{FEED}/mapping-versions/1/progress").json()
+    assert next(s for s in progress["steps"] if s["key"] == "preview")["state"] == "pending"
 
     assert _drain(settings) == 1
     assert client.get(f"/api/feeds/{FEED}/mapping-versions/1/preview").status_code == 200
+    states = {
+        s["key"]: s["state"]
+        for s in client.get(f"/api/feeds/{FEED}/mapping-versions/1/progress").json()["steps"]
+    }
+    assert states["preview"] == "done"
+    assert states["gate_g2"] == "running"  # open: awaiting the analyst
+    assert states["promote"] == "not_reached"
 
 
 def test_the_analyst_sees_source_values_mapped_values_and_failures(client, settings, draft):
@@ -116,8 +126,8 @@ def test_the_analyst_sees_source_values_mapped_values_and_failures(client, setti
     aggregates = preview["aggregates"]
     assert aggregates["rows_previewed"] == 3
     assert aggregates["rows_ok"] == 1
-    assert aggregates["rows_with_failures"] == 1   # the unparseable date
-    assert aggregates["rows_rejected"] == 1        # the missing identifier
+    assert aggregates["rows_with_failures"] == 1  # the unparseable date
+    assert aggregates["rows_rejected"] == 1  # the missing identifier
     assert "member_dob:parse_date" in aggregates["failures_by_rule"]
     assert "member_id:on_null" in aggregates["failures_by_rule"]
     assert aggregates["null_or_invalid"]["members.date_of_birth"] == 1
@@ -229,9 +239,7 @@ def test_preview_is_refused_without_a_batch_or_version(client, settings):
         json={"domain": "enrollment"},
     )
     assert unknown.status_code == 201
-    refused = client.post(
-        "/api/feeds/feed_with_no_batch/mapping-versions/1/preview", json={}
-    )
+    refused = client.post("/api/feeds/feed_with_no_batch/mapping-versions/1/preview", json={})
     # an empty draft has nothing to preview
     assert refused.status_code == 409
     assert "no fields" in refused.json()["detail"]["message"]

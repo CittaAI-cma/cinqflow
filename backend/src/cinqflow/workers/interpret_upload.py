@@ -47,6 +47,7 @@ def handle(
             facts=profile.facts,
             source_system=upload.source_system,
             feed=upload.feed,
+            domain=upload.domain,
             on_step=on_step,
         )
     except Exception as exc:  # noqa: BLE001 - persisted as a retryable state
@@ -59,7 +60,11 @@ def handle(
         )
         conn.commit()
         log.warning("interpretation failed for %s: %s", upload_id, exc)
-        return {"upload_id": upload_id, "status": UploadStatus.INTERPRET_FAILED}
+        return {
+            "upload_id": upload_id,
+            "status": UploadStatus.INTERPRET_FAILED,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
     interpretation = store.put_interpretation(
         upload_id=upload_id,

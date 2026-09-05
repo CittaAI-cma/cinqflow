@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
+from cinqflow.auth.persona import Capabilities, Persona
+
 
 class Role(BaseModel):
     id: UUID
@@ -57,15 +59,22 @@ class UserOut(BaseModel):
 
 class CurrentUser(BaseModel):
     """The authenticated caller, as `GET /api/auth/me` and `get_current_user`
-    return it - carries the flattened role set every permission check reads."""
+    return it - carries the flattened role set every permission check reads,
+    plus the persona and capabilities derived from it (`auth/persona.py`), so
+    the frontend never re-derives that mapping."""
 
     id: UUID
     email: EmailStr
     display_name: str
     roles: list[str]
+    persona: Persona
+    capabilities: Capabilities
 
     def has_role(self, name: str) -> bool:
         return name in self.roles
+
+    def has_capability(self, name: str) -> bool:
+        return bool(getattr(self.capabilities, name, False))
 
 
 class TokenPair(BaseModel):
@@ -73,3 +82,12 @@ class TokenPair(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     user: CurrentUser
+
+
+class SetRolesRequest(BaseModel):
+    """Admin-only: replaces the user's whole role set. Roles are what persona
+    and capabilities derive from (`auth/persona.py`), so this is how an
+    administrator-only bootstrap account is given `approver` and can sign a
+    gate."""
+
+    roles: list[str]

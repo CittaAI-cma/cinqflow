@@ -15,7 +15,7 @@ from typing import Any
 
 import psycopg
 
-from cinqflow.db import fetch_one
+from cinqflow.db import fetch_all, fetch_one
 from cinqflow.settings import Settings, get_settings
 
 MAX_ATTEMPTS = 3
@@ -132,6 +132,50 @@ class Queue:
                     (message.message_id,),
                 )
             self.conn.commit()
+
+    @property
+    def max_attempts(self) -> int:
+        return MAX_ATTEMPTS
+
+    def payload_of(self, message_id: str) -> dict[str, Any] | None:
+        """The payload a message carried - so a re-run (workflow/rerun.py) can
+        repeat exactly what the last generation was asked to do."""
+        row = fetch_one(
+            self.conn,
+            f"SELECT payload FROM {self.s.queue_schema}.message WHERE message_id = %s",
+            (message_id,),
+        )
+        return dict(row["payload"]) if row else None
+
+    def state_of(self, message_id: str) -> dict[str, Any] | None:
+        """`{state, attempts, last_error}` for one message, or None."""
+        return fetch_one(
+            self.conn,
+            f"""SELECT state, attempts, last_error FROM {self.s.queue_schema}.message
+                WHERE message_id = %s""",
+            (message_id,),
+        )
+
+    def list_dead(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Messages the queue gave up on (`MAX_ATTEMPTS` reached), newest first -
+        the platform home's dead-letter list. The payload names the object."""
+        rows = fetch_all(
+            self.conn,
+            f"""SELECT message_id, topic, dedupe_key, payload, attempts, last_error,
+                       enqueued_ts, claimed_ts
+                FROM {self.s.queue_schema}.message
+                WHERE state = 'dead' ORDER BY enqueued_ts DESC LIMIT %s""",
+            (limit,),
+        )
+        return [
+            {
+                **row,
+                "message_id": str(row["message_id"]),
+                "enqueued_ts": row["enqueued_ts"].isoformat(),
+                "claimed_ts": row["claimed_ts"].isoformat() if row["claimed_ts"] else None,
+            }
+            for row in rows
+        ]
 
     def depth(self, topic: str | None = None) -> int:
         sql = f"SELECT count(*) AS n FROM {self.s.queue_schema}.message WHERE state = 'pending'"

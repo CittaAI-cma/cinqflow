@@ -6,12 +6,14 @@ import StartDraft from "@/components/StartDraft";
 import PreviewPanel from "@/components/PreviewPanel";
 import StatusWord from "@/components/StatusWord";
 import {
+  getFeedVersionProgress,
   getMappingDiff,
   getMappingVersion,
   getPreview,
   getProposalById,
   listMappingVersions,
 } from "@/lib/api";
+import { getCurrentUser } from "@/lib/auth";
 import { mappingStatusWord } from "@/lib/statusWords";
 
 const PREVIEW_LIMITS = [10, 25, 50] as const;
@@ -44,6 +46,11 @@ export default async function MappingPageBody({
   limit?: string;
   baseHref: string;
 }) {
+  // Whether the gate below renders as a form or as a stated reason - the API
+  // enforces `can_decide_gates` regardless (`require_capability`).
+  const user = await getCurrentUser();
+  const canDecide = user?.capabilities.can_decide_gates ?? false;
+  const canRerun = user?.capabilities.can_rerun_steps ?? false;
   const { versions } = await listMappingVersions(feed).catch(() => ({ versions: [] }));
   const selected = v ? Number(v) : versions[0]?.version;
   const previewLimit = PREVIEW_LIMITS.includes(Number(limitParam) as (typeof PREVIEW_LIMITS)[number])
@@ -52,6 +59,8 @@ export default async function MappingPageBody({
   const mapping = selected ? await getMappingVersion(feed, selected) : null;
   const diff = selected ? await getMappingDiff(feed, selected) : null;
   const preview = selected ? await getPreview(feed, selected, previewLimit) : null;
+  // The ledger's view of this version, for `PreviewPanel`'s `WorkflowSteps`.
+  const progress = selected ? await getFeedVersionProgress(feed, selected).catch(() => null) : null;
   const analystEdited = new Set(diff?.diff.analyst_edited ?? []);
   // Only fetched for the empty state: once a draft exists it owns the fields,
   // and the proposal is history that `mapping.ai_context` already carries in.
@@ -101,7 +110,7 @@ export default async function MappingPageBody({
               it from its batch page.
             </p>
           ) : null}
-          <StartDraft feed={feed} proposalId={proposal} />
+          <StartDraft feed={feed} proposalId={proposal} createdBy={user?.email} basePath={baseHref} />
         </>
       ) : (
         <>
@@ -192,14 +201,19 @@ export default async function MappingPageBody({
           <h2>{mapping.editable ? "Edit the draft" : "Frozen version"}</h2>
 
           {mapping.editable ? (
-            <MappingStudio mapping={mapping} />
+            <MappingStudio mapping={mapping} basePath={baseHref} />
           ) : (
             <>
               <p className="empty">
                 v{mapping.version} is {mapping.status} and cannot be edited. Start v
                 {mapping.version + 1} from it to continue.
               </p>
-              <StartDraft feed={feed} deriveFrom={mapping.version} />
+              <StartDraft
+                feed={feed}
+                deriveFrom={mapping.version}
+                createdBy={user?.email}
+                basePath={baseHref}
+              />
               <div className="card scroll" style={{ padding: 0, marginTop: 14 }}>
                 <table>
                   <thead>
@@ -237,6 +251,8 @@ export default async function MappingPageBody({
             preview={preview}
             limit={previewLimit}
             baseHref={baseHref}
+            initialSteps={progress?.steps ?? []}
+            canRerun={canRerun}
           />
 
           <ApproveMapping
@@ -245,6 +261,8 @@ export default async function MappingPageBody({
             status={mapping.status}
             preview={preview}
             editedCount={diff?.diff.analyst_edited.length ?? 0}
+            canDecide={canDecide}
+            basePath={baseHref}
           />
         </>
       )}

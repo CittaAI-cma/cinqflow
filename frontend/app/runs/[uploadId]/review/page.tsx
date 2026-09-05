@@ -1,15 +1,18 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import GateActions from "@/components/GateActions";
-import LandingWait from "@/components/run/LandingWait";
+import GateLocked from "@/components/run/GateLocked";
 import RetryButton from "@/components/run/RetryButton";
 import ReviewEvidence from "@/components/run/ReviewEvidence";
 import VerdictCard from "@/components/run/VerdictCard";
+import WorkflowSteps from "@/components/run/WorkflowSteps";
 import StatusWord from "@/components/StatusWord";
 import AnnounceOnMount from "@/components/ui/AnnounceOnMount";
 import { getUpload } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
-import { canonicalStep, isStepViewable, runHref } from "@/lib/runStep";
+import { personaDefaults, RERUN_LOCKED_REASON } from "@/lib/persona";
+import { loadRunSteps, resolveCanonical } from "@/lib/runProgress";
+import { isStepViewable, runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
 
@@ -46,11 +49,14 @@ export default async function ReviewPage({
   // gates this route on a session cookie, but the actual decided-by identity
   // for a still-undecided run comes from here, not a placeholder.
   const user = await requireUser();
+  const defaults = personaDefaults(user.persona);
 
   const { upload, profile, interpretation, approvals, runs } = detail;
 
-  if (!isStepViewable("review", canonicalStep(upload.status))) {
-    redirect(runHref(uploadId, canonicalStep(upload.status)));
+  const steps = await loadRunSteps(uploadId);
+  const canonical = resolveCanonical(steps, upload.status);
+  if (!isStepViewable("review", canonical)) {
+    redirect(runHref(uploadId, canonical));
   }
 
   if (!profile || !interpretation) {
@@ -74,7 +80,12 @@ export default async function ReviewPage({
       <VerdictCard profile={profile} interpretation={interpretation} />
 
       <div className="review-right">
-        <ReviewEvidence profile={profile} interpretation={interpretation} />
+        <ReviewEvidence
+          profile={profile}
+          interpretation={interpretation}
+          initialMode={defaults.readingMode}
+          collapseTechnical={defaults.technicalCollapsed}
+        />
 
         {decision ? (
           <div className="card gate-box">
@@ -129,15 +140,31 @@ export default async function ReviewPage({
                       {upload.error ?? "Landing failed."} The write was rolled back — Bronze has
                       no rows from this batch.
                     </p>
-                    <RetryButton uploadId={uploadId} label="Retry landing" />
+                    {user.capabilities.can_rerun_steps ? (
+                      <RetryButton uploadId={uploadId} label="Retry landing" />
+                    ) : (
+                      <p className="meta" style={{ margin: 0, flex: "1 1 100%" }}>
+                        {RERUN_LOCKED_REASON}
+                      </p>
+                    )}
                   </>
                 ) : null}
               </div>
             ) : (
-              <LandingWait uploadId={uploadId} />
+              <div style={{ marginTop: 12 }}>
+                <WorkflowSteps
+                  source={{ kind: "upload", uploadId }}
+                  initial={steps}
+                  only={["land"]}
+                  expanded={defaults.workflowStepsExpanded}
+                  canRerun={user.capabilities.can_rerun_steps}
+                  what="landing to Bronze"
+                  stalledCopy="The approval is recorded and the file is safe, but no worker has claimed the batch.land_bronze job. Nothing lands until one does — this page will pick it up on its own the moment that happens."
+                />
+              </div>
             )}
           </div>
-        ) : (
+        ) : user.capabilities.can_decide_gates ? (
           <GateActions
             uploadId={uploadId}
             filename={upload.filename}
@@ -147,6 +174,8 @@ export default async function ReviewPage({
               interpretation.content.signals.filter((s) => s.severity === "blocker").length
             }
           />
+        ) : (
+          <GateLocked gate="G1" />
         )}
       </div>
     </div>

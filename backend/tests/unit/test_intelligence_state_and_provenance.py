@@ -318,7 +318,7 @@ class TestProvenance:
             facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
         )
 
-        assert result["prompt"] == "interpret_file@2"
+        assert result["prompt"] == "interpret_file@3"
         assert result["model"] == "stub-reasoner-1"
 
         # Knowledge citations are version-stamped

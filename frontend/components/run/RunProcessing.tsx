@@ -2,15 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { submitRetry } from "@/app/actions";
 import StatusWord from "@/components/StatusWord";
 import WaitNotice from "@/components/ui/WaitNotice";
 import {
   getUploadProgress,
-  retryUpload,
   type StageState,
   type UploadProgress as ProgressPayload,
   type UploadStatus,
 } from "@/lib/api";
+import { RERUN_LOCKED_REASON } from "@/lib/persona";
 import { isUploadInFlight, type StatusWord as StatusWordType } from "@/lib/statusWords";
 import { usePoll } from "@/lib/usePoll";
 import { useToast } from "@/lib/useToast";
@@ -83,10 +84,15 @@ export default function RunProcessing({
   uploadId,
   initialStatus,
   initialError,
+  canRerun,
 }: {
   uploadId: string;
   initialStatus: UploadStatus;
   initialError: string | null;
+  /** `capabilities.can_rerun_steps` from the server page. The API enforces it
+   *  too; here it decides whether the failure surface offers a button or
+   *  states why it doesn't. */
+  canRerun: boolean;
 }) {
   const router = useRouter();
   const { push } = useToast();
@@ -128,7 +134,7 @@ export default function RunProcessing({
 
   async function handleRetry() {
     setRetryError(null);
-    const result = await retryUpload(uploadId);
+    const result = await submitRetry(uploadId);
     if (result.error) {
       setRetryError(result.error);
       push(result.error, "error");
@@ -147,9 +153,15 @@ export default function RunProcessing({
           to the data plane beyond what already succeeded.
         </p>
         <div className="run-processing-actions">
-          <button type="button" className="btn-dark" onClick={handleRetry} disabled={retrying}>
-            {retrying ? "Retrying…" : retryTopic}
-          </button>
+          {canRerun ? (
+            <button type="button" className="btn-dark" onClick={handleRetry} disabled={retrying}>
+              {retrying ? "Retrying…" : retryTopic}
+            </button>
+          ) : (
+            <p className="meta" style={{ margin: 0, flex: "1 1 100%" }}>
+              {RERUN_LOCKED_REASON}
+            </p>
+          )}
           <a href="/data/intake/new" className="btn-outline">
             Back to intake
           </a>

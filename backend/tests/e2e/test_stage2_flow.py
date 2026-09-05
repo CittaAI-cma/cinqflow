@@ -14,7 +14,7 @@ from cinqflow.dataplane.contract import bronze_table
 from cinqflow.dataplane.pg import PostgresDataPlane
 from cinqflow.queue.worker import drain
 from cinqflow.workflow.states import RunState, UploadStatus
-from tests.conftest import requires_db
+from tests.conftest import TEST_OPERATOR_EMAIL, authed_client, requires_db
 
 pytestmark = requires_db
 
@@ -23,7 +23,7 @@ FEED = "test_e2e_roster"
 
 @pytest.fixture
 def client(conn, settings):
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 @pytest.fixture(autouse=True)
@@ -69,7 +69,7 @@ def test_approve_lands_bronze_with_lineage(client, settings, conn, small_csv_byt
 
     approve = client.post(
         f"/api/uploads/{upload_id}/approve",
-        json={"approver": "info@cittaai.com", "note": "Grain confirmed with payer."},
+        json={"note": "Grain confirmed with payer."},
     )
     assert approve.status_code == 202, approve.text
     assert approve.json()["status"] == UploadStatus.APPROVED
@@ -98,7 +98,8 @@ def test_approve_lands_bronze_with_lineage(client, settings, conn, small_csv_byt
     approval = detail["approvals"][0]
     assert approval["gate"] == "G1"
     assert approval["decision"] == "approved"
-    assert approval["approver"] == "info@cittaai.com"
+    # The approver is whoever holds the session - never a body field (PR-1).
+    assert approval["approver"] == TEST_OPERATOR_EMAIL
 
     # Bronze is queryable, and PHI in the source row is masked on the way out
     rows = client.get(f"/api/batches/{batch_id}/rows").json()
@@ -123,13 +124,28 @@ def test_approve_lands_bronze_with_lineage(client, settings, conn, small_csv_byt
     assert batch["run"]["batch_id"] == batch_id
     assert batch["upload"]["upload_id"] == upload_id
 
+    # The step ledger (PR-2): every step this flow exercised is on record as
+    # done, the gate carries its approval, and what has not happened says so.
+    steps = {s["key"]: s for s in client.get(f"/api/uploads/{upload_id}/progress").json()["steps"]}
+    exercised = ("profile", "interpret", "gate_g1", "land", "analyze")
+    assert [steps[k]["state"] for k in exercised] == ["done"] * len(exercised)
+    assert steps["gate_g1"]["run"]["artifact_id"] == approval["approval_id"]
+    assert steps["land"]["run"]["artifact_id"] == batch_id
+    assert steps["analyze"]["run"]["scope_id"] == batch_id
+    assert steps["preview"]["state"] == "not_reached"
+    assert [s["state"] for s in steps.values()].count("failed") == 0
+
+    # ...and the same rows are reachable by scope, while nothing has failed.
+    by_scope = client.get(f"/api/steps?scope_kind=upload&scope_id={upload_id}").json()["steps"]
+    assert [s["step_key"] for s in by_scope] == ["profile", "interpret", "gate_g1", "land"]
+    assert client.get("/api/steps?state=failed").json()["steps"] == []
+    assert len(client.get("/api/workflow").json()["steps"]) == 8
+
 
 def test_reject_writes_nothing_to_the_plane(client, settings, conn, small_csv_bytes):
     upload_id = _upload_and_interpret(client, settings, small_csv_bytes, "reject_me.csv")
 
-    reject = client.post(
-        f"/api/uploads/{upload_id}/reject", json={"note": "Wrong business date."}
-    )
+    reject = client.post(f"/api/uploads/{upload_id}/reject", json={"note": "Wrong business date."})
     assert reject.status_code == 202
     assert reject.json()["queued"] == "upload.reject"
     _drain(settings)
@@ -140,6 +156,13 @@ def test_reject_writes_nothing_to_the_plane(client, settings, conn, small_csv_by
     assert detail["runs"] == []
     assert detail["approvals"][0]["decision"] == "rejected"
     assert not PostgresDataPlane(conn).table_exists(bronze_table(FEED))
+
+    # The ledger records the rejection as the gate's adverse end, and landing
+    # as a step that will now never run.
+    steps = {s["key"]: s for s in client.get(f"/api/uploads/{upload_id}/progress").json()["steps"]}
+    assert steps["gate_g1"]["state"] == "failed"
+    assert steps["gate_g1"]["run"]["error"].startswith("rejected by ")
+    assert steps["land"]["state"] == "skipped"
 
 
 def test_approving_twice_is_refused(client, settings, small_csv_bytes):

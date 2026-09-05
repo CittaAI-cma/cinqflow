@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 from cinqflow.api.app import create_app
 from cinqflow.dataplane.contract import bronze_table
 from cinqflow.queue.worker import drain
-from tests.conftest import requires_db
+from tests.conftest import authed_client, requires_db
 
 pytestmark = requires_db
 
@@ -33,7 +33,7 @@ ROSTER = (
 
 @pytest.fixture
 def client(conn, settings):
-    return TestClient(create_app(settings))
+    return authed_client(TestClient(create_app(settings)), conn, settings)
 
 
 @pytest.fixture(autouse=True)
@@ -123,7 +123,7 @@ def test_g2_is_queued_not_executed_inline(client, settings, previewed):
     _, batch_id = previewed
     response = client.post(
         f"/api/feeds/{FEED}/mapping-versions/1/approve",
-        json={"approver": "lead@cinqcare.com", "note": "matches the preview"},
+        json={"note": "matches the preview"},
     )
     assert response.status_code == 202, response.text
     body = response.json()
@@ -189,6 +189,14 @@ def test_the_whole_flow_reaches_silver_raw(client, settings, previewed):
     assert refused[0]["reasons"][0]["source"] == "member_id"
     assert refused[0]["reasons"][0]["rule"] == "on_null"
 
+    # The ledger has the whole journey, both gates included (PR-2).
+    steps = {s["key"]: s for s in client.get(f"/api/uploads/{upload_id}/progress").json()["steps"]}
+    assert [s["state"] for s in steps.values()] == ["done"] * 8
+    assert steps["promote"]["run"]["scope_id"] == batch_id
+    assert steps["gate_g2"]["run"]["artifact_type"] == "approval"
+    batch_steps = client.get(f"/api/batches/{batch_id}/progress").json()["steps"]
+    assert {s["key"]: s["state"] for s in batch_steps}["promote"] == "done"
+
 
 def test_lineage_proves_the_chain_from_either_end(client, settings, previewed):
     upload_id, batch_id = previewed
@@ -234,7 +242,18 @@ def test_g2_is_refused_when_the_preview_is_no_longer_current(client, settings, p
     be approved, and nothing else."""
     _, batch_id = previewed
     spec = client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["spec"]
+
+    # Provenance alone does not close the gate: `edited` and `note` are not read
+    # by the executor, so the previewed rows are still exactly what this spec
+    # produces. Claiming a field and writing down why must not cost a re-preview.
     spec["fields"][0]["note"] = "second thoughts"
+    spec["fields"][0]["edited"] = True
+    client.put(f"/api/feeds/{FEED}/mapping-versions/1", json=spec)
+    still = client.get(f"/api/feeds/{FEED}/mapping-versions/1/preview").json()
+    assert still["is_current"] is True and still["approvable"] is True
+
+    # A change the executor *does* read closes it immediately.
+    spec["fields"][0]["on_null"] = "reject"
     client.put(f"/api/feeds/{FEED}/mapping-versions/1", json=spec)
 
     stale = client.get(f"/api/feeds/{FEED}/mapping-versions/1/preview").json()
@@ -329,9 +348,7 @@ def test_nothing_reaches_silver_without_g2(client, settings, previewed):
     assert _drain(settings) == 0
 
     with psycopg.connect(settings.database_url) as check, check.cursor() as cur:
-        cur.execute(
-            "SELECT to_regclass(%s) AS present", (f'{settings.silver_schema}."members"',)
-        )
+        cur.execute("SELECT to_regclass(%s) AS present", (f'{settings.silver_schema}."members"',))
         assert cur.fetchone()[0] is None
 
     from cinqflow.workers import promote_silver
@@ -344,3 +361,35 @@ def test_nothing_reaches_silver_without_g2(client, settings, previewed):
         )
     assert refused["promoted"] is False
     assert refused["reason"] == "previewed"
+
+
+def test_the_promotion_can_be_rerun_from_the_api_and_leaves_the_same_silver(
+    client, settings, previewed
+):
+    """PR-3 closes `forward-flow-adoption.md §6.5`: promotion re-queued on demand,
+    identical rows out (features.md Stage 6 acceptance 3), generation 2 on record."""
+    _, batch_id = previewed
+    client.post(f"/api/feeds/{FEED}/mapping-versions/1/approve", json={})
+    _drain(settings)
+
+    def snapshot() -> list[tuple]:
+        return [
+            (m["source_system_id"], m["record_hash"])
+            for m in _query(
+                settings,
+                f'SELECT source_system_id, record_hash FROM {settings.silver_schema}."members" '
+                "WHERE batch_id = %s ORDER BY source_system_id",
+                (batch_id,),
+            )
+        ]
+
+    before = snapshot()
+    res = client.post(f"/api/batches/{batch_id}/steps/promote/rerun")
+    assert res.status_code == 202, res.text
+    assert res.json()["generation"] == 2
+    assert _drain(settings) == 1
+    assert snapshot() == before
+
+    steps = {s["key"]: s for s in client.get(f"/api/batches/{batch_id}/progress").json()["steps"]}
+    assert steps["promote"]["state"] == "done"
+    assert steps["promote"]["run"]["generation"] == 2

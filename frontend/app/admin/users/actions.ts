@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireRole } from "@/lib/auth";
-import { createUser, setUserActive } from "@/lib/users";
+import { createUser, setUserActive, setUserRoles } from "@/lib/users";
 
 export interface CreateUserState {
   error?: string;
@@ -44,5 +44,14 @@ export async function submitCreateUser(
 export async function toggleActive(userId: string, nextActive: boolean): Promise<void> {
   await requireRole("administrator");
   await setUserActive(userId, nextActive);
+  revalidatePath("/admin/users");
+}
+
+/** Bound per-row: `updateRoles.bind(null, user.id)`; React passes the form's
+ *  data as the trailing argument. Replaces the whole role set with whatever
+ *  is ticked - persona and capabilities follow on the user's next request. */
+export async function updateRoles(userId: string, form: FormData): Promise<void> {
+  await requireRole("administrator");
+  await setUserRoles(userId, form.getAll("roles").map(String));
   revalidatePath("/admin/users");
 }

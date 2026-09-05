@@ -49,11 +49,54 @@ class LlmSignal(BaseModel):
     consequence: str
 
 
+#: The role vocabulary the model may use for a column (PR-6). Wider than the
+#: profiler's hint set: `business_attribute` (descriptive, neither key nor
+#: quantity nor fixed category) and `derived` (computed from other columns) are
+#: things only reading the names and knowledge can tell.
+ColumnRole = Literal[
+    "identifier",
+    "measure",
+    "dimension",
+    "date",
+    "business_attribute",
+    "technical",
+    "derived",
+    "unclassified",
+]
+COLUMN_ROLES: frozenset[str] = frozenset(
+    {
+        "identifier",
+        "measure",
+        "dimension",
+        "date",
+        "business_attribute",
+        "technical",
+        "derived",
+        "unclassified",
+    }
+)
+Importance = Literal["high", "medium", "low"]
+IMPORTANCE_LEVELS: frozenset[str] = frozenset({"high", "medium", "low"})
+
+
+class LlmColumnRole(BaseModel):
+    """One observed column, classified against its profiler hint. `role` and
+    `importance` are plain `str` here, not the Literals: an out-of-vocabulary
+    value must reach `_assemble` (which records and corrects it) rather than
+    fail schema validation and take every other role down with it."""
+
+    name: str
+    role: str
+    importance: str
+    reason: str = ""
+
+
 class InterpretationResponse(BaseModel):
-    """`interpret_file`'s contract - mirrors `prompts/interpret_file_v1.md` exactly."""
+    """`interpret_file`'s contract - mirrors `prompts/interpret_file_v3.md` exactly."""
 
     claims: list[LlmClaim] = Field(default_factory=list)
     signals: list[LlmSignal] = Field(default_factory=list)
+    column_roles: list[LlmColumnRole] = Field(default_factory=list)
 
 
 #: The model may only ever claim one of these three - `invalid` is assigned

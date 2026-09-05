@@ -23,3 +23,6 @@ frontend/.next/
 
 # OS
 .DS_Store
+
+# Source recordings — the walkthrough derived from them is committed, they are not
+docs/blueprints/*.mp4
