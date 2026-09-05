@@ -633,6 +633,27 @@ export interface MappingVocabulary {
    *  mapping its column; the studio uses this to warn before the analyst ever
    *  reaches that wall. */
   primary_keys: Record<string, string[]>;
+
+  // ---- the dependencies *between* those choices ----------------------------
+  // The four tables below are the server's own validation rules, published so
+  // the editor can require a box the moment a dropdown makes it mandatory,
+  // instead of letting the whole-spec save be refused. `validate_spec` reads
+  // the same constants (`engine/mapping_spec.py`), so the editor cannot drift
+  // from the validator. All four are optional: an older API omits them and the
+  // editor falls back to letting the server judge, exactly as it did before.
+
+  /** transform op -> the arguments it cannot run without (`parse_date` needs
+   *  `format`, `concat` needs `with`, `substring` needs `start`, `cast` needs
+   *  `to`). Ops absent from this map take no arguments. */
+  op_args?: Record<string, string[]>;
+  /** declared canonical type -> the casts that can satisfy it. A target
+   *  declared `string` cannot be fed by cast `int`, and the editor offers only
+   *  what fits rather than letting the save discover it. */
+  casts_for_type?: Record<string, string[]>;
+  /** `on_null` values that require `default` to be set. */
+  on_null_needs_default?: string[];
+  /** `on_unmapped_value` values that mean nothing without a `value_map`. */
+  on_unmapped_needs_value_map?: string[];
 }
 
 /** The AI's own rationale for one field, carried forward from the proposal a
@@ -643,6 +664,17 @@ export interface FieldAiContext {
   evidence: string[];
   concept: string | null;
   status: FieldStatus;
+  /** The target this rationale is *about*. The studio compares it with the
+   *  field's current target and withdraws the confidence meter when they
+   *  differ — otherwise a model's 0.98 renders beside a mapping the model never
+   *  proposed, which is worse than showing nothing. Absent on an older API. */
+  target?: string | null;
+  /** A target the model named that the canonical model does not have. Kept
+   *  visible rather than quietly dropped: a fabrication is a fact about the
+   *  proposal. */
+  rejected_target?: string | null;
+  /** Why this column carries no defensible target, in the graph's own words. */
+  reason?: string | null;
 }
 
 export interface MappingVersionDetail {
@@ -736,12 +768,35 @@ export async function saveMappingSpec(
   const detail = payload?.detail;
   if (detail?.errors) return { errors: detail.errors as SpecFieldError[] };
   if (detail?.message) return { error: detail.hint ? `${detail.message} — ${detail.hint}` : detail.message };
+  // The same status code carries two different shapes. `InvalidSpec` raises the
+  // object handled above; FastAPI's own request validation raises an ARRAY of
+  // `{loc, msg, type}` — a spec the API could not even parse into a MappingSpec.
+  // That fell through to "save failed with status 422", which tells an analyst
+  // nothing. Name the field that could not be read instead.
+  if (Array.isArray(detail) && detail.length) {
+    const first = detail[0] as { loc?: unknown[]; msg?: string };
+    const where = Array.isArray(first.loc) ? first.loc.filter((p) => p !== "body").join(".") : "";
+    return {
+      error: where
+        ? `The draft could not be read: ${where} — ${first.msg ?? "invalid value"}.`
+        : `The draft could not be read: ${first.msg ?? "invalid value"}.`,
+    };
+  }
   return { error: `save failed with status ${response.status}` };
 }
 
 export async function createMappingVersion(
   feed: string,
-  body: { from_proposal_id?: string; derive_from_version?: number; domain?: string },
+  body: {
+    from_proposal_id?: string;
+    derive_from_version?: number;
+    domain?: string;
+    /** Who is starting this draft. Omitted, the API records its own placeholder
+     *  (`analyst@cinqcare.com`) as the author of every version — so the caller
+     *  passes the signed-in user, the same correction made for the uploader in
+     *  3a1b0ff. */
+    created_by?: string;
+  },
 ): Promise<{ version?: number; error?: string }> {
   const response = await fetch(`${BASE}/api/feeds/${encodeURIComponent(feed)}/mapping-versions`, {
     method: "POST",

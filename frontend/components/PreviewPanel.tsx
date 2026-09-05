@@ -124,6 +124,10 @@ export default function PreviewPanel({
       <form action={action} className="card grid">
         <input type="hidden" name="feed" value={feed} />
         <input type="hidden" name="version" value={version} />
+        {/* So `runPreview` revalidates the route this panel is actually on.
+            Every action in app/mapping/actions.ts used to revalidate only
+            `/mapping/{feed}`, leaving the run surface serving a cached render. */}
+        <input type="hidden" name="base_path" value={baseHref} />
         <div className="row" style={{ justifyContent: "space-between" }}>
           <span className="meta">
             Runs v{version} against a bounded sample spread across the latest Bronze batch —

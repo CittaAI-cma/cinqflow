@@ -2,6 +2,7 @@ import Confidence from "@/components/ui/Confidence";
 import StatusWord from "@/components/StatusWord";
 import type { FieldStatus, MappingProposal } from "@/lib/api";
 import { ROLE_WORD, roleIndex, type RoleKey } from "@/lib/columnRoles";
+import { evidenceClass } from "@/lib/evidence";
 import { proposalStatusWord } from "@/lib/statusWords";
 
 const STATUS_ORDER: FieldStatus[] = ["invalid", "candidate", "ambiguous", "unknown"];
@@ -12,17 +13,6 @@ const FIELD_KIND: Record<FieldStatus, string> = {
   unknown: "inference",
   invalid: "recommendation",
 };
-
-/** Evidence strings are free text, but two prefixes carry real meaning worth a
- * viewer noticing at a glance: `precedent:` is a human-approved governance
- * decision applied deterministically (strong); `semantic:` is an unverified
- * lexical-similarity lead surfaced only where nothing structured could place
- * the column (weak, never itself a decision). Everything else renders plain. */
-function evidenceClass(item: string): string {
-  if (item.startsWith("precedent:")) return "evidence-chip--precedent";
-  if (item.startsWith("semantic:")) return "evidence-chip--semantic";
-  return "";
-}
 
 /** The AI mapping proposal, rendered identically wherever an analyst needs to
  *  see it: the batch detail page (after the fact), the Mapping Studio's

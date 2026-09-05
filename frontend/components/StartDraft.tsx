@@ -18,10 +18,20 @@ export default function StartDraft({
   feed,
   proposalId,
   deriveFrom,
+  createdBy,
+  basePath,
 }: {
   feed: string;
   proposalId?: string;
   deriveFrom?: number;
+  /** The signed-in user's email, recorded as the version's author. Without it
+   *  the API records its own placeholder (`analyst@cinqcare.com`), so every
+   *  mapping version claimed the same fictional author — the same correction
+   *  made for the uploader in 3a1b0ff. */
+  createdBy?: string;
+  /** The route this form is on, so the action revalidates the surface the
+   *  analyst is looking at and not only the durable `/mapping/{feed}` one. */
+  basePath?: string;
 }) {
   const [state, action] = useActionState<StudioState, FormData>(startDraft, {});
   const { push } = useToast();
@@ -38,6 +48,8 @@ export default function StartDraft({
   return (
     <form action={action} className="card grid">
       <input type="hidden" name="feed" value={feed} />
+      {createdBy ? <input type="hidden" name="created_by" value={createdBy} /> : null}
+      {basePath ? <input type="hidden" name="base_path" value={basePath} /> : null}
       {proposalId ? <input type="hidden" name="from_proposal_id" value={proposalId} /> : null}
       {deriveFrom ? <input type="hidden" name="derive_from_version" value={deriveFrom} /> : null}
       {!proposalId && !deriveFrom ? (

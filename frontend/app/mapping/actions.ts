@@ -17,6 +17,28 @@ export interface StudioState {
   saved?: boolean;
   /** Set by G2: the batch the approved mapping was queued to promote. */
   batchId?: string;
+  /** Increments on every completed attempt, successful or refused. `useEffect`
+   *  in the studio keys its toast and its focus-the-first-error behaviour off
+   *  this rather than off `errors`, because two consecutive saves that fail
+   *  the same way produce an identical `errors` array — and an effect that
+   *  depends on an identical value does not re-fire, so the second click was
+   *  silent. */
+  attempt?: number;
+}
+
+/** Revalidates the surface the form was submitted from as well as the durable
+ *  studio route.
+ *
+ *  `MappingPageBody` is deliberately shared between `/mapping/[feed]` and
+ *  `/runs/[uploadId]/mapping`, but every action here only ever revalidated the
+ *  first — so a save made on the run surface left that route serving its cached
+ *  render. The visible symptom is the one this whole pass is about: the table
+ *  keeps showing what you typed, because nothing re-fetched what was stored.
+ *  `basePath` comes from the same `baseHref` the page already threads through. */
+function revalidateStudio(feed: string, basePath?: string | null): void {
+  const durable = `/mapping/${feed}`;
+  revalidatePath(durable);
+  if (basePath && basePath !== durable) revalidatePath(basePath);
 }
 
 /** Rebuilds the spec from the submitted form and saves it as the draft.
@@ -26,6 +48,8 @@ export async function saveSpec(_previous: StudioState, form: FormData): Promise<
   const version = Number(form.get("version") ?? 0);
   const targetTable = String(form.get("target_table") ?? "");
   const count = Number(form.get("field_count") ?? 0);
+  const basePath = String(form.get("base_path") ?? "") || null;
+  const attempt = (_previous.attempt ?? 0) + 1;
 
   const fields: MappingFieldSpec[] = [];
   for (let i = 0; i < count; i += 1) {
@@ -76,6 +100,12 @@ export async function saveSpec(_previous: StudioState, form: FormData): Promise<
       default: String(form.get(`default_${i}`) ?? "").trim() || null,
       on_unmapped_value: String(form.get(`on_unmapped_${i}`) ?? "pass"),
       edited: form.get(`edited_${i}`) === "on",
+      // The studio has no note editor, so this read the value of an input that
+      // does not exist and wrote `note: null` over whatever the field carried —
+      // every save silently erased any note in the spec. The row now carries
+      // its own note through the form the same way it carries the transform
+      // arguments the single arg box does not edit, so a save round-trips it
+      // untouched. When a note editor arrives it writes to this same name.
       note: String(form.get(`note_${i}`) ?? "").trim() || null,
     });
   }
@@ -99,10 +129,10 @@ export async function saveSpec(_previous: StudioState, form: FormData): Promise<
 
   const spec: MappingSpecShape = { target_table: targetTable, fields };
   const result = await saveMappingSpec(feed, version, spec);
-  if (result.errors || result.error) return result;
+  if (result.errors || result.error) return { ...result, attempt };
 
-  revalidatePath(`/mapping/${feed}`);
-  return { saved: true };
+  revalidateStudio(feed, basePath);
+  return { saved: true, attempt };
 }
 
 /** The edited primary argument merged over whatever else the transform
@@ -133,14 +163,21 @@ export async function startDraft(_previous: StudioState, form: FormData): Promis
   const feed = String(form.get("feed") ?? "");
   const proposalId = String(form.get("from_proposal_id") ?? "") || undefined;
   const deriveFrom = Number(form.get("derive_from_version") ?? 0) || undefined;
+  const basePath = String(form.get("base_path") ?? "") || null;
+  // Without this the API records its own default placeholder as the author of
+  // every mapping version, so `created_by` named nobody. Same correction as the
+  // uploader's in 3a1b0ff: the form carries the signed-in user rather than the
+  // endpoint growing a hard auth requirement it did not have.
+  const createdBy = String(form.get("created_by") ?? "").trim() || undefined;
 
   const result = await createMappingVersion(feed, {
     from_proposal_id: proposalId,
     derive_from_version: deriveFrom,
+    created_by: createdBy,
   });
   if (result.error) return { error: result.error };
 
-  revalidatePath(`/mapping/${feed}`);
+  revalidateStudio(feed, basePath);
   return { saved: true };
 }
 
@@ -155,21 +192,23 @@ export async function approveVersion(
   const feed = String(form.get("feed") ?? "");
   const version = Number(form.get("version") ?? 0);
   const note = String(form.get("note") ?? "").trim();
+  const basePath = String(form.get("base_path") ?? "") || null;
 
   const { data, error } = await authMutate<{ batch_id?: string }>(
     `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/approve`,
     { method: "POST", body: JSON.stringify({ note: note || null }) },
   );
   if (error) return { error };
-  revalidatePath(`/mapping/${feed}`);
+  revalidateStudio(feed, basePath);
   return { saved: true, batchId: data?.batch_id };
 }
 
 export async function runPreview(_previous: StudioState, form: FormData): Promise<StudioState> {
   const feed = String(form.get("feed") ?? "");
   const version = Number(form.get("version") ?? 0);
+  const basePath = String(form.get("base_path") ?? "") || null;
   const { error } = await requestPreview(feed, version);
   if (error) return { error };
-  revalidatePath(`/mapping/${feed}`);
+  revalidateStudio(feed, basePath);
   return { saved: true };
 }

@@ -734,7 +734,7 @@ a { color: var(--acc); }
 /* The lifecycle stage is a position, not a health word, so it carries no
    status glyph — only a failed or rejected group earns colour. */
 .stage-meta-stage { color: var(--ink); font-weight: 700; }
-.stage-meta-stage.adverse { color: var(--bad); }
+.stage-meta-stage.adverse { color: var(--danger); }
 
 .selection-count { font-size: 12.5px; color: var(--ink2); font-weight: 600; }
 

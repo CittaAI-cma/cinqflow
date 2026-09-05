@@ -110,7 +110,7 @@ export default async function MappingPageBody({
               it from its batch page.
             </p>
           ) : null}
-          <StartDraft feed={feed} proposalId={proposal} />
+          <StartDraft feed={feed} proposalId={proposal} createdBy={user?.email} basePath={baseHref} />
         </>
       ) : (
         <>
@@ -201,14 +201,19 @@ export default async function MappingPageBody({
           <h2>{mapping.editable ? "Edit the draft" : "Frozen version"}</h2>
 
           {mapping.editable ? (
-            <MappingStudio mapping={mapping} />
+            <MappingStudio mapping={mapping} basePath={baseHref} />
           ) : (
             <>
               <p className="empty">
                 v{mapping.version} is {mapping.status} and cannot be edited. Start v
                 {mapping.version + 1} from it to continue.
               </p>
-              <StartDraft feed={feed} deriveFrom={mapping.version} />
+              <StartDraft
+                feed={feed}
+                deriveFrom={mapping.version}
+                createdBy={user?.email}
+                basePath={baseHref}
+              />
               <div className="card scroll" style={{ padding: 0, marginTop: 14 }}>
                 <table>
                   <thead>
@@ -257,6 +262,7 @@ export default async function MappingPageBody({
             preview={preview}
             editedCount={diff?.diff.analyst_edited.length ?? 0}
             canDecide={canDecide}
+            basePath={baseHref}
           />
         </>
       )}

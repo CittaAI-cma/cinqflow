@@ -26,6 +26,7 @@ export default function ApproveMapping({
   preview,
   editedCount = 0,
   canDecide,
+  basePath,
 }: {
   feed: string;
   version: number;
@@ -39,6 +40,9 @@ export default function ApproveMapping({
    *  but not decide sees the gate's frame with the reason, not the form -
    *  the API refuses them too (403); this mirrors it. */
   canDecide: boolean;
+  /** The route this gate is on, so approving revalidates the surface the
+   *  analyst is looking at and not only the durable `/mapping/{feed}` one. */
+  basePath?: string;
 }) {
   const [state, action] = useActionState<StudioState, FormData>(approveVersion, {});
   const [note, setNote] = useState("");
@@ -115,6 +119,7 @@ export default function ApproveMapping({
         >
           <input type="hidden" name="feed" value={feed} />
           <input type="hidden" name="version" value={version} />
+          {basePath ? <input type="hidden" name="base_path" value={basePath} /> : null}
           <input type="hidden" name="note" value={note} />
           <p className="gate-note">
             Approving freezes v{version} and queues the promotion of batch{" "}
