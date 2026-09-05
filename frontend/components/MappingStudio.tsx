@@ -1,13 +1,16 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useRef, useState } from "react";
+import { useActionState, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { saveSpec, type StudioState } from "@/app/mapping/actions";
 import Confidence from "@/components/ui/Confidence";
+import UnplacedColumns from "@/components/UnplacedColumns";
 import { evidenceClass } from "@/lib/evidence";
 import { formatValueMap, parseValueMap } from "@/lib/valueMap";
 import { useToast } from "@/lib/useToast";
 import type {
+  ColumnRoster,
+  MappingColumn,
   MappingFieldSpec,
   MappingVersionDetail,
   MappingVocabulary,
@@ -185,6 +188,7 @@ function SpecRow({
   errors,
   rationale,
   requiredTargets,
+  onTargetChange,
 }: {
   field: MappingFieldSpec;
   index: number;
@@ -192,6 +196,9 @@ function SpecRow({
   errors: SpecFieldError[] | undefined;
   rationale: MappingVersionDetail["ai_context"][string] | undefined;
   requiredTargets: Set<string>;
+  /** Reports this row's target as it changes, so the roster can tell which
+   *  canonical targets are claimed before the next save rather than after. */
+  onTargetChange?: (index: number, target: string) => void;
 }) {
   const [target, setTarget] = useState(field.target);
   const [cast, setCast] = useState(field.cast);
@@ -231,6 +238,11 @@ function SpecRow({
    *  the one that fits, and says so, rather than waiting to be refused. */
   function chooseTarget(next: string) {
     setTarget(next);
+    // Reported upward so the roster below knows which canonical targets are
+    // claimed *right now*, not only which were claimed at the last save.
+    // Without it, Taking a suggestion for a target the analyst has just
+    // pointed another row at would build a spec the validator refuses whole.
+    onTargetChange?.(index, next);
     const nextDeclared = vocabulary.target_types[next];
     const nextAllowed = nextDeclared ? vocabulary.casts_for_type?.[nextDeclared] : undefined;
     if (nextAllowed?.length && !nextAllowed.includes(cast)) {
@@ -498,9 +510,14 @@ function SpecRow({
 
 export default function MappingStudio({
   mapping,
+  roster,
   basePath,
 }: {
   mapping: MappingVersionDetail;
+  /** Every source column in the batch, from `GET .../columns`. Null on an API
+   *  too old to serve it, in which case the studio renders exactly what it
+   *  rendered before: the columns the spec already carries. */
+  roster?: ColumnRoster | null;
   /** The route this studio is being rendered on — `/mapping/{feed}` or
    *  `/runs/{uploadId}/mapping`. Submitted with the form so `saveSpec` can
    *  revalidate the surface the analyst is actually looking at; without it a
@@ -510,6 +527,65 @@ export default function MappingStudio({
 }) {
   const [state, action] = useActionState<StudioState, FormData>(saveSpec, {});
   const { spec, vocabulary, ai_context: aiContext } = mapping;
+
+  /** Columns taken from the roster this session, appended to the table as real
+   *  rows. They are ordinary fields from the moment they appear: the same
+   *  `SpecRow`, the same names, the same `field_count` — so the save path,
+   *  the validation and the error annotation need to know nothing about them.
+   *  `edited: true`, because a column a person chose to place is theirs. */
+  const [taken, setTaken] = useState<MappingFieldSpec[]>([]);
+
+  /** Each row's target as it stands right now. Seeded from the stored spec and
+   *  updated by `SpecRow` as the analyst edits, so "is this target already
+   *  claimed" is answered against the screen rather than against the last
+   *  save. A row marked Drop still counts as claiming its target until the
+   *  save actually removes it — conservative in the safe direction, since the
+   *  cost is one sentence and the alternative is a refused save. */
+  const [liveTargets, setLiveTargets] = useState<Record<number, string>>({});
+  const noteTarget = useCallback(
+    (index: number, target: string) => setLiveTargets((prev) => ({ ...prev, [index]: target })),
+    [],
+  );
+
+  const rows = useMemo(() => [...spec.fields, ...taken], [spec.fields, taken]);
+  const takenTargets = useMemo(() => {
+    const claimed = new Map<string, string>();
+    rows.forEach((field, index) => {
+      const target = liveTargets[index] ?? field.target;
+      if (target) claimed.set(target, field.source);
+    });
+    return claimed;
+  }, [rows, liveTargets]);
+
+  /** What the batch has and this mapping does not — minus anything taken since
+   *  the page rendered, which is already a row above. */
+  const unplacedColumns = useMemo(() => {
+    if (!roster?.columns.length) return [];
+    const placed = new Set(rows.map((field) => field.source));
+    return roster.columns.filter((column) => !placed.has(column.name));
+  }, [roster, rows]);
+
+  function take(column: MappingColumn, target: string) {
+    setTaken((prev) => [
+      ...prev,
+      {
+        source: column.name,
+        target,
+        // The cast the target's declared type accepts, so a taken row is never
+        // born invalid. `castsFor` is the same helper the row's own dropdown
+        // reads, from the server's published `casts_for_type`.
+        cast: castsFor(vocabulary, target, "string").allowed?.[0] ?? "string",
+        transform: null,
+        value_map: {},
+        on_null: "pass",
+        default: null,
+        on_unmapped_value: "pass",
+        edited: true,
+        note: null,
+      },
+    ]);
+    setDirty(true);
+  }
   const specLevel = state.errors?.filter((e) => e.field_index === -1) ?? [];
   const requiredTargets = useMemo(
     () => new Set(Object.values(vocabulary.primary_keys).flat()),
@@ -623,7 +699,7 @@ export default function MappingStudio({
     >
       <input type="hidden" name="feed" value={mapping.feed} />
       <input type="hidden" name="version" value={mapping.version} />
-      <input type="hidden" name="field_count" value={spec.fields.length} />
+      <input type="hidden" name="field_count" value={rows.length} />
       {basePath ? <input type="hidden" name="base_path" value={basePath} /> : null}
 
       {state.error ? <p className="error">{state.error}</p> : null}
@@ -696,7 +772,7 @@ export default function MappingStudio({
             </tr>
           </thead>
           <tbody>
-            {spec.fields.map((field, index) => (
+            {rows.map((field, index) => (
               <SpecRow
                 key={`${field.source}-${index}`}
                 field={field}
@@ -705,11 +781,19 @@ export default function MappingStudio({
                 errors={state.errors}
                 rationale={aiContext[field.source]}
                 requiredTargets={requiredTargets}
+                onTargetChange={noteTarget}
               />
             ))}
           </tbody>
         </table>
       </div>
+
+      <UnplacedColumns
+        columns={unplacedColumns}
+        takenTargets={takenTargets}
+        onTake={take}
+        requiredTargets={requiredTargets}
+      />
 
       <div className="card grid" style={{ marginTop: 14 }}>
         <label htmlFor="new_source">Add a mapping the AI left unmapped</label>

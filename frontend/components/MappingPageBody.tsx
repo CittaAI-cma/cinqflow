@@ -8,6 +8,7 @@ import StatusWord from "@/components/StatusWord";
 import {
   getFeedVersionProgress,
   getGate,
+  getMappingColumns,
   getMappingDiff,
   getMappingVersion,
   getPreview,
@@ -65,6 +66,11 @@ export default async function MappingPageBody({
   // whether the preview is current, so a draft missing a required target read
   // as approvable right up until the 409.
   const gate = selected ? await getGate(feed, selected) : null;
+  // Every source column in the batch, so the studio can show the ones the
+  // model never placed. Resolved server-side from the feed's own batch; the
+  // page passes it through rather than deriving it from the spec, which is
+  // exactly the narrowing this removes.
+  const roster = selected ? await getMappingColumns(feed, selected) : null;
   // The ledger's view of this version, for `PreviewPanel`'s `WorkflowSteps`.
   const progress = selected ? await getFeedVersionProgress(feed, selected).catch(() => null) : null;
   const analystEdited = new Set(diff?.diff.analyst_edited ?? []);
@@ -210,7 +216,7 @@ export default async function MappingPageBody({
           <h2 id="studio">{mapping.editable ? "Edit the draft" : "Frozen version"}</h2>
 
           {mapping.editable ? (
-            <MappingStudio mapping={mapping} basePath={baseHref} />
+            <MappingStudio mapping={mapping} roster={roster} basePath={baseHref} />
           ) : (
             <>
               <p className="empty">

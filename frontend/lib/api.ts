@@ -863,6 +863,70 @@ export interface PreviewResult {
   created_ts: string;
 }
 
+/** One source column in the batch, mapped or not. The roster's whole point is
+ *  that a column exists on this list whether or not the AI could place it. */
+export interface MappingColumn {
+  name: string;
+  inferred_type: string;
+  role: string;
+  null_ratio: number;
+  distinct_count: number;
+  sentinel_count: number;
+  constant: boolean;
+  /** Empty for PHI columns, which keep their name, type and shape and lose
+   *  their examples. An empty list is a masked column or a column the profiler
+   *  found nothing to show — `phi_masked` says which. */
+  sample_values: string[];
+  phi_masked: boolean;
+  in_spec: boolean;
+  mapped_target: string | null;
+  candidate: {
+    target: string | null;
+    rejected_target: string | null;
+    concept: string | null;
+    confidence: number;
+    evidence: string[];
+    status: string;
+    reason: string | null;
+  } | null;
+  /** Issues the last preview found in this column. Null when no preview has
+   *  run: "no issues" and "not counted" are different facts. */
+  issue_count: number | null;
+}
+
+export interface ColumnRoster {
+  feed: string;
+  version: number;
+  batch_id: string | null;
+  resolved_from: {
+    batch_id: string;
+    row_count: number;
+    is_sample: boolean;
+    profiled_ts: string;
+  } | null;
+  /** Why the roster is empty, when it is. Stated rather than rendered as "no
+   *  columns", which would read as "nothing left to map". */
+  unresolved_reason: string | null;
+  counts?: { total: number; in_spec: number; unplaced: number };
+  columns: MappingColumn[];
+}
+
+/** Every source column in the batch this version maps. Null on an API too old
+ *  to serve it — the studio then renders exactly what it rendered before, the
+ *  columns the spec already carries. */
+export async function getMappingColumns(
+  feed: string,
+  version: number,
+): Promise<ColumnRoster | null> {
+  try {
+    return await get<ColumnRoster>(
+      `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/columns`,
+    );
+  } catch {
+    return null;
+  }
+}
+
 /** One reason G2 is closed. `anchor` names the thing on the page that has to
  *  change, so the reason can be a link rather than prose to translate. */
 export interface GateBlocker {
