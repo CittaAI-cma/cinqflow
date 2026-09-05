@@ -16,7 +16,15 @@ from cinqflow.workflow.store import StepLedger, WorkflowStore
 log = logging.getLogger(__name__)
 TOPIC = "batch.land_bronze"
 
-_RUNNABLE = (UploadStatus.APPROVED, UploadStatus.LANDING, UploadStatus.LAND_FAILED)
+#: `LANDED` is the documented replay (`LEGAL_TRANSITIONS`, states.py): re-landing
+#: from the preserved original writes a new batch; Bronze is append-only, so the
+#: earlier one stays. Reachable on demand since PR-3's re-run.
+_RUNNABLE = (
+    UploadStatus.APPROVED,
+    UploadStatus.LANDING,
+    UploadStatus.LAND_FAILED,
+    UploadStatus.LANDED,
+)
 
 
 def handle(conn: psycopg.Connection, payload: dict, settings: Settings | None = None) -> dict:

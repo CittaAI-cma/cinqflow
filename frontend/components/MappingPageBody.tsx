@@ -50,6 +50,7 @@ export default async function MappingPageBody({
   // enforces `can_decide_gates` regardless (`require_capability`).
   const user = await getCurrentUser();
   const canDecide = user?.capabilities.can_decide_gates ?? false;
+  const canRerun = user?.capabilities.can_rerun_steps ?? false;
   const { versions } = await listMappingVersions(feed).catch(() => ({ versions: [] }));
   const selected = v ? Number(v) : versions[0]?.version;
   const previewLimit = PREVIEW_LIMITS.includes(Number(limitParam) as (typeof PREVIEW_LIMITS)[number])
@@ -246,6 +247,7 @@ export default async function MappingPageBody({
             limit={previewLimit}
             baseHref={baseHref}
             initialSteps={progress?.steps ?? []}
+            canRerun={canRerun}
           />
 
           <ApproveMapping

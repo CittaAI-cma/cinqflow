@@ -350,3 +350,35 @@ def test_nothing_reaches_silver_without_g2(client, settings, previewed):
         )
     assert refused["promoted"] is False
     assert refused["reason"] == "previewed"
+
+
+def test_the_promotion_can_be_rerun_from_the_api_and_leaves_the_same_silver(
+    client, settings, previewed
+):
+    """PR-3 closes `forward-flow-adoption.md §6.5`: promotion re-queued on demand,
+    identical rows out (features.md Stage 6 acceptance 3), generation 2 on record."""
+    _, batch_id = previewed
+    client.post(f"/api/feeds/{FEED}/mapping-versions/1/approve", json={})
+    _drain(settings)
+
+    def snapshot() -> list[tuple]:
+        return [
+            (m["source_system_id"], m["record_hash"])
+            for m in _query(
+                settings,
+                f'SELECT source_system_id, record_hash FROM {settings.silver_schema}."members" '
+                "WHERE batch_id = %s ORDER BY source_system_id",
+                (batch_id,),
+            )
+        ]
+
+    before = snapshot()
+    res = client.post(f"/api/batches/{batch_id}/steps/promote/rerun")
+    assert res.status_code == 202, res.text
+    assert res.json()["generation"] == 2
+    assert _drain(settings) == 1
+    assert snapshot() == before
+
+    steps = {s["key"]: s for s in client.get(f"/api/batches/{batch_id}/progress").json()["steps"]}
+    assert steps["promote"]["state"] == "done"
+    assert steps["promote"]["run"]["generation"] == 2

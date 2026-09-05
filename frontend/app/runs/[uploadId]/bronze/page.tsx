@@ -163,6 +163,7 @@ export default async function BronzePage({
           initial={steps}
           only={["analyze"]}
           expanded={defaults.workflowStepsExpanded}
+          canRerun={user.capabilities.can_rerun_steps}
           stallAfterMs={120_000}
           what="the AI mapping proposal"
           stalledCopy="Bronze itself landed and is safe. The bronze.analyze job either has no worker or its model call is failing — a failure shows here with its error. A proposal is advisory anyway: the mapping can be built by hand without it."

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable, Iterator
 from datetime import date
 
@@ -22,6 +21,7 @@ from cinqflow.settings import Settings
 from cinqflow.workers import interpret_upload, land_bronze, profile_upload, reject_upload
 from cinqflow.workflow.dag import feed_version_scope, step_for_topic
 from cinqflow.workflow.models import UploadDetail, build_upload_progress, mask_row
+from cinqflow.workflow.rerun import RerunRefused, rerun_step
 from cinqflow.workflow.states import UploadStatus
 from cinqflow.workflow.store import (
     AlreadyDecided,
@@ -223,7 +223,12 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
         (the API restarting mid-parse, an LLM timeout, a dropped connection to
         the data plane) should not require re-uploading the file - the original
         is already preserved and the profile/interpretation/lineage already on
-        record stay exactly where they are."""
+        record stay exactly where they are.
+
+        Since PR-3 a thin alias: the failed status names the step, and
+        `POST /api/uploads/{id}/steps/{step}/rerun` (`workflow/rerun.py`) does
+        the rest - new ledger generation, fresh dedupe key, and the same
+        refusals (already queued; the queue will retry it on its own)."""
         store = WorkflowStore(conn, s)
         try:
             upload = store.get_upload(upload_id)
@@ -240,21 +245,19 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
                 },
             )
 
-        # A fresh token per call (not a fixed key like `{topic}/{upload_id}`)
-        # because the upload can fail, retry, and fail again from the same
-        # named status - a fixed key would collide with the first attempt's
-        # already-consumed queue row and silently no-op every retry after it.
-        retry_id = uuid.uuid4().hex
-        message_id = Queue(conn, s).enqueue(
-            topic,
-            {"upload_id": upload_id},
-            dedupe_key=f"{topic}/{upload_id}/retry/{retry_id}",
-        )
         step = step_for_topic(topic)
-        if message_id and step is not None:
-            StepLedger(conn, s).queued("upload", upload_id, step.key, message_id=message_id)
+        assert step is not None  # every retry topic is a declared step
+        try:
+            result = rerun_step(conn, s, step=step, scope_id=upload_id)
+        except RerunRefused as exc:
+            raise HTTPException(409, detail=exc.detail()) from None
         conn.commit()
-        return {"upload_id": upload_id, "status": upload.status, "queued": topic}
+        return {
+            "upload_id": upload_id,
+            "status": upload.status,
+            "queued": topic,
+            "generation": result["generation"],
+        }
 
     @router.delete("/api/uploads/{upload_id}", status_code=200)
     def delete_upload(upload_id: str, conn=Depends(get_conn)) -> dict:

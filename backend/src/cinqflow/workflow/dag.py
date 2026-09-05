@@ -67,6 +67,15 @@ WORKFLOW: tuple[StepDef, ...] = (
 )
 
 STEPS: dict[str, StepDef] = {step.key: step for step in WORKFLOW}
+
+#: PR-3: the ledger states a step may be re-run from. `pending`/`running` is
+#: already going to run - re-queueing it would race itself; `failed`/`done`/
+#: `skipped` may run again, as a new generation. A gate never: a person
+#: decides once, and a rejected G1 is terminal.
+RERUNNABLE: dict[str, frozenset[str]] = {
+    step.key: frozenset() if step.gate else frozenset({"failed", "done", "skipped"})
+    for step in WORKFLOW
+}
 STEP_ORDER: dict[str, int] = {step.key: index for index, step in enumerate(WORKFLOW)}
 _BY_TOPIC: dict[str, StepDef] = {step.topic: step for step in WORKFLOW if step.topic}
 
@@ -80,6 +89,15 @@ def step_for_topic(topic: str) -> StepDef | None:
 def feed_version_scope(feed: str, version: int | str) -> str:
     """`scope_id` for the `feed_version` scope. One format, used everywhere."""
     return f"{feed}:v{int(version)}"
+
+
+def parse_feed_version_scope(scope_id: str) -> tuple[str, int]:
+    """The inverse of `feed_version_scope`. A feed name may itself contain ':',
+    so the split is on the last ':v'."""
+    feed, sep, version = scope_id.rpartition(":v")
+    if not sep or not version.isdigit():
+        raise ValueError(f"not a feed_version scope id: {scope_id!r}")
+    return feed, int(version)
 
 
 def scope_id_for(step: StepDef, payload: dict[str, Any]) -> str:

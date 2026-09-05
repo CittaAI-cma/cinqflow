@@ -757,7 +757,7 @@ handler exception leaves a `failed` row with the error. *Acceptance:* no screen 
   migration runner's own tests. `tsc`, `next build`, compose rebuild (`migrate` applies
   `001_step_run`).
 
-### PR-3 — Selective re-run
+### PR-3 — Selective re-run — **built** (branch `feat/w0-versioned-migrations`)
 
 *Backend.* `POST /api/uploads/{id}/steps/{step}/rerun`, `POST /api/batches/{id}/steps/{step}/rerun`,
 `POST /api/feeds/{feed}/mapping-versions/{v}/steps/{step}/rerun`, all `require_capability
@@ -776,6 +776,30 @@ lineage). The existing `/retry` becomes a thin alias.
 *Tests.* Integration: rerun of `failed` → 202 + new generation + message enqueued; rerun of
 `running` → 409; rerun of a gate → 409; `data_steward` → 403; promote rerun yields identical
 `record_hash`es (features.md Stage 6 acceptance 3, now reachable on demand).
+
+**As built.** The three routes as planned (`routers/steps.py`), all `require_capability
+("can_rerun_steps")`, one function underneath (`workflow/rerun.py: rerun_step`). A re-run
+re-queues **the last generation's own message payload** (so a preview re-run samples the same
+batch with the same selector; a promotion re-run rebuilds the same batch under the same
+version), with dedupe key `{topic}/rerun/{scope_id}/g{generation}` and a new ledger generation
+(`StepLedger.rerun`; the worker's `start` re-enters that pending row). `RERUNNABLE` allows
+`failed`, `done` **and `skipped`**. Refusals beyond the plan's table, each a 409 with `message`
+(+ `status`/`hint`): a step whose last message the queue will still retry on its own (`pending`/
+`claimed`, attempts below the maximum - re-queueing would run one failure twice; re-run opens once
+the message is `dead`, or `done` because the handler recorded the failure and returned); an
+upload step its status makes impossible (re-profiling past G1; re-landing before approval),
+refused at the request instead of as a worker exception; a step under the wrong scope's route
+(the 409 names the right route). `LANDED` is now in `land_bronze._RUNNABLE`, so the replay
+`LEGAL_TRANSITIONS` always allowed is reachable: a second batch, the first untouched. `/retry`
+is the alias (same refusals; response gains `generation`). *Frontend:* Re-run per
+`failed`/`done`/`skipped` worker step in `WorkflowSteps`, shown iff `can_rerun_steps` (otherwise
+the locked reason is on screen), through `ConfirmDialog` with a per-step consequence sentence and
+the ledger row as the audit line; the row's own `scope_kind`/`scope_id` picks the route, so a
+batch step shown under an upload re-runs against its batch. `submitRerun` Server Action. *Tests:*
+`tests/e2e/test_rerun.py` (failed → 202 + generation 2 + actually runs; already queued → 409;
+gate / unknown / wrong scope / unknown object; past-G1 re-profile → 409; steward → 403; analyze
+re-run → new proposal, old one still served; re-landing → second batch, first intact) and the
+stage-6 promote re-run from the API with identical `record_hash`es.
 
 ### PR-4 — Persona homes (`app/page.tsx`)
 

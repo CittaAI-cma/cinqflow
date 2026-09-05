@@ -156,6 +156,7 @@ export default async function ReviewPage({
                   initial={steps}
                   only={["land"]}
                   expanded={defaults.workflowStepsExpanded}
+                  canRerun={user.capabilities.can_rerun_steps}
                   what="landing to Bronze"
                   stalledCopy="The approval is recorded and the file is safe, but no worker has claimed the batch.land_bronze job. Nothing lands until one does — this page will pick it up on its own the moment that happens."
                 />

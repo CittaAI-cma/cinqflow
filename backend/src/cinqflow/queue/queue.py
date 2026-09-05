@@ -133,6 +133,29 @@ class Queue:
                 )
             self.conn.commit()
 
+    @property
+    def max_attempts(self) -> int:
+        return MAX_ATTEMPTS
+
+    def payload_of(self, message_id: str) -> dict[str, Any] | None:
+        """The payload a message carried - so a re-run (workflow/rerun.py) can
+        repeat exactly what the last generation was asked to do."""
+        row = fetch_one(
+            self.conn,
+            f"SELECT payload FROM {self.s.queue_schema}.message WHERE message_id = %s",
+            (message_id,),
+        )
+        return dict(row["payload"]) if row else None
+
+    def state_of(self, message_id: str) -> dict[str, Any] | None:
+        """`{state, attempts, last_error}` for one message, or None."""
+        return fetch_one(
+            self.conn,
+            f"""SELECT state, attempts, last_error FROM {self.s.queue_schema}.message
+                WHERE message_id = %s""",
+            (message_id,),
+        )
+
     def depth(self, topic: str | None = None) -> int:
         sql = f"SELECT count(*) AS n FROM {self.s.queue_schema}.message WHERE state = 'pending'"
         params: tuple = ()

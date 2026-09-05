@@ -44,6 +44,7 @@ export default function PreviewPanel({
   limit = 25,
   baseHref,
   initialSteps = [],
+  canRerun = false,
 }: {
   feed: string;
   version: number;
@@ -61,6 +62,8 @@ export default function PreviewPanel({
    *  (`getFeedVersionProgress`). `WorkflowSteps` polls only while the preview
    *  step is queued or running, and refreshes this page when it is not. */
   initialSteps?: StepProgress[];
+  /** `capabilities.can_rerun_steps` - whether a failed preview offers Re-run. */
+  canRerun?: boolean;
 }) {
   const router = useRouter();
   const [state, action] = useActionState<StudioState, FormData>(runPreview, {});
@@ -135,6 +138,7 @@ export default function PreviewPanel({
             source={{ kind: "feed_version", feed, version }}
             initial={initialSteps}
             only={["preview"]}
+            canRerun={canRerun}
             stallAfterMs={PREVIEW_STALL_MS}
             what="the preview"
             stalledCopy="The mapping version is saved and unchanged — only the preview run is outstanding. No worker appears to have claimed mapping.preview. G2 stays closed until one does, by design: nobody approves a mapping they have not seen run."

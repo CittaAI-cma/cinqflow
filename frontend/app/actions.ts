@@ -81,3 +81,29 @@ export async function submitRetry(uploadId: string): Promise<{ error?: string }>
   revalidatePath(`/runs/${uploadId}/review`);
   return {};
 }
+
+/** Which object a re-run is about - the ledger row's own scope, so the caller
+ *  never has to know which of the three routes a step belongs to. */
+export type RerunSource =
+  | { kind: "upload"; uploadId: string }
+  | { kind: "batch"; batchId: string }
+  | { kind: "feed_version"; feed: string; version: number };
+
+/** PR-3: queue a new generation of one step. Capability-gated at the API
+ *  (`can_rerun_steps`) and refused with a reason when the step is already
+ *  queued, still running, a gate, or when the queue will retry it on its own -
+ *  `authMutate` returns that reason (`message — hint`) for the dialog to show. */
+export async function submitRerun(
+  source: RerunSource,
+  stepKey: string,
+): Promise<{ error?: string; generation?: number }> {
+  const path =
+    source.kind === "upload"
+      ? `/api/uploads/${source.uploadId}/steps/${stepKey}/rerun`
+      : source.kind === "batch"
+        ? `/api/batches/${source.batchId}/steps/${stepKey}/rerun`
+        : `/api/feeds/${encodeURIComponent(source.feed)}/mapping-versions/${source.version}/steps/${stepKey}/rerun`;
+  const { data, error } = await authMutate<{ generation: number }>(path, { method: "POST" });
+  if (error) return { error };
+  return { generation: data?.generation };
+}

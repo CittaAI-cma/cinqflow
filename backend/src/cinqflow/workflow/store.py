@@ -1374,6 +1374,23 @@ class StepLedger:
         )
         return self._to_step_run(row)
 
+    def rerun(
+        self, scope_kind: str, scope_id: str, step_key: str, *, message_id: str | None = None
+    ) -> StepRun:
+        """An explicit re-run (PR-3, workflow/rerun.py): always a new generation,
+        whatever the last one ended as - this is intent, not the queue retrying.
+        `start` then re-enters this pending row when a worker takes the message."""
+        latest = self.latest(scope_kind, scope_id, step_key)
+        return self._insert(
+            scope_kind,
+            scope_id,
+            step_key,
+            generation=latest.generation + 1 if latest else 1,
+            state="pending",
+            attempts=0,
+            message_id=message_id,
+        )
+
     def start(
         self, scope_kind: str, scope_id: str, step_key: str, *, message_id: str | None = None
     ) -> StepRun:

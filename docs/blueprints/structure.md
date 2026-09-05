@@ -26,7 +26,8 @@ cinqflow/
 │   │   │       ├── uploads.py     # POST/GET uploads, profile, interpretation, G1
 │   │   │       ├── mappings.py    # proposals, mapping versions, preview, G2
 │   │   │       ├── batches.py     # batch/run status (+ ledger steps on /progress)
-│   │   │       ├── steps.py       # GET /api/workflow (the declaration), GET /api/steps (ledger)
+│   │   │       ├── steps.py       # GET /api/workflow (the declaration), GET /api/steps (ledger),
+│   │   │       │                  #   POST .../steps/{step}/rerun per scope (can_rerun_steps)
 │   │   │       └── lineage.py     # lineage chain queries
 │   │   ├── workflow/              # FIRST-CLASS ARTIFACTS
 │   │   │   ├── models.py          # pydantic models: Upload, Profile, Interpretation,
@@ -34,6 +35,8 @@ cinqflow/
 │   │   │   ├── states.py          # allowed states + legal transitions (enforced here)
 │   │   │   ├── dag.py             # THE WORKFLOW, DECLARED ONCE: StepDef + WORKFLOW (8 steps,
 │   │   │   │                      #   3 scopes, 2 gates); no imports, anything may read it
+│   │   │   ├── rerun.py           # selective re-run: legality (RERUNNABLE), replay of the last
+│   │   │   │                      #   message payload, new ledger generation; no HTTP here
 │   │   │   └── store.py           # SQL persistence for the artifacts (schema: workflow),
 │   │   │                          #   incl. StepLedger over workflow.step_run
 │   │   ├── auth/                  # WHO: users, roles, sessions (schema: auth)
