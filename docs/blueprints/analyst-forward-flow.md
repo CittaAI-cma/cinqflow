@@ -32,6 +32,24 @@ Three facts about her that decide the whole design:
 
 ---
 
+### 0.1 The six questions (the persona's mental model)
+
+From `Analyst_worflow_and_DAGs/01_data_analyst_workflow.md`: the order an analyst thinks in, and
+where each question lands on this flow (plan `04_…` §8, Track C).
+
+| Question | Where it is answered here |
+|---|---|
+| **Question** — what business problem are we answering? | Not on this flow. The feed's domain and the contract it serves live in knowledge (`domains/*.yaml`, `what_it_answers`) |
+| **Understand** — what data exists, what does it represent, which entities, measures, dimensions, time periods? | S1 profile facts; S2's recommended fields and role groups (profiler hints, prompt v3 column roles); `time_coverage` |
+| **Trust** — complete, consistent, accurate, timely, fit? | S2 signals and G1; S5 preview and G2; the balance equation; quarantine; the feed view's Quality panel |
+| **Analyze** — trends, relationships, segments, anomalies? | Only the deterministic anomalies (empty, constant, sentinel-heavy, duplicates). The rest waits for Silver ODS (W3) |
+| **Explain** — why, with what evidence? | Every claim carries evidence; every signal its basis, check and consequence. The model explains; it does not detect |
+| **Recommend** — what should the business investigate, change, prioritise, decide? | Recommendation claims and `recommended_action` at G1; the gates are where the analyst decides |
+
+Understand and Trust label S1/S2; Recommend and Decide label the gates. Nothing on this flow is
+hypothesis testing, metric calculation, segmentation or an insight narrative over Bronze or Silver
+Raw - those need Silver ODS and a question.
+
 ## 1. The spine
 
 Every screen in the flow answers three questions, always in this order, always in this

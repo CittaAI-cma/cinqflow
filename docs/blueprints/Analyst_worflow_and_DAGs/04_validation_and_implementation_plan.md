@@ -870,6 +870,18 @@ with it: `lifecycleStage.stageFromSteps` reads the group's stage off the ledger 
 object, same budget as the details), falling back to the status-derived `stageOf` for pre-ledger
 runs. No backend change.
 
+### PR-9 — Docs — **built** (branch `feat/w0-versioned-migrations`)
+
+`templates.md §1.2` now shows the v2 profile facts and `§1.3` the interpretation as the code
+writes it (`content.signals` in the four-slot shape with code-set severity, `column_roles`,
+composed `headline`/`recommended_action`, prompt `@3`) - the old `risks:`/`unknowns:` lists were
+three prompt versions stale. `docs/blueprints/adr/0001-dag-lifecycle-control-and-background-workers.md`
+records doc 03 as the architecture decision it already described, with what this branch built to
+make it explicit (the declared `WORKFLOW`, the ledger, re-run) and what is refused (Airflow,
+Prefect, Temporal, Celery, agent loops). `analyst-forward-flow.md §0.1` carries doc 01's six
+questions as the persona's mental model, each mapped to where this flow answers it and what is
+explicitly not answered before Silver ODS.
+
 ---
 
 ## 17. Analyst lane
