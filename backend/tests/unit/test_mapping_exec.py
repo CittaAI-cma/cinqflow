@@ -282,3 +282,25 @@ def test_spec_fingerprint_changes_when_the_spec_does():
     # an identical spec built separately has the same identity
     same = spec(field(source="x", target="members.first_name"))
     assert spec_fingerprint(a) == spec_fingerprint(same)
+
+
+def test_spec_fingerprint_ignores_provenance_that_does_not_execute():
+    """`edited` and `note` are provenance about a mapping, not part of it.
+
+    `execute_field` reads neither, so a spec that differs only in them produces a
+    byte-identical Silver row - and a preview of one is a true preview of the
+    other. Hashing them made claiming ownership of a field, or writing down why a
+    mapping is right, invalidate a current preview and close G2: the two acts the
+    gate most wants an analyst to perform were the two that cost a worker round
+    trip.
+    """
+    plain = spec(field(source="x", target="members.first_name"))
+    owned = spec(field(source="x", target="members.first_name", edited=True))
+    noted = spec(field(source="x", target="members.first_name", note="agreed with the payer"))
+
+    assert spec_fingerprint(plain) == spec_fingerprint(owned)
+    assert spec_fingerprint(plain) == spec_fingerprint(noted)
+
+    # ...while anything the executor does read still changes it.
+    recast = spec(field(source="x", target="members.first_name", cast="int"))
+    assert spec_fingerprint(plain) != spec_fingerprint(recast)

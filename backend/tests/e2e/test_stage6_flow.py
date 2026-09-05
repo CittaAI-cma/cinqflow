@@ -242,7 +242,18 @@ def test_g2_is_refused_when_the_preview_is_no_longer_current(client, settings, p
     be approved, and nothing else."""
     _, batch_id = previewed
     spec = client.get(f"/api/feeds/{FEED}/mapping-versions/1").json()["spec"]
+
+    # Provenance alone does not close the gate: `edited` and `note` are not read
+    # by the executor, so the previewed rows are still exactly what this spec
+    # produces. Claiming a field and writing down why must not cost a re-preview.
     spec["fields"][0]["note"] = "second thoughts"
+    spec["fields"][0]["edited"] = True
+    client.put(f"/api/feeds/{FEED}/mapping-versions/1", json=spec)
+    still = client.get(f"/api/feeds/{FEED}/mapping-versions/1/preview").json()
+    assert still["is_current"] is True and still["approvable"] is True
+
+    # A change the executor *does* read closes it immediately.
+    spec["fields"][0]["on_null"] = "reject"
     client.put(f"/api/feeds/{FEED}/mapping-versions/1", json=spec)
 
     stale = client.get(f"/api/feeds/{FEED}/mapping-versions/1/preview").json()
