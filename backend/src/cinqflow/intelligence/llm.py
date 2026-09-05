@@ -9,15 +9,69 @@ output as such through the model id in provenance.
 from __future__ import annotations
 
 import json
+import logging
+import time
+from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
 from pydantic import BaseModel
 
 from cinqflow.settings import Settings, get_settings
 
+log = logging.getLogger(__name__)
+
 
 class LlmError(Exception):
     pass
+
+
+#: Waits between our own retries of a transport-level failure (socket dropped,
+#: timeout, 429, 5xx from the provider's edge). The SDKs' built-in retries (two,
+#: sub-second) run inside each attempt; these are the ones that outlast a
+#: network blip. 2026-09-05: a ~25s blip failed an interpretation that the
+#: analyst then had to retry by hand - the SDK's 0.4s and 0.8s never stood a
+#: chance. `Settings.llm_transient_retries` says how many of these to use.
+TRANSIENT_BACKOFF_SECONDS: tuple[float, ...] = (2.0, 6.0, 15.0, 30.0)
+
+
+def retry_transient(
+    call: Callable[[], Any],
+    *,
+    provider: str,
+    transient: tuple[type[BaseException], ...],
+    backoff: Sequence[float] = TRANSIENT_BACKOFF_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Any:
+    """Run `call`; on a transient error wait and try again, once per entry in
+    `backoff`. Anything else propagates untouched - a refusal, a schema error or
+    a bad request is not going to fix itself. The final failure is an `LlmError`
+    naming the provider, the attempts and the time spent, which is what a worker
+    records on the step and the analyst reads on the screen."""
+    started = time.monotonic()
+    for attempt, wait in enumerate((*backoff, None), start=1):
+        try:
+            return call()
+        except transient as exc:
+            if wait is None:
+                elapsed = time.monotonic() - started
+                raise LlmError(
+                    f"{provider} unreachable after {attempt} attempts ({elapsed:.0f}s): "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            log.warning(
+                "%s transient error on attempt %s (%s: %s) - retrying in %ss",
+                provider,
+                attempt,
+                type(exc).__name__,
+                exc,
+                wait,
+            )
+            sleep(wait)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _backoff_for(settings: Settings) -> tuple[float, ...]:
+    return TRANSIENT_BACKOFF_SECONDS[: max(0, settings.llm_transient_retries)]
 
 
 class LlmClient(Protocol):
@@ -45,18 +99,31 @@ class AnthropicClient:
             from anthropic import Anthropic
         except ImportError as exc:  # pragma: no cover
             raise LlmError("anthropic package unavailable") from exc
+        import anthropic
+
         self._client = Anthropic(api_key=settings.llm_api_key)
         self.model_id = settings.llm_model
         self._max_tokens = settings.llm_max_tokens
+        self._transient = (
+            anthropic.APIConnectionError,
+            anthropic.RateLimitError,
+            anthropic.InternalServerError,
+        )
+        self._backoff = _backoff_for(settings)
 
     def complete_json(
         self, *, system: str, user: str, response_model: type[BaseModel] | None = None
     ) -> dict[str, Any]:
-        response = self._client.messages.create(
-            model=self.model_id,
-            max_tokens=self._max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
+        response = retry_transient(
+            lambda: self._client.messages.create(
+                model=self.model_id,
+                max_tokens=self._max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            ),
+            provider="anthropic",
+            transient=self._transient,
+            backoff=self._backoff,
         )
         text = "".join(block.text for block in response.content if block.type == "text").strip()
         if text.startswith("```"):
@@ -89,9 +156,19 @@ class OpenAIClient:
             from openai import OpenAI
         except ImportError as exc:  # pragma: no cover
             raise LlmError("openai package unavailable") from exc
+        import openai
+
         self._client = OpenAI(api_key=settings.llm_api_key)
         self.model_id = settings.llm_model
         self._max_tokens = settings.llm_max_tokens
+        # Transport-level failures worth another try; a refusal, a length stop or
+        # a bad request is not (see `retry_transient`).
+        self._transient = (
+            openai.APIConnectionError,  # includes APITimeoutError
+            openai.RateLimitError,
+            openai.InternalServerError,
+        )
+        self._backoff = _backoff_for(settings)
 
     def complete_json(
         self, *, system: str, user: str, response_model: type[BaseModel] | None = None
@@ -107,17 +184,22 @@ class OpenAIClient:
             raise LlmError("openai package unavailable") from exc
 
         try:
-            completion = self._client.chat.completions.parse(
-                model=self.model_id,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                response_format=response_model,
-                # Not `max_tokens`: deprecated, and rejected outright by o-series
-                # reasoning models - this name works whether the fine-tune's base
-                # is a standard or a reasoning model.
-                max_completion_tokens=self._max_tokens,
+            completion = retry_transient(
+                lambda: self._client.chat.completions.parse(
+                    model=self.model_id,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    response_format=response_model,
+                    # Not `max_tokens`: deprecated, and rejected outright by o-series
+                    # reasoning models - this name works whether the fine-tune's
+                    # base is a standard or a reasoning model.
+                    max_completion_tokens=self._max_tokens,
+                ),
+                provider="openai",
+                transient=self._transient,
+                backoff=self._backoff,
             )
         except LengthFinishReasonError as exc:
             raise LlmError(
