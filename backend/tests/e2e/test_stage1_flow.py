@@ -59,7 +59,7 @@ def test_csv_upload_reaches_interpreted_with_no_manual_step(client, settings, sm
     detail = client.get(f"/api/uploads/{upload_id}").json()
     assert detail["upload"]["status"] == UploadStatus.INTERPRETED
     assert detail["profile"]["facts"]["row_count"] == 3
-    assert detail["interpretation"]["provenance"]["prompt"] == "interpret_file@2"
+    assert detail["interpretation"]["provenance"]["prompt"] == "interpret_file@3"
     fields = {c["field"] for c in detail["interpretation"]["content"]["claims"]}
     assert {"likely_domain", "likely_dataset", "likely_grain"} <= fields
 

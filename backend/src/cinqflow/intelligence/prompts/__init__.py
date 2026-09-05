@@ -7,7 +7,7 @@ from pathlib import Path
 _DIR = Path(__file__).parent
 
 #: name -> version. Bumping a prompt means adding a file and updating this map.
-REGISTRY = {"interpret_file": 2, "recommend_mapping": 3}
+REGISTRY = {"interpret_file": 3, "recommend_mapping": 3}
 
 
 def load(name: str) -> tuple[str, str]:

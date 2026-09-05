@@ -147,11 +147,40 @@ class Provenance(BaseModel):
 RecommendedAction = Literal["approve", "review_first"]
 
 
+#: What the model may say a column is (intelligence/schemas.py); the profiler's
+#: `ColumnRoleHint` is the subset code can tell on its own.
+ColumnRole = Literal[
+    "identifier",
+    "measure",
+    "dimension",
+    "date",
+    "business_attribute",
+    "technical",
+    "derived",
+    "unclassified",
+]
+
+
+class ColumnRoleOut(BaseModel):
+    """One observed column's role and importance as persisted (PR-6). `hint` is
+    what the profiler said; `source` says whether the model classified it or
+    the hint stood in. `reason` is structure and knowledge, never a value."""
+
+    name: str
+    role: ColumnRole
+    importance: Literal["high", "medium", "low"]
+    reason: str
+    hint: ColumnRoleHint
+    source: Literal["model", "hint"]
+
+
 class InterpretationContent(BaseModel):
     """The structured AI output. No free-form text is authoritative."""
 
     claims: list[Claim]
     signals: list[Signal] = Field(default_factory=list)
+    #: One per observed column (PR-6). Empty on interpretations written before v3.
+    column_roles: list[ColumnRoleOut] = Field(default_factory=list)
     #: One sentence, computed - see `RecommendedAction`.
     headline: str = ""
     recommended_action: RecommendedAction = "approve"

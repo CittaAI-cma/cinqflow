@@ -48,7 +48,8 @@ class Settings(BaseSettings):
     llm_provider: str = "stub"  # stub | anthropic | openai
     llm_model: str = "claude-sonnet-5"
     llm_api_key: str | None = None
-    llm_max_tokens: int = 2048
+    #: A 142-column interpretation with column roles does not fit in 2048 (PR-6).
+    llm_max_tokens: int = 8000
 
     # Bounded evidence: how many sample values per column the profiler keeps.
     profile_sample_values: int = 5

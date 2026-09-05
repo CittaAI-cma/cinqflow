@@ -57,7 +57,7 @@ def test_provenance_records_prompt_model_and_knowledge_versions(facts, s):
     result = graph_with(StubClient(), s).run(
         facts=facts, source_system="fidelis_ny_upstate", feed="member_roster"
     )
-    assert result["prompt"] == "interpret_file@2"
+    assert result["prompt"] == "interpret_file@3"
     assert result["model"] == "stub-reasoner-1"
     assert any(
         c.startswith("sources/fidelis_ny_upstate__member_roster.yaml@") for c in result["knowledge"]
@@ -143,7 +143,9 @@ def test_malformed_model_output_is_discarded_and_recorded(facts, s):
     dropped = [sig for sig in content.signals if sig.kind == "unknown" and sig.severity == "info"]
     assert len(dropped) == 2
     risks = [sig.claim for sig in content.signals if sig.kind == "risk"]
-    assert risks == ["ok"]
+    # The model's risk survives; the deterministic anomaly risks (PR-6) join it.
+    assert risks[0] == "ok"
+    assert any("member_dob is null" in r for r in risks)
 
 
 def test_stub_reasoner_is_deterministic(facts, s):

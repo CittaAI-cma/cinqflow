@@ -881,7 +881,7 @@ and the first 5,000 rows of the Molina MEDICAID TXT (60 pipe-delimited columns; 
 on a history grain with no key; coverage exactly the file's period, 2024-02-01 → 2026-01-31,
 excluding birth and death dates). `templates.md §1.2` is updated in PR-9.
 
-### PR-6 — Prompt v3: column roles and importance
+### PR-6 — Prompt v3: column roles and importance — **built** (branch `feat/w0-versioned-migrations`)
 
 `intelligence/schemas.py`: `LlmColumnRole { name, role, importance, reason }`;
 `InterpretationResponse.column_roles`. `prompts/interpret_file_v3.md` + `REGISTRY["interpret_file"] = 3`.
@@ -906,6 +906,29 @@ re-profiling identical bytes costs nothing new.
 enforced by `_assemble` (a `technical` column marked `high` is demoted with an `info` signal),
 stub determinism, OpenAI-strict schema compatibility (`test_llm_schema_openai_compat.py` already
 guards this). Golden set on the two corpus files.
+
+**As built.** `prompts/interpret_file_v3.md`, `REGISTRY["interpret_file"] = 3`; `LlmColumnRole`
+on `InterpretationResponse` (role/importance typed as `str` in the *contract* so an
+out-of-vocabulary value reaches `_assemble` and is corrected there instead of failing schema
+validation and taking every other role with it - the persisted `ColumnRoleOut` is strictly typed);
+`InterpretationContent.column_roles` (JSONB, defaulted, no migration), each entry carrying the
+profiler `hint` it was judged against and `source: model | hint`. `ContextBuilder.for_interpretation`
+takes the upload's landing domain (the worker passes it) and adds the domain's `what_it_answers`;
+the prompt states the bounds (glossary `maps_toward` or `what_it_answers` → `high`; `technical`
+never above `low`; a role that contradicts its hint must argue it; a `reason` never quotes a
+value). `_assemble` enforces: unobserved column → dropped; unknown role → `unclassified`; skipped
+column → hint, `importance` high if glossary-mapped else medium (low for technical/unclassified),
+`reason = "from profile hint"`; technical above low → demoted; contradiction without a reason →
+hint kept; each correction an `info` signal. **Anomaly signals moved out of the stub into
+`_assemble`**, deterministic from the v2 facts for every provider: empty column, null rate ≥ 1%,
+constant column (non-technical, >1 row), sentinel-heavy date (≥ 5% of populated values),
+duplicate rows - the model explains, it does not detect. `StubClient` emits one role per column
+from the hints with the same bounds. `llm_max_tokens` default 2048 → 8000 (`.env.example`
+updated). *Tests:* `tests/unit/test_column_roles.py` (v3 prompt + domain knowledge in context; one
+role per observed column, bounded; every `_assemble` rule; anomalies raised whatever the model
+says; null-rate risk once, not twice; golden Fidelis roles with no sample or top value in any
+reason); the four `interpret_file@2` assertions moved to `@3`. `templates.md §1.3` is updated in
+PR-9.
 
 ### PR-7 — Analyst UI
 

@@ -47,6 +47,7 @@ def handle(
             facts=profile.facts,
             source_system=upload.source_system,
             feed=upload.feed,
+            domain=upload.domain,
             on_step=on_step,
         )
     except Exception as exc:  # noqa: BLE001 - persisted as a retryable state

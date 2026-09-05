@@ -419,28 +419,9 @@ class StubClient:
                 }
             )
 
-        for column in facts["columns"]:
-            if column["null_count"] and facts["row_count"]:
-                pct = 100 * column["null_count"] / facts["row_count"]
-                if pct >= 1:
-                    risk(
-                        f"{column['name']} is null in {pct:.1f}% of rows "
-                        f"({column['null_count']}/{facts['row_count']}).",
-                        basis=f"Computed directly from the profiled column ({column['name']}).",
-                        check=f"Open Forensic mode and check {column['name']}'s null count "
-                        "against the sample rows.",
-                        consequence="The rows still land in Bronze unchanged; a mapping rule "
-                        "can enforce this later if needed.",
-                    )
-        if facts.get("duplicate_rows"):
-            risk(
-                f"{facts['duplicate_rows']} fully duplicated rows present.",
-                basis="Computed by the profiler by comparing every column across rows.",
-                check="Open Forensic mode to see the duplicate-row count restated against the "
-                "sample.",
-                consequence="Duplicates are not removed at this stage; Bronze is a verbatim "
-                "copy of the file.",
-            )
+        # Null rates, duplicates, constants and sentinels are raised by
+        # `interpret_file._assemble` from the facts, for every provider alike
+        # (PR-6) - a stub that repeated them would double them.
 
         expected = set(source.get("expected_columns") or [])
         if expected:
@@ -467,7 +448,38 @@ class StubClient:
                     "interpreted against governed knowledge.",
                 )
 
-        return {"claims": claims, "signals": signals}
+        # Column roles (v3): straight from the profiler's hints, with the
+        # importance bounds the prompt states - a glossary term with `maps_toward`
+        # or a candidate-key column is high; technical/unclassified is low; the
+        # rest medium. Reasons are structure and knowledge only, never a value.
+        glossary_terms = (knowledge.get("glossary") or {}).get("terms") or []
+        mapped_keys: set[str] = set()
+        for term in glossary_terms:
+            if term.get("maps_toward"):
+                mapped_keys.add(str(term.get("term", "")).lower())
+                mapped_keys.update(str(a).lower() for a in term.get("aliases", []) or [])
+        key_columns = {c for key in keys for c in key}
+        column_roles: list[dict[str, Any]] = []
+        for column in facts["columns"]:
+            name = column["name"]
+            hint = column.get("hint", "unclassified")
+            mapped = name.lower().replace(" ", "_") in mapped_keys
+            if hint in ("technical", "unclassified"):
+                importance = "low"
+            elif mapped or name in key_columns:
+                importance = "high"
+            else:
+                importance = "medium"
+            reason = f"profiler hint '{hint}' from its {column['inferred_type']} type"
+            if mapped:
+                reason += "; the glossary maps this column toward a canonical field"
+            elif name in key_columns:
+                reason += "; it is a candidate key of the file"
+            column_roles.append(
+                {"name": name, "role": hint, "importance": importance, "reason": reason}
+            )
+
+        return {"claims": claims, "signals": signals, "column_roles": column_roles}
 
 
 def build_client(settings: Settings | None = None) -> LlmClient:

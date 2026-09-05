@@ -115,6 +115,26 @@ export interface Claim {
 /** A risk or an unknown, in the reasoning-contract shape (claim/basis/check/
  * consequence) instead of a bare sentence - `severity` is assigned by the
  * backend from `kind`, never by the model. */
+/** One observed column's role and importance (PR-6), classified by the model
+ *  against the profiler's `hint`; `source` says which one stood. `reason` is
+ *  structure and knowledge, never a value from the file. */
+export interface ColumnRole {
+  name: string;
+  role:
+    | "identifier"
+    | "measure"
+    | "dimension"
+    | "date"
+    | "business_attribute"
+    | "technical"
+    | "derived"
+    | "unclassified";
+  importance: "high" | "medium" | "low";
+  reason: string;
+  hint: ColumnRoleHint;
+  source: "model" | "hint";
+}
+
 export interface Signal {
   kind: "risk" | "unknown";
   claim: string;
@@ -138,6 +158,8 @@ export interface Interpretation {
   content: {
     claims: Claim[];
     signals: Signal[];
+    /** Empty on interpretations written before prompt v3. */
+    column_roles?: ColumnRole[];
     headline: string;
     recommended_action: RecommendedAction;
   };
