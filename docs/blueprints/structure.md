@@ -31,6 +31,9 @@ cinqflow/
 │   │   │   │                      #   Proposal, MappingVersion, Preview, Approval, Run, Lineage
 │   │   │   ├── states.py          # allowed states + legal transitions (enforced here)
 │   │   │   └── store.py           # SQL persistence for the artifacts (schema: workflow)
+│   │   ├── migrations/            # CONTROL-PLANE SCHEMA CHANGES: NNN_name.sql, applied in
+│   │   │                          #   order by `cinqflow install` / `cinqflow migrate`;
+│   │   │                          #   recorded in workflow.schema_version (see module docstring)
 │   │   ├── queue/                 # DURABLE QUEUE (Postgres, no Celery)
 │   │   │   ├── queue.py           # enqueue/claim; FOR UPDATE SKIP LOCKED; dedupe_key UNIQUE
 │   │   │   └── worker.py          # consumer loop; topic → handler registry; CLI entrypoint
@@ -116,6 +119,18 @@ All data-plane DDL is rendered from `dataplane/contract.py` by `dataplane/pg.py`
 by an idempotent installer command (`python -m cinqflow.dataplane install`). No hand-written
 migrations for the plane; the contract file is the source of truth. Audit columns on every
 data row: `source_system, ingestion_ts, batch_id, record_hash, created_ts, updated_ts`.
+
+The **control-plane** schemas (`workflow`, `queue`, `auth`) are different: their baseline
+DDL (`workflow/ddl.py`, `auth/ddl.py`) is idempotent `CREATE … IF NOT EXISTS` and is now
+**frozen**. Every change since — a new table, a widened column — is a numbered SQL file in
+`src/cinqflow/migrations/` (`NNN_snake_case_name.sql`, contiguous from `001`, schema names
+written as `{{workflow}}` / `{{queue}}` / `{{auth}}`), applied one transaction each and
+recorded in `workflow.schema_version (version, name, applied_ts)`. `cinqflow install` applies
+pending migrations after the baseline, so compose's `migrate` service and Railway's
+`bootstrap.sh` need nothing new; `cinqflow migrate --status` shows one database's position.
+Applied migrations are never edited, renamed or deleted — the runner refuses to start if one
+is missing. No Alembic: one table and a directory listing, in visible SQL, is the whole
+mechanism (`migrations/__init__.py`).
 
 ---
 
