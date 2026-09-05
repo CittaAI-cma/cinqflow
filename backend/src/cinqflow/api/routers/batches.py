@@ -9,13 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from cinqflow.dataplane.contract import bronze_table, quarantine_table
 from cinqflow.dataplane.pg import PostgresDataPlane
 from cinqflow.settings import Settings
-from cinqflow.workflow.models import BatchDetail, mask_facts, mask_row
-from cinqflow.workflow.store import WorkflowStore
+from cinqflow.workflow.dag import feed_version_scope
+from cinqflow.workflow.models import BatchDetail, build_step_progress, mask_facts, mask_row
+from cinqflow.workflow.store import StepLedger, WorkflowStore
 
 
-def build_router(
-    settings: Settings, get_conn: Callable[[], Iterator]
-) -> APIRouter:
+def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRouter:
     s = settings
     router = APIRouter()
 
@@ -47,19 +46,33 @@ def build_router(
         return detail.model_dump(mode="json")
 
     @router.get("/api/batches/{batch_id}/progress")
-    def get_batch_progress(
-        batch_id: str, kind: str | None = None, conn=Depends(get_conn)
-    ) -> dict:
+    def get_batch_progress(batch_id: str, kind: str | None = None, conn=Depends(get_conn)) -> dict:
         """A lightweight poll target for the landing and promotion screens: just
         the run, none of `GET /api/batches/{id}`'s lineage, approvals, upload,
         bronze profile or proposal - a one-time detail view needs those; a poll
         firing every 1500ms does not. `kind` disambiguates when both a
         `land_bronze` and a `promote_silver` run share this batch_id; omitted,
-        it resolves the same way `GET /api/batches/{id}` already does."""
-        run = WorkflowStore(conn, s).get_run(batch_id, kind=kind)
+        it resolves the same way `GET /api/batches/{id}` already does.
+
+        `steps` (PR-2) is the ledger's view across the batch's upload, the
+        batch itself, and the mapping version that promoted it (or, before a
+        promotion, the feed's latest)."""
+        store = WorkflowStore(conn, s)
+        run = store.get_run(batch_id, kind=kind)
         if run is None:
             raise HTTPException(404, detail=f"unknown batch: {batch_id}")
-        return run.model_dump(mode="json")
+        ledger = StepLedger(conn, s)
+        step_runs = ledger.list_for("upload", run.upload_id) + ledger.list_for("batch", batch_id)
+        version = run.mapping_version
+        if version is None:
+            latest = store.latest_mapping_version(run.feed)
+            version = latest.version if latest else None
+        if version is not None:
+            step_runs += ledger.list_for("feed_version", feed_version_scope(run.feed, version))
+        return {
+            **run.model_dump(mode="json"),
+            "steps": [p.model_dump(mode="json") for p in build_step_progress(step_runs)],
+        }
 
     @router.get("/api/batches/{batch_id}/bronze-profile")
     def get_bronze_profile(batch_id: str, conn=Depends(get_conn)) -> dict:

@@ -1534,6 +1534,23 @@ a.run-step:hover { background: var(--mat); }
 .run-step-dot.current.gate { background: var(--gate); }
 .run-step-dot.adverse { background: var(--danger); }
 .run-step-dot.pending { background: var(--line2); }
+.run-step-dot.queued { background: var(--acc); opacity: 0.45; }
+
+/* ------------------------------------------------------- Workflow steps */
+/* components/run/WorkflowSteps.tsx - the step ledger, live. Reuses the rail's
+   dot vocabulary so a step reads the same here and in the rail above. */
+.workflow-steps-panel { display: grid; gap: 8px; }
+.workflow-steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.workflow-step { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.workflow-step .run-step-dot { position: relative; top: 1px; }
+.workflow-step-label { font-weight: 600; color: var(--ink); }
+.workflow-step.not_reached .workflow-step-label,
+.workflow-step.skipped .workflow-step-label { color: var(--ink3); font-weight: 500; }
+.workflow-step-state { color: var(--ink2); }
+.workflow-step.running .workflow-step-state { color: var(--acc); font-weight: 600; }
+.workflow-step.failed .workflow-step-state { color: var(--danger); font-weight: 600; }
+.workflow-step-error { flex: 1 1 100%; margin-left: 17px; color: var(--danger); white-space: pre-wrap; }
+.workflow-steps-toggle { justify-self: start; }
 
 /* ------------------------------------------------------------- S1 timeline */
 .run-timeline-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }

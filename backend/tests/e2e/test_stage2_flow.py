@@ -124,6 +124,23 @@ def test_approve_lands_bronze_with_lineage(client, settings, conn, small_csv_byt
     assert batch["run"]["batch_id"] == batch_id
     assert batch["upload"]["upload_id"] == upload_id
 
+    # The step ledger (PR-2): every step this flow exercised is on record as
+    # done, the gate carries its approval, and what has not happened says so.
+    steps = {s["key"]: s for s in client.get(f"/api/uploads/{upload_id}/progress").json()["steps"]}
+    exercised = ("profile", "interpret", "gate_g1", "land", "analyze")
+    assert [steps[k]["state"] for k in exercised] == ["done"] * len(exercised)
+    assert steps["gate_g1"]["run"]["artifact_id"] == approval["approval_id"]
+    assert steps["land"]["run"]["artifact_id"] == batch_id
+    assert steps["analyze"]["run"]["scope_id"] == batch_id
+    assert steps["preview"]["state"] == "not_reached"
+    assert [s["state"] for s in steps.values()].count("failed") == 0
+
+    # ...and the same rows are reachable by scope, while nothing has failed.
+    by_scope = client.get(f"/api/steps?scope_kind=upload&scope_id={upload_id}").json()["steps"]
+    assert [s["step_key"] for s in by_scope] == ["profile", "interpret", "gate_g1", "land"]
+    assert client.get("/api/steps?state=failed").json()["steps"] == []
+    assert len(client.get("/api/workflow").json()["steps"]) == 8
+
 
 def test_reject_writes_nothing_to_the_plane(client, settings, conn, small_csv_bytes):
     upload_id = _upload_and_interpret(client, settings, small_csv_bytes, "reject_me.csv")
@@ -139,6 +156,13 @@ def test_reject_writes_nothing_to_the_plane(client, settings, conn, small_csv_by
     assert detail["runs"] == []
     assert detail["approvals"][0]["decision"] == "rejected"
     assert not PostgresDataPlane(conn).table_exists(bronze_table(FEED))
+
+    # The ledger records the rejection as the gate's adverse end, and landing
+    # as a step that will now never run.
+    steps = {s["key"]: s for s in client.get(f"/api/uploads/{upload_id}/progress").json()["steps"]}
+    assert steps["gate_g1"]["state"] == "failed"
+    assert steps["gate_g1"]["run"]["error"].startswith("rejected by ")
+    assert steps["land"]["state"] == "skipped"
 
 
 def test_approving_twice_is_refused(client, settings, small_csv_bytes):

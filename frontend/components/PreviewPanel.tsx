@@ -8,17 +8,14 @@ import { useActionState, useEffect, useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 import Kpi from "@/components/Kpi";
 import StatusWord from "@/components/StatusWord";
-import WaitNotice from "@/components/ui/WaitNotice";
+import WorkflowSteps, { stepsInFlight } from "@/components/run/WorkflowSteps";
 import { runPreview, type StudioState } from "@/app/mapping/actions";
-import { getPreview, type PreviewResult } from "@/lib/api";
+import type { PreviewResult, StepProgress } from "@/lib/api";
 import { previewStatusWord } from "@/lib/statusWords";
-import { usePoll } from "@/lib/usePoll";
-
-const POLL_MS = 1500;
 
 /** A preview is deterministic execution over a bounded sample - it is quick
  *  once a worker has it. A minute means nothing claimed the job. */
-const STALL_AFTER_MS = 60_000;
+const PREVIEW_STALL_MS = 60_000;
 
 const ROW_LIMITS = [10, 25, 50] as const;
 
@@ -46,6 +43,7 @@ export default function PreviewPanel({
   preview,
   limit = 25,
   baseHref,
+  initialSteps = [],
 }: {
   feed: string;
   version: number;
@@ -59,40 +57,28 @@ export default function PreviewPanel({
    *  is whichever of the two mapping routes (`/mapping/{feed}` or
    *  `/runs/{uploadId}/mapping`) is actually rendering this. */
   baseHref: string;
+  /** The feed version's ledger steps from the server render
+   *  (`getFeedVersionProgress`). `WorkflowSteps` polls only while the preview
+   *  step is queued or running, and refreshes this page when it is not. */
+  initialSteps?: StepProgress[];
 }) {
   const router = useRouter();
   const [state, action] = useActionState<StudioState, FormData>(runPreview, {});
   const { push } = useToast();
   const [fieldFilter, setFieldFilter] = useState<string>("");
 
-  // Waits out the same gap `LandingWait` was built for: `runPreview` only
-  // queues `mapping.preview` (`app/mapping/actions.ts`) - the actual preview
-  // row is written by a worker, which is always running in every real
-  // deployment (docker compose's `worker` service, Railway's combined
-  // process). `pollBaseline` is the preview_id already on screen (or the
-  // sentinel "none") at the moment this run was queued, so a "Run preview
-  // again" on an already-current preview still waits for a genuinely new
-  // one rather than settling immediately on the one it just replaced.
-  const [pollBaseline, setPollBaseline] = useState<string | null>(null);
+  // The preview is written by a worker: `runPreview` only queues it
+  // (`app/mapping/actions.ts`). By the time the action returns, the step
+  // ledger already holds a `pending` row for the preview step, so refreshing
+  // the server render hands `WorkflowSteps` an in-flight step and it polls
+  // until the preview is done - then refreshes again with the result. An
+  // identical request the queue deduplicated leaves no pending row, so there
+  // is nothing to wait for and the existing preview simply stays.
   useEffect(() => {
-    if (state.saved) setPollBaseline(preview?.preview_id ?? "__none__");
+    if (state.saved) router.refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.saved]);
-
-  const previewPoll = usePoll<PreviewResult | null>(
-    () => getPreview(feed, version, limit),
-    {
-      enabled: pollBaseline !== null,
-      intervalMs: POLL_MS,
-      isSettled: (next) => next !== null && next.preview_id !== pollBaseline,
-      onSettle: () => {
-        setPollBaseline(null);
-        router.refresh();
-      },
-      stallAfterMs: STALL_AFTER_MS,
-    },
-    [feed, version, limit, pollBaseline],
-  );
+  const previewStep = initialSteps.find((s) => s.key === "preview");
 
   // The fields actually present across the loaded sample, in source order of
   // first appearance — what the dropdown offers. Recomputed only when the
@@ -144,26 +130,15 @@ export default function PreviewPanel({
           <RunButton label={preview ? "Run preview again" : "Run preview"} />
         </div>
         {state.error ? <p className="alert error">{state.error}</p> : null}
-        {pollBaseline !== null ? (
-          previewPoll.offline || previewPoll.stalled ? (
-            <WaitNotice
-              poll={previewPoll}
-              what="the preview"
-              waiting=""
-              stalled={
-                <>
-                  The mapping version is saved and unchanged — only the preview run is
-                  outstanding. No worker appears to have claimed{" "}
-                  <span className="mono">mapping.preview</span>. G2 stays closed until one does,
-                  by design: nobody approves a mapping they have not seen run.
-                </>
-              }
-            />
-          ) : (
-            <p className="alert ok" aria-live="polite">
-              Preview queued — this updates automatically once it&apos;s ready.
-            </p>
-          )
+        {stepsInFlight(initialSteps, ["preview"]) || previewStep?.state === "failed" ? (
+          <WorkflowSteps
+            source={{ kind: "feed_version", feed, version }}
+            initial={initialSteps}
+            only={["preview"]}
+            stallAfterMs={PREVIEW_STALL_MS}
+            what="the preview"
+            stalledCopy="The mapping version is saved and unchanged — only the preview run is outstanding. No worker appears to have claimed mapping.preview. G2 stays closed until one does, by design: nobody approves a mapping they have not seen run."
+          />
         ) : null}
       </form>
 

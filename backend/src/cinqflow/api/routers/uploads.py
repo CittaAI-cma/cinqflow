@@ -20,9 +20,16 @@ from cinqflow.dataplane.filestore import (
 from cinqflow.queue.queue import Queue
 from cinqflow.settings import Settings
 from cinqflow.workers import interpret_upload, land_bronze, profile_upload, reject_upload
+from cinqflow.workflow.dag import feed_version_scope, step_for_topic
 from cinqflow.workflow.models import UploadDetail, build_upload_progress, mask_row
 from cinqflow.workflow.states import UploadStatus
-from cinqflow.workflow.store import AlreadyDecided, DuplicateUpload, UnknownUpload, WorkflowStore
+from cinqflow.workflow.store import (
+    AlreadyDecided,
+    DuplicateUpload,
+    StepLedger,
+    UnknownUpload,
+    WorkflowStore,
+)
 
 ALLOWED_TYPES = {"csv": {".csv"}, "xlsx": {".xlsx", ".xlsm"}}
 
@@ -123,11 +130,13 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
             conn.rollback()
             raise HTTPException(500, detail=f"could not preserve original: {exc}") from None
 
-        Queue(conn, s).enqueue(
+        message_id = Queue(conn, s).enqueue(
             profile_upload.TOPIC,
             {"upload_id": upload.upload_id},
             dedupe_key=f"{profile_upload.TOPIC}/{upload.upload_id}",
         )
+        if message_id:
+            StepLedger(conn, s).queued("upload", upload.upload_id, "profile", message_id=message_id)
         conn.commit()
         return {
             "upload_id": upload.upload_id,
@@ -189,7 +198,20 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
         land_run = next(
             (r for r in store.list_runs(upload_id=upload_id) if r.kind == "land_bronze"), None
         )
-        return build_upload_progress(upload, run, land_run).model_dump(mode="json")
+        # The three scopes one file's journey crosses: its own steps, its
+        # (latest) batch's, and its feed's latest mapping version's. The last
+        # two only once it has landed - before that, a feed's earlier mapping
+        # history is not this file's progress.
+        ledger = StepLedger(conn, s)
+        step_runs = ledger.list_for("upload", upload_id)
+        if land_run is not None:
+            step_runs += ledger.list_for("batch", land_run.batch_id)
+            latest_version = store.latest_mapping_version(upload.feed)
+            if latest_version is not None:
+                step_runs += ledger.list_for(
+                    "feed_version", feed_version_scope(upload.feed, latest_version.version)
+                )
+        return build_upload_progress(upload, run, land_run, step_runs).model_dump(mode="json")
 
     @router.post("/api/uploads/{upload_id}/retry", status_code=202)
     def retry_upload(
@@ -223,11 +245,14 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
         # named status - a fixed key would collide with the first attempt's
         # already-consumed queue row and silently no-op every retry after it.
         retry_id = uuid.uuid4().hex
-        Queue(conn, s).enqueue(
+        message_id = Queue(conn, s).enqueue(
             topic,
             {"upload_id": upload_id},
             dedupe_key=f"{topic}/{upload_id}/retry/{retry_id}",
         )
+        step = step_for_topic(topic)
+        if message_id and step is not None:
+            StepLedger(conn, s).queued("upload", upload_id, step.key, message_id=message_id)
         conn.commit()
         return {"upload_id": upload_id, "status": upload.status, "queued": topic}
 
@@ -343,12 +368,30 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
         new_status = UploadStatus.APPROVED if decision == "approved" else UploadStatus.REJECTED
         store.set_status(upload_id, new_status)
 
+        # The gate is a step like any other: the decision closes it, and says
+        # what happens to the step behind it.
+        ledger = StepLedger(conn, s)
+        ledger.decide(
+            "upload",
+            upload_id,
+            "gate_g1",
+            approved=decision == "approved",
+            approval_id=approval.approval_id,
+            approver=approver,
+            note=note,
+        )
+
         topic = land_bronze.TOPIC if decision == "approved" else reject_upload.TOPIC
-        Queue(conn, s).enqueue(
+        message_id = Queue(conn, s).enqueue(
             topic,
             {"upload_id": upload_id},
             dedupe_key=f"{topic}/{upload_id}/{approval.approval_id}",
         )
+        if decision == "approved":
+            if message_id:
+                ledger.queued("upload", upload_id, "land", message_id=message_id)
+        else:
+            ledger.skip_step("upload", upload_id, "land", f"rejected at G1 by {approver}")
         conn.commit()
         return {
             "approval": approval.model_dump(mode="json"),

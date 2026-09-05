@@ -10,7 +10,7 @@ import { useToast } from "@/lib/useToast";
  *  phase). `RunProcessing` has its own bespoke retry that keeps polling
  *  afterward; this one re-enqueues and hands off, because the status
  *  transition happens in a background worker rather than when this call
- *  returns — and `LandingWait` on the same screen is already watching for it,
+ *  returns — and `WorkflowSteps` on the same screen is already watching for it,
  *  which is why this no longer tells anyone to reload.
  *
  *  Goes through the `submitRetry` Server Action: `/retry` is capability-gated

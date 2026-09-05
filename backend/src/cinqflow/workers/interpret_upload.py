@@ -59,7 +59,11 @@ def handle(
         )
         conn.commit()
         log.warning("interpretation failed for %s: %s", upload_id, exc)
-        return {"upload_id": upload_id, "status": UploadStatus.INTERPRET_FAILED}
+        return {
+            "upload_id": upload_id,
+            "status": UploadStatus.INTERPRET_FAILED,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
     interpretation = store.put_interpretation(
         upload_id=upload_id,

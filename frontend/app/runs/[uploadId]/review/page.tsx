@@ -2,16 +2,17 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import GateActions from "@/components/GateActions";
 import GateLocked from "@/components/run/GateLocked";
-import LandingWait from "@/components/run/LandingWait";
 import RetryButton from "@/components/run/RetryButton";
 import ReviewEvidence from "@/components/run/ReviewEvidence";
 import VerdictCard from "@/components/run/VerdictCard";
+import WorkflowSteps from "@/components/run/WorkflowSteps";
 import StatusWord from "@/components/StatusWord";
 import AnnounceOnMount from "@/components/ui/AnnounceOnMount";
 import { getUpload } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { personaDefaults, RERUN_LOCKED_REASON } from "@/lib/persona";
-import { canonicalStep, isStepViewable, runHref } from "@/lib/runStep";
+import { loadRunSteps, resolveCanonical } from "@/lib/runProgress";
+import { isStepViewable, runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
 
@@ -52,8 +53,10 @@ export default async function ReviewPage({
 
   const { upload, profile, interpretation, approvals, runs } = detail;
 
-  if (!isStepViewable("review", canonicalStep(upload.status))) {
-    redirect(runHref(uploadId, canonicalStep(upload.status)));
+  const steps = await loadRunSteps(uploadId);
+  const canonical = resolveCanonical(steps, upload.status);
+  if (!isStepViewable("review", canonical)) {
+    redirect(runHref(uploadId, canonical));
   }
 
   if (!profile || !interpretation) {
@@ -147,7 +150,16 @@ export default async function ReviewPage({
                 ) : null}
               </div>
             ) : (
-              <LandingWait uploadId={uploadId} />
+              <div style={{ marginTop: 12 }}>
+                <WorkflowSteps
+                  source={{ kind: "upload", uploadId }}
+                  initial={steps}
+                  only={["land"]}
+                  expanded={defaults.workflowStepsExpanded}
+                  what="landing to Bronze"
+                  stalledCopy="The approval is recorded and the file is safe, but no worker has claimed the batch.land_bronze job. Nothing lands until one does — this page will pick it up on its own the moment that happens."
+                />
+              </div>
             )}
           </div>
         ) : user.capabilities.can_decide_gates ? (

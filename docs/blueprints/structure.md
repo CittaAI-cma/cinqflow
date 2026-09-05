@@ -25,23 +25,29 @@ cinqflow/
 │   │   │   └── routers/
 │   │   │       ├── uploads.py     # POST/GET uploads, profile, interpretation, G1
 │   │   │       ├── mappings.py    # proposals, mapping versions, preview, G2
-│   │   │       ├── batches.py     # batch/run status
+│   │   │       ├── batches.py     # batch/run status (+ ledger steps on /progress)
+│   │   │       ├── steps.py       # GET /api/workflow (the declaration), GET /api/steps (ledger)
 │   │   │       └── lineage.py     # lineage chain queries
 │   │   ├── workflow/              # FIRST-CLASS ARTIFACTS
 │   │   │   ├── models.py          # pydantic models: Upload, Profile, Interpretation,
 │   │   │   │                      #   Proposal, MappingVersion, Preview, Approval, Run, Lineage
 │   │   │   ├── states.py          # allowed states + legal transitions (enforced here)
-│   │   │   └── store.py           # SQL persistence for the artifacts (schema: workflow)
+│   │   │   ├── dag.py             # THE WORKFLOW, DECLARED ONCE: StepDef + WORKFLOW (8 steps,
+│   │   │   │                      #   3 scopes, 2 gates); no imports, anything may read it
+│   │   │   └── store.py           # SQL persistence for the artifacts (schema: workflow),
+│   │   │                          #   incl. StepLedger over workflow.step_run
 │   │   ├── auth/                  # WHO: users, roles, sessions (schema: auth)
 │   │   │   ├── store.py           # AuthStore: users, memberships, login → CurrentUser
 │   │   │   └── persona.py         # roles → persona (emphasis) + capabilities (authority);
 │   │   │                          #   routers enforce capabilities, the UI only mirrors them
 │   │   ├── migrations/            # CONTROL-PLANE SCHEMA CHANGES: NNN_name.sql, applied in
-│   │   │                          #   order by `cinqflow install` / `cinqflow migrate`;
-│   │   │                          #   recorded in workflow.schema_version (see module docstring)
+│   │   │   │                      #   order by `cinqflow install` / `cinqflow migrate`;
+│   │   │   │                      #   recorded in workflow.schema_version (see module docstring)
+│   │   │   └── 001_step_run.sql   # the step ledger table
 │   │   ├── queue/                 # DURABLE QUEUE (Postgres, no Celery)
 │   │   │   ├── queue.py           # enqueue/claim; FOR UPDATE SKIP LOCKED; dedupe_key UNIQUE
-│   │   │   └── worker.py          # consumer loop; topic → handler registry; CLI entrypoint
+│   │   │   └── worker.py          # consumer loop; topic → handler registry; CLI entrypoint;
+│   │   │                          #   the one place a worker step is opened/closed in the ledger
 │   │   ├── workers/               # JOB HANDLERS (one file per topic)
 │   │   │   ├── profile_upload.py  # topic upload.profile      (Stage 1, deterministic)
 │   │   │   ├── interpret_upload.py# topic upload.interpret    (Stage 1, AI)
@@ -148,6 +154,8 @@ mechanism (`migrations/__init__.py`).
 4. `intelligence/` never reads YAML directly — only through `knowledge/provider.py`.
 5. `workers/` are thin: claim job → call engine or intelligence → persist artifact →
    transition state. Business logic lives in `engine/`, `intelligence/`, `workflow/`.
+   No handler carries step-ledger code: `queue/worker.py: run_once` opens the step before
+   the handler and closes it from the handler's return dict (or its exception) after.
 6. Only `dataplane/pg.py` contains data-plane SQL. Only `workflow/store.py` contains
    workflow SQL. Parameterised statements everywhere; no ORM on the data plane.
 7. Nothing executes LLM-generated code, ever. Mappings are data (`engine/mapping_spec.py`),

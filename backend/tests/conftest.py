@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 
+from cinqflow import migrations
 from cinqflow.auth import ddl as auth_ddl
 from cinqflow.auth.security import hash_password
 from cinqflow.auth.store import AuthStore
@@ -69,7 +70,10 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-def conn(settings: Settings):
+def bare_conn(settings: Settings):
+    """Baseline DDL only - the frozen `CREATE IF NOT EXISTS` set, with the
+    version table still empty. The migration tests build on this so they can
+    point the runner at their own directories."""
     with psycopg.connect(
         settings.database_url, row_factory=dict_row, options="-c TimeZone=UTC"
     ) as connection:
@@ -86,6 +90,16 @@ def conn(settings: Settings):
                 cur.execute(f"DROP SCHEMA IF EXISTS {settings.silver_schema} CASCADE")
                 cur.execute(f"DROP SCHEMA IF EXISTS {settings.auth_schema} CASCADE")
             connection.commit()
+
+
+@pytest.fixture
+def conn(bare_conn, settings: Settings):
+    """The production shape: baseline plus every migration this package ships,
+    which is what `cinqflow install` leaves behind. Everything but the
+    migration runner's own tests wants this."""
+    migrations.apply_pending(bare_conn, settings)
+    bare_conn.commit()
+    return bare_conn
 
 
 # ------------------------------------------------------------- authenticated client

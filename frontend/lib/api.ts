@@ -173,6 +173,43 @@ export interface ProgressStage {
   steps: ProgressStep[] | null;
 }
 
+/** The step ledger (`workflow/dag.py`, `workflow.step_run`), as every
+ *  `/progress` endpoint serves it. `not_reached` is "no row": distinct from
+ *  `pending`, which is a queued message no worker has taken yet. */
+export type StepState = "pending" | "running" | "done" | "failed" | "skipped";
+export type LedgerScope = "upload" | "batch" | "feed_version";
+
+export interface StepRun {
+  step_run_id: string;
+  scope_kind: LedgerScope;
+  scope_id: string;
+  step_key: string;
+  /** Increments when a finished step runs again (replay, re-run). */
+  generation: number;
+  state: StepState;
+  /** The queue's retries of this generation. */
+  attempts: number;
+  message_id: string | null;
+  artifact_type: string | null;
+  artifact_id: string | null;
+  /** Failure text, a refusal's reason, or the text of a rejection at a gate. */
+  error: string | null;
+  queued_ts: string;
+  started_ts: string | null;
+  finished_ts: string | null;
+}
+
+/** One declared step with the newest thing the ledger knows about it. */
+export interface StepProgress {
+  key: string;
+  label: string;
+  scope_kind: LedgerScope;
+  gate: boolean;
+  topic: string | null;
+  state: StepState | "not_reached";
+  run: StepRun | null;
+}
+
 export interface UploadProgress {
   upload_id: string;
   status: UploadStatus;
@@ -181,6 +218,19 @@ export interface UploadProgress {
    *  only once it finishes. Null before approval and while still queued. */
   batch_id: string | null;
   stages: ProgressStage[];
+  /** The ledger's view: every declared step across the scopes this upload's
+   *  journey crosses. `stages` stays until the last screen migrates (PR-4). */
+  steps: StepProgress[];
+}
+
+/** `GET /api/feeds/{feed}/mapping-versions/{v}/progress`: the version's
+ *  preview and G2 steps plus the promotion of the batch it was previewed on. */
+export interface FeedVersionProgress {
+  feed: string;
+  version: number;
+  status: string;
+  batch_id: string | null;
+  steps: StepProgress[];
 }
 
 export interface BronzeRows {
@@ -329,6 +379,13 @@ export async function deleteUpload(
  *  whichever stage is the AI interpretation. */
 export function getUploadProgress(uploadId: string) {
   return get<UploadProgress>(`/api/uploads/${uploadId}/progress`);
+}
+
+/** The studio's poll target: what the ledger knows about one mapping version. */
+export function getFeedVersionProgress(feed: string, version: number) {
+  return get<FeedVersionProgress>(
+    `/api/feeds/${encodeURIComponent(feed)}/mapping-versions/${version}/progress`,
+  );
 }
 
 export function queueDepth() {

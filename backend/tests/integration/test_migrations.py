@@ -12,6 +12,13 @@ from tests.conftest import requires_db
 pytestmark = requires_db
 
 
+@pytest.fixture
+def conn(bare_conn):
+    """These tests point the runner at temporary directories, so they need the
+    version table empty: the baseline connection, before the shipped set."""
+    return bare_conn
+
+
 def _write(directory, name: str, body: str) -> None:
     (directory / name).write_text(body)
 
@@ -156,9 +163,11 @@ def test_queue_and_auth_tokens_resolve_to_the_test_schemas(conn, settings, tmp_p
 
 
 def test_shipped_directory_applies_cleanly_on_a_fresh_install(conn, settings):
-    """The production path: `cinqflow install` with whatever this package ships. Today
-    that is the version table alone; when migrations land this asserts they apply."""
+    """The production path: `cinqflow install` with whatever this package ships -
+    from PR-2 on, at least `001_step_run`."""
     done = migrations.apply_pending(conn, settings)
     assert [m.label for m in done] == [m.label for m in migrations.discover()]
+    assert "001_step_run" in [m.label for m in done]
     assert _table_exists(conn, settings.workflow_schema, "schema_version")
+    assert _table_exists(conn, settings.workflow_schema, "step_run")
     assert migrations.apply_pending(conn, settings) == []

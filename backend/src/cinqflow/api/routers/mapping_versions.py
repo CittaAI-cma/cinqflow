@@ -29,10 +29,12 @@ from cinqflow.knowledge.yaml_provider import YamlKnowledgeProvider
 from cinqflow.queue.queue import Queue
 from cinqflow.settings import Settings
 from cinqflow.workers import promote_silver, run_preview
-from cinqflow.workflow.models import MappingSpec, mask_preview_rows
+from cinqflow.workflow.dag import feed_version_scope
+from cinqflow.workflow.models import MappingSpec, build_step_progress, mask_preview_rows
 from cinqflow.workflow.store import (
     DraftAlreadyOpen,
     NotEditable,
+    StepLedger,
     UnknownMappingVersion,
     WorkflowStore,
 )
@@ -318,7 +320,7 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
 
         fingerprint = spec_fingerprint(mapping.spec)
         sample_rows = min(rows or run_preview.DEFAULT_SAMPLE_ROWS, run_preview.MAX_SAMPLE_ROWS)
-        Queue(conn, s).enqueue(
+        message_id = Queue(conn, s).enqueue(
             run_preview.TOPIC,
             {
                 "feed": feed,
@@ -333,6 +335,10 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
                 f"/{target_batch}/{sample_selector(sample_rows, chosen)}"
             ),
         )
+        if message_id:
+            StepLedger(conn, s).queued(
+                "feed_version", feed_version_scope(feed, version), "preview", message_id=message_id
+            )
         conn.commit()
         return {
             "feed": feed,
@@ -386,6 +392,32 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
             if is_current
             else "the draft changed after this preview; run it again",
             "sample_is_partial": preview.sample.is_sample,
+        }
+
+    @router.get("/api/feeds/{feed}/mapping-versions/{version}/progress")
+    def mapping_version_progress(feed: str, version: int, conn=Depends(get_conn)) -> dict:
+        """The ledger's view of one mapping version: its preview and G2 decision
+        (`feed_version` scope) plus the promotion of the batch it was previewed
+        against (`batch` scope). What the studio's `WorkflowSteps` polls."""
+        store = WorkflowStore(conn, s)
+        mapping = store.get_mapping_version(feed, version)
+        if mapping is None:
+            raise HTTPException(404, detail=f"unknown mapping version: {feed} v{version}")
+        ledger = StepLedger(conn, s)
+        step_runs = ledger.list_for("feed_version", feed_version_scope(feed, version))
+        preview = store.get_preview(feed, version)
+        batch_id = preview.sample.batch_id if preview else None
+        if batch_id is None:
+            latest = store.latest_batch_for_feed(feed)
+            batch_id = latest.batch_id if latest else None
+        if batch_id is not None:
+            step_runs += ledger.list_for("batch", batch_id)
+        return {
+            "feed": feed,
+            "version": version,
+            "status": mapping.status,
+            "batch_id": batch_id,
+            "steps": [p.model_dump(mode="json") for p in build_step_progress(step_runs)],
         }
 
     # --------------------------------------------------------------- G2 (S6)
@@ -467,7 +499,17 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
             approver=user.email,
             note=note,
         )
-        Queue(conn, s).enqueue(
+        ledger = StepLedger(conn, s)
+        ledger.decide(
+            "feed_version",
+            feed_version_scope(feed, version),
+            "gate_g2",
+            approved=True,
+            approval_id=approval.approval_id,
+            approver=user.email,
+            note=note,
+        )
+        message_id = Queue(conn, s).enqueue(
             promote_silver.TOPIC,
             {"feed": feed, "version": version, "batch_id": preview.sample.batch_id},
             dedupe_key=(
@@ -475,6 +517,8 @@ def build_router(settings: Settings, get_conn: Callable[[], Iterator]) -> APIRou
                 f"/{approval.approval_id}"
             ),
         )
+        if message_id:
+            ledger.queued("batch", preview.sample.batch_id, "promote", message_id=message_id)
         conn.commit()
         return {
             "approval": approval.model_dump(mode="json"),

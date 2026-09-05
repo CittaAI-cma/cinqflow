@@ -11,7 +11,7 @@ from cinqflow.queue.queue import Queue
 from cinqflow.settings import Settings, get_settings
 from cinqflow.workers import analyze_bronze
 from cinqflow.workflow.states import UploadStatus
-from cinqflow.workflow.store import WorkflowStore
+from cinqflow.workflow.store import StepLedger, WorkflowStore
 
 log = logging.getLogger(__name__)
 TOPIC = "batch.land_bronze"
@@ -35,11 +35,13 @@ def handle(conn: psycopg.Connection, payload: dict, settings: Settings | None = 
         return {"upload_id": upload_id, "status": UploadStatus.LAND_FAILED, "error": str(exc)}
 
     # Bronze intelligence follows a clean landing automatically.
-    Queue(conn, s).enqueue(
+    message_id = Queue(conn, s).enqueue(
         analyze_bronze.TOPIC,
         {"batch_id": outcome.batch_id},
         dedupe_key=f"{analyze_bronze.TOPIC}/{outcome.batch_id}",
     )
+    if message_id:
+        StepLedger(conn, s).queued("batch", outcome.batch_id, "analyze", message_id=message_id)
 
     return {
         "upload_id": upload_id,

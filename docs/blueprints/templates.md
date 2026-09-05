@@ -189,6 +189,29 @@ chain:
 approvals: [ { gate: G1, approval_id: "…" }, { gate: G2, approval_id: "…" } ]
 ```
 
+### 1.10 Step run (the explicit ledger; one row per generation of one step of one scope)
+```yaml
+step_run_id: "…"
+scope_kind: upload                 # upload | batch | feed_version   (workflow/dag.py)
+scope_id: "…"                      # upload_id | batch_id | "<feed>:v<version>"
+step_key: land                     # profile | interpret | gate_g1 | land | analyze | preview | gate_g2 | promote
+generation: 1                      # +1 when a finished step runs again (replay, re-run)
+state: done                        # pending | running | done | failed | skipped
+attempts: 1                        # the queue's retries of this generation
+message_id: "…"                    # queue.message that carries it (null for a gate)
+artifact_type: batch               # what it made: profile | interpretation | approval | batch | proposal | preview
+artifact_id: "a3f9c12d4e01"
+error: null                        # failure text · refusal reason · "rejected by <who>: <note>" at a gate
+queued_ts: "…"                     # a `pending` row exists from the moment the message does
+started_ts: "…"
+finished_ts: "…"
+```
+Gates are steps: `running` while a person is deciding, `done` on approval, `failed` (with the
+decision as `error`) on rejection - the run stopped there; `StepDef.gate` says it is a decision,
+not something to re-run. `skipped` is a step that looked and declined (the scope was not in a
+runnable state) or will now never run (landing after a G1 rejection). `not_reached` is not a
+state: it is the absence of a row, and the `/progress` payloads say so explicitly.
+
 ---
 
 ## 2. Knowledge documents (YAML now; provider-mediated always)

@@ -671,7 +671,7 @@ the bearer token and those three were the unauthenticated fetches the guards wou
 *Infra.* None: no schema change (roles and memberships already exist), no env. *Docs:*
 `structure.md` tree (`auth/`) and boundary 8 (authority is a capability, never a persona).
 
-### PR-2 — Step ledger
+### PR-2 — Step ledger — **built** (branch `feat/w0-versioned-migrations`)
 
 *Backend.*
 - `workflow/dag.py`: `StepDef` + `WORKFLOW` (§6.1). Add `scope`: `upload` for
@@ -704,6 +704,58 @@ the bearer token and those three were the unauthenticated fetches the guards wou
 Integration: after each existing stage e2e, `step_run` shows the expected `done` rows; a forced
 handler exception leaves a `failed` row with the error. *Acceptance:* no screen in
 `app/runs/**` polls anything but `/progress`.
+
+**As built** (what differs from the package above, and why).
+
+- *Promotion is `batch`-scoped, not `feed_version`.* A promotion writes one batch's Silver
+  rows and PR-3's re-run of it "rebuilds this batch only"; a second batch promoted under the
+  same approved version is a different step run, not generation 2 of the first. `preview` and
+  `gate_g2` stay `feed_version` (`scope_id = "<feed>:v<n>"`). PR-3's promote re-run route
+  therefore lives under `/api/batches/{id}/steps/promote/rerun`.
+- *No handler carries ledger code.* `queue/worker.py: run_once` opens the step (`running`,
+  committed before the handler runs) and closes it from the handler's return dict: `error` /
+  `*_failed` → `failed`; `<verb>: False` + `reason` → `skipped` (a refusal - the scope was not
+  runnable; new state used for that and for landing after a G1 rejection); otherwise `done`
+  with the artifact id the handler returned. A handler that raises leaves `failed` with the
+  exception text before `Queue.claim` records the message failure. Workers stay thin
+  (`structure.md` boundary 5, now stated there).
+- *`pending` rows are real.* Every enqueue site calls `StepLedger.queued` (upload → profile,
+  profile worker → interpret, G1 approve → land, land worker → analyze, preview request,
+  G2 approve → promote, `/retry`), so "queued, no worker has taken it" is a ledger fact, not a
+  UI inference. `queued_ts` was added to the table for it.
+- *Gates.* `interpret`/`preview` finishing opens `gate_g1`/`gate_g2` (`running`, awaiting a
+  person; opened once). A decision closes it: approval → `done`; rejection → `failed` with
+  `error = "rejected by <who>: <note>"`, and `land` is written `skipped`. `StepDef.gate` is
+  how PR-4 keeps rejections out of "needs attention".
+- *Generations vs attempts.* `start` on a `pending`/`running`/`failed` row re-enters it
+  (`attempts + 1`, the queue's own retry); on a `done`/`skipped` row it mints `generation + 1`
+  (a replay or a PR-3 re-run, which will pre-create the `pending` row).
+- *Endpoints.* `steps[]` on `GET /api/uploads/{id}/progress` (upload scope + its latest
+  batch's + its feed's latest version's, the last two only once landed - a fresh upload of a
+  feed with history must not be shown at G2), on `GET /api/batches/{id}/progress`, and new
+  `GET /api/feeds/{feed}/mapping-versions/{v}/progress` (the studio's poll). `routers/steps.py`:
+  `GET /api/workflow` (the declaration) and `GET /api/steps?state=|scope_kind=&scope_id=`.
+  `stages[]` is untouched; `RunProcessing` still reads it (PR-4 retires both).
+- *Frontend.* `components/run/WorkflowSteps.tsx` (one `usePoll` over `/progress`; polls only
+  while a worker step is queued/running; `router.refresh()` on settle; persona `expanded`)
+  replaced `LandingWait`, `BronzeAnalysisWait` and `PreviewPanel`'s poll - all three deleted.
+  `lib/runStep.ts`: `RUN_STEPS` keeps the seven *screens* but each names its ledger steps;
+  `canonicalStepFromSteps` (furthest active upload/batch-scoped step; feed-version steps are
+  not consulted, so an earlier delivery's approved mapping cannot send a new file past its
+  own Bronze review) with `canonicalStep(status)` as the fallback for pre-ledger runs;
+  `railStates` drives `RunRail`'s dots (adverse if any step failed, done if all are). S5 is
+  now derivable: a preview or G2 for the feed's version resolves `/runs/{id}/mapping`. The
+  pages read the ledger once per render (`lib/runProgress.ts`, `cache()`-wrapped, shared
+  with the layout). Bronze review offers "Build the mapping without a proposal" when the
+  analysis step failed, instead of a wait that never ends.
+- *Deferred, as planned.* The `/data/intake` failed-steps list and `lifecycleStage.ts`'s
+  `stageOf` move to the ledger with PR-4/PR-8; `BatchProcessing` (`/batches/{id}`, outside
+  `app/runs/**`) keeps its polls until then.
+- *Verification.* 478 backend tests (30 new: `test_dag.py`, `test_worker_ledger_outcome.py`,
+  `test_step_ledger.py`; ledger assertions added to the stage 2/5/6 and gaps e2e). The test
+  harness now installs baseline + shipped migrations (`conn`), with `bare_conn` for the
+  migration runner's own tests. `tsc`, `next build`, compose rebuild (`migrate` applies
+  `001_step_run`).
 
 ### PR-3 — Selective re-run
 

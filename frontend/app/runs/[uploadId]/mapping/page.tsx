@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import MappingPageBody from "@/components/MappingPageBody";
 import { getUpload } from "@/lib/api";
-import { canonicalStep, runHref } from "@/lib/runStep";
+import { loadRunSteps, resolveCanonical } from "@/lib/runProgress";
+import { runHref } from "@/lib/runStep";
 
 export const dynamic = "force-dynamic";
 
@@ -13,10 +14,10 @@ export const dynamic = "force-dynamic";
  *  rail from `RunShell`) and a way in that doesn't require already knowing
  *  the feed name.
  *
- *  Entered from S4's CTA, not derived from `canonicalStep` the way S1-S4 are -
- *  the control plane has no status field for "a mapping version exists"
- *  (docs/blueprints/analyst-forward-flow.md §2.1). Viewable once the upload
- *  has landed; a mapping version for the feed may already exist from a prior
+ *  Entered from S4's CTA once the upload has landed; since PR-2 the step
+ *  ledger also resolves here on its own once a preview or G2 decision exists
+ *  for the feed's version (the "S5 is not derivable" gap of
+ *  docs/blueprints/analyst-forward-flow.md §2.1, closed). Viewable once landed; a mapping version for the feed may already exist from a prior
  *  delivery, in which case this opens straight onto it. */
 export default async function RunMappingPage({
   params,
@@ -36,8 +37,9 @@ export default async function RunMappingPage({
   }
   const { upload } = detail;
 
-  if (canonicalStep(upload.status) !== "bronze") {
-    redirect(runHref(uploadId, canonicalStep(upload.status)));
+  const canonical = resolveCanonical(await loadRunSteps(uploadId), upload.status);
+  if (canonical !== "bronze" && canonical !== "mapping") {
+    redirect(runHref(uploadId, canonical));
   }
 
   return (

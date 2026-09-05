@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from cinqflow.workflow.dag import WORKFLOW, StepScope, StepState
 from cinqflow.workflow.states import RunState, UploadStatus
 
 ClaimKind = Literal["observed_fact", "governed_knowledge", "inference", "recommendation"]
@@ -480,6 +481,43 @@ class BatchDetail(BaseModel):
     proposal: Proposal | None = None
 
 
+class StepRun(BaseModel):
+    """One generation of one step of one scope, as the ledger recorded it
+    (`workflow.step_run`, templates.md §1.10). `generation` is intent - a
+    finished step run again gets a new one; `attempts` is the queue retrying
+    this generation. `error` carries a failure, a refusal's reason, or the
+    text of a rejection at a gate."""
+
+    step_run_id: str
+    scope_kind: StepScope
+    scope_id: str
+    step_key: str
+    generation: int
+    state: StepState
+    attempts: int
+    message_id: str | None = None
+    artifact_type: str | None = None
+    artifact_id: str | None = None
+    error: str | None = None
+    queued_ts: datetime
+    started_ts: datetime | None = None
+    finished_ts: datetime | None = None
+
+
+class StepProgress(BaseModel):
+    """One declared step (`workflow/dag.py`) with the latest thing the ledger
+    knows about it. `not_reached` is the honest word for "no row": distinct
+    from `pending`, which means a message exists and no worker has taken it."""
+
+    key: str
+    label: str
+    scope_kind: StepScope
+    gate: bool
+    topic: str | None
+    state: StepState | Literal["not_reached"]
+    run: StepRun | None = None
+
+
 StageState = Literal["pending", "running", "done", "failed"]
 
 
@@ -511,6 +549,10 @@ class UploadProgress(BaseModel):
     #: straight to `/api/batches/{batch_id}` the moment this is non-null.
     batch_id: str | None = None
     stages: list[Stage]
+    #: The ledger's view (PR-2): every declared step, across the scopes this
+    #: upload's journey crosses. `stages` stays until the last screen has
+    #: migrated to this (PR-4), then goes.
+    steps: list[StepProgress] = Field(default_factory=list)
 
 
 def mask_row(row: dict[str, Any], phi_columns: set[str]) -> dict[str, Any]:
@@ -674,6 +716,7 @@ def build_upload_progress(
     upload: Upload,
     run: InterpretationRun | None,
     land_run: Run | None = None,
+    step_runs: list[StepRun] | None = None,
 ) -> UploadProgress:
     """The upload's journey stage by stage, with LangGraph node detail for the
     AI interpretation stage - the one step whose duration is an LLM call, and
@@ -683,6 +726,7 @@ def build_upload_progress(
         status=upload.status,
         error=upload.error,
         batch_id=land_run.batch_id if land_run else None,
+        steps=build_step_progress(step_runs),
         stages=[
             Stage(
                 key="profile",
@@ -707,3 +751,32 @@ def build_upload_progress(
             ),
         ],
     )
+
+
+def build_step_progress(step_runs: list[StepRun] | None) -> list[StepProgress]:
+    """Every declared step, with the newest generation the ledger has for it.
+
+    Rows may span scopes (an upload's own, its batch's, its feed version's) -
+    the caller chooses which scopes belong to the object being described; this
+    only picks, per step, the newest generation among what it was given.
+    """
+    latest: dict[str, StepRun] = {}
+    for step_run in step_runs or []:
+        current = latest.get(step_run.step_key)
+        if current is None or (step_run.generation, step_run.queued_ts) > (
+            current.generation,
+            current.queued_ts,
+        ):
+            latest[step_run.step_key] = step_run
+    return [
+        StepProgress(
+            key=step.key,
+            label=step.label,
+            scope_kind=step.scope,
+            gate=step.gate,
+            topic=step.topic,
+            state=latest[step.key].state if step.key in latest else "not_reached",
+            run=latest.get(step.key),
+        )
+        for step in WORKFLOW
+    ]

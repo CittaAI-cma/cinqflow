@@ -3,8 +3,9 @@
  *  The mapping from roles to persona and capabilities lives in exactly one
  *  place, the backend; `CurrentUser` arrives with both already decided. This
  *  module only turns a persona into *defaults* - which reading mode a review
- *  opens in, which proposal filter, whether technical columns start collapsed -
- *  and holds the two sentences the UI says when a control isn't the caller's.
+ *  opens in, which proposal filter, whether technical columns start collapsed,
+ *  whether the workflow's unreached steps are shown - and holds the two
+ *  sentences the UI says when a control isn't the caller's.
  *
  *  Persona is emphasis; capability is authority. Nothing here hides a fact or
  *  grants anything: the API enforces `capabilities`, the UI mirrors them
@@ -25,15 +26,28 @@ export interface PersonaDefaults {
   proposalFilter: "decisions" | "all";
   /** Forensic tables: technical/system columns start collapsed (lands with PR-7). */
   technicalCollapsed: boolean;
+  /** `WorkflowSteps`: show every declared step, including the unreached ones,
+   *  from the start (Data Platform) - or only what has happened (Data Analyst). */
+  workflowStepsExpanded: boolean;
 }
 
 export function personaDefaults(persona: Persona): PersonaDefaults {
   switch (persona) {
     case "data_platform":
-      return { readingMode: "forensic", proposalFilter: "all", technicalCollapsed: false };
+      return {
+        readingMode: "forensic",
+        proposalFilter: "all",
+        technicalCollapsed: false,
+        workflowStepsExpanded: true,
+      };
     case "data_analyst":
     default:
-      return { readingMode: "evidence", proposalFilter: "decisions", technicalCollapsed: true };
+      return {
+        readingMode: "evidence",
+        proposalFilter: "decisions",
+        technicalCollapsed: true,
+        workflowStepsExpanded: false,
+      };
   }
 }
 

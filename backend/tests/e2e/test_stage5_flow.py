@@ -97,9 +97,19 @@ def test_preview_is_queued_not_executed_inline(client, settings, draft):
     # nothing computed yet
     assert client.get(f"/api/feeds/{FEED}/mapping-versions/1/preview").status_code == 404
     assert client.get("/api/queue/depth").json()["mapping_preview"] == 1
+    # Queued is a ledger state, not a guess: the preview step is `pending`.
+    progress = client.get(f"/api/feeds/{FEED}/mapping-versions/1/progress").json()
+    assert next(s for s in progress["steps"] if s["key"] == "preview")["state"] == "pending"
 
     assert _drain(settings) == 1
     assert client.get(f"/api/feeds/{FEED}/mapping-versions/1/preview").status_code == 200
+    states = {
+        s["key"]: s["state"]
+        for s in client.get(f"/api/feeds/{FEED}/mapping-versions/1/progress").json()["steps"]
+    }
+    assert states["preview"] == "done"
+    assert states["gate_g2"] == "running"  # open: awaiting the analyst
+    assert states["promote"] == "not_reached"
 
 
 def test_the_analyst_sees_source_values_mapped_values_and_failures(client, settings, draft):

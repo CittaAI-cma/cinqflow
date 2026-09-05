@@ -115,6 +115,8 @@ def test_progress_reports_land_stage_and_batch_id(client, settings, small_csv_by
     land_stage = next(s for s in queued_progress["stages"] if s["key"] == "land")
     assert land_stage["state"] == "running"
     assert queued_progress["batch_id"] is None
+    # The ledger is more precise: queued, no worker has taken it yet.
+    assert next(s for s in queued_progress["steps"] if s["key"] == "land")["state"] == "pending"
 
     _drain(settings)
 
@@ -122,6 +124,7 @@ def test_progress_reports_land_stage_and_batch_id(client, settings, small_csv_by
     land_stage = next(s for s in landed_progress["stages"] if s["key"] == "land")
     assert land_stage["state"] == "done"
     assert landed_progress["batch_id"]
+    assert next(s for s in landed_progress["steps"] if s["key"] == "land")["state"] == "done"
 
     detail = client.get(f"/api/uploads/{upload_id}").json()
     assert landed_progress["batch_id"] == detail["runs"][0]["batch_id"]

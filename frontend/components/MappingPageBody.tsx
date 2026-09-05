@@ -6,6 +6,7 @@ import StartDraft from "@/components/StartDraft";
 import PreviewPanel from "@/components/PreviewPanel";
 import StatusWord from "@/components/StatusWord";
 import {
+  getFeedVersionProgress,
   getMappingDiff,
   getMappingVersion,
   getPreview,
@@ -57,6 +58,8 @@ export default async function MappingPageBody({
   const mapping = selected ? await getMappingVersion(feed, selected) : null;
   const diff = selected ? await getMappingDiff(feed, selected) : null;
   const preview = selected ? await getPreview(feed, selected, previewLimit) : null;
+  // The ledger's view of this version, for `PreviewPanel`'s `WorkflowSteps`.
+  const progress = selected ? await getFeedVersionProgress(feed, selected).catch(() => null) : null;
   const analystEdited = new Set(diff?.diff.analyst_edited ?? []);
   // Only fetched for the empty state: once a draft exists it owns the fields,
   // and the proposal is history that `mapping.ai_context` already carries in.
@@ -242,6 +245,7 @@ export default async function MappingPageBody({
             preview={preview}
             limit={previewLimit}
             baseHref={baseHref}
+            initialSteps={progress?.steps ?? []}
           />
 
           <ApproveMapping

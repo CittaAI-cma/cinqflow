@@ -189,6 +189,14 @@ def test_the_whole_flow_reaches_silver_raw(client, settings, previewed):
     assert refused[0]["reasons"][0]["source"] == "member_id"
     assert refused[0]["reasons"][0]["rule"] == "on_null"
 
+    # The ledger has the whole journey, both gates included (PR-2).
+    steps = {s["key"]: s for s in client.get(f"/api/uploads/{upload_id}/progress").json()["steps"]}
+    assert [s["state"] for s in steps.values()] == ["done"] * 8
+    assert steps["promote"]["run"]["scope_id"] == batch_id
+    assert steps["gate_g2"]["run"]["artifact_type"] == "approval"
+    batch_steps = client.get(f"/api/batches/{batch_id}/progress").json()["steps"]
+    assert {s["key"]: s["state"] for s in batch_steps}["promote"] == "done"
+
 
 def test_lineage_proves_the_chain_from_either_end(client, settings, previewed):
     upload_id, batch_id = previewed

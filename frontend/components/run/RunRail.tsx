@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { RUN_STEPS, runHref, type RunStepKey } from "@/lib/runStep";
+import type { StepProgress } from "@/lib/api";
+import { RUN_STEPS, railStates, runHref, type RunStepKey } from "@/lib/runStep";
 
 const BANDS: { key: "landing" | "bronze" | "silver"; label: string }[] = [
   { key: "landing", label: "Landing" },
@@ -13,22 +14,28 @@ const BANDS: { key: "landing" | "bronze" | "silver"; label: string }[] = [
  *  one file's journey (linear, closed once). They must not look alike, or an
  *  analyst who has learned one will misread the other.
  *
- *  Only "processing" and "review" are real routes in this phase — every other
- *  dot renders inert with a stated reason, same pattern as the rest of this
- *  console. */
+ *  Each dot's state comes from the step ledger (`steps`, via `railStates`):
+ *  done when every ledger step behind that screen is done, adverse when one
+ *  failed, current for the canonical screen. Without ledger rows (a run from
+ *  before the migration) the rail falls back to position relative to the
+ *  canonical step, as it always did. Only built screens are links. */
 export default function RunRail({
   uploadId,
   step,
   adverse,
+  steps = [],
 }: {
   uploadId: string;
   step: RunStepKey;
-  /** The run stopped at this step because of a rejection or a failure, not
-   *  because it's still working — the current dot reads as an alert, not progress. */
+  /** Fallback only, for a run without ledger rows: the current dot reads as
+   *  an alert (rejection or failure) rather than progress. */
   adverse?: boolean;
+  /** `UploadProgress.steps` - the ledger's view of this run. */
+  steps?: StepProgress[];
 }) {
   const order = RUN_STEPS.map((s) => s.key);
   const currentIndex = order.indexOf(step);
+  const states = railStates(steps, step, adverse);
 
   return (
     <nav className="run-rail" aria-label="Run progress">
@@ -38,15 +45,12 @@ export default function RunRail({
           <div className="run-rail-steps">
             {RUN_STEPS.filter((def) => def.band === band.key).map((def) => {
               const index = order.indexOf(def.key);
-              const state =
-                index < currentIndex
-                  ? "done"
-                  : index === currentIndex
-                    ? adverse
-                      ? "adverse"
-                      : "current"
-                    : "pending";
-              const reachable = def.builtInThisPhase && index <= currentIndex;
+              const state = states[def.key];
+              // A screen is reachable once the run has been there: at or behind
+              // the canonical step, or with a finished (or failed) step behind it.
+              const reachable =
+                def.builtInThisPhase &&
+                (index <= currentIndex || state === "done" || state === "adverse");
               const content = (
                 <>
                   <span
